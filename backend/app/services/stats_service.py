@@ -14,9 +14,11 @@ _VALID_DIMENSIONS = {"token", "user", "date", "source"}
 
 def get_overview(db: Session) -> dict:
     today = date.today().isoformat()
+    # 直接数 query_logs（而非等定时聚合写入 query_stats_daily），保证 Dashboard 概览实时；
+    # 也更贴合「查询量」本身的语义——只数真正查过的词，不含 suggest/dictionaries 这类元信息调用。
     today_query_count = (
-        db.query(func.coalesce(func.sum(QueryStatsDaily.query_count), 0))
-        .filter(QueryStatsDaily.stat_date == today)
+        db.query(func.count(QueryLog.id))
+        .filter(func.date(QueryLog.created_at) == today, QueryLog.status != "rate_limited")
         .scalar()
     )
     active_tokens = (

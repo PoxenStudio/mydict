@@ -307,3 +307,19 @@ async def test_web_dict_search_and_user_vocab(
     # 未登录访问用户生词本应始终 401，即使 open_access=true
     resp = await client.get("/api/vocab")
     assert resp.status_code == 401
+
+
+async def test_public_settings_endpoint(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "false")
+    set_setting(db_session, "site_name", "测试词典站")
+    resp = await client.get("/api/public/settings")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["open_access"] is False
+    assert body["site_name"] == "测试词典站"
+    # 不含限流阈值等敏感配置
+    assert "token_default_daily_limit" not in body
+
+    set_setting(db_session, "site_name", "MyDict")

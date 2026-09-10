@@ -9,6 +9,12 @@ const router = createRouter({
     { path: '/login', name: 'login', component: () => import('../views/LoginView.vue') },
     { path: '/register', name: 'register', component: () => import('../views/RegisterView.vue') },
     {
+      path: '/vocab',
+      name: 'vocab',
+      component: () => import('../views/VocabView.vue'),
+      meta: { requiresUser: true },
+    },
+    {
       path: '/admin/setup',
       name: 'admin-setup',
       component: () => import('../views/admin/AdminSetupView.vue'),
@@ -20,15 +26,40 @@ const router = createRouter({
     },
     {
       path: '/admin',
-      name: 'admin-dashboard',
-      component: () => import('../views/admin/AdminDashboardView.vue'),
+      component: () => import('../views/admin/AdminLayout.vue'),
       meta: { requiresAdmin: true },
-    },
-    {
-      path: '/admin/dictionaries',
-      name: 'admin-dictionaries',
-      component: () => import('../views/admin/DictionaryManagementView.vue'),
-      meta: { requiresAdmin: true },
+      children: [
+        {
+          path: '',
+          name: 'admin-dashboard',
+          component: () => import('../views/admin/AdminDashboardView.vue'),
+        },
+        {
+          path: 'dictionaries',
+          name: 'admin-dictionaries',
+          component: () => import('../views/admin/DictionaryManagementView.vue'),
+        },
+        {
+          path: 'tokens',
+          name: 'admin-tokens',
+          component: () => import('../views/admin/AdminTokensView.vue'),
+        },
+        {
+          path: 'users',
+          name: 'admin-users',
+          component: () => import('../views/admin/AdminUsersView.vue'),
+        },
+        {
+          path: 'stats',
+          name: 'admin-stats',
+          component: () => import('../views/admin/AdminStatsView.vue'),
+        },
+        {
+          path: 'settings',
+          name: 'admin-settings',
+          component: () => import('../views/admin/AdminSettingsView.vue'),
+        },
+      ],
     },
   ],
 })
@@ -36,6 +67,9 @@ const router = createRouter({
 router.beforeEach((to) => {
   if (to.meta.requiresAdmin && !getAccessToken('admin')) {
     return { path: '/admin/login' }
+  }
+  if (to.meta.requiresUser && !getAccessToken('user')) {
+    return { path: '/login' }
   }
   return true
 })

@@ -29,6 +29,18 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
     }
 
 
+def get_public_settings(db: Session, defaults: Settings) -> dict:
+    return {
+        "open_access": settings_service.get_bool_setting(
+            db, "open_access", defaults.open_access_default
+        ),
+        "allow_registration": settings_service.get_bool_setting(
+            db, "allow_registration", defaults.allow_registration_default
+        ),
+        "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
+    }
+
+
 def _get_optional_int(db: Session, key: str) -> int | None:
     raw = settings_service.get_setting(db, key)
     if raw is None or not raw.strip():

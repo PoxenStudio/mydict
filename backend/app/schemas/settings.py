@@ -10,6 +10,14 @@ class SystemSettingsOut(BaseModel):
     site_name: str
 
 
+class PublicSettingsOut(BaseModel):
+    """匿名可见的系统设置子集，供前台页面决定是否展示登录墙、站点名称等。"""
+
+    open_access: bool
+    allow_registration: bool
+    site_name: str
+
+
 class SystemSettingsUpdateRequest(BaseModel):
     open_access: bool | None = None
     allow_registration: bool | None = None

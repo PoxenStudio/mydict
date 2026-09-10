@@ -176,7 +176,8 @@ async def test_stats_overview_top_words_and_csv_export(
     resp = await client.get("/api/admin/stats/overview", headers=admin_headers)
     assert resp.status_code == 200
     overview = resp.json()
-    assert overview["today_query_count"] >= 0
+    # 直接数 query_logs，无需等定时聚合任务跑过也应立即反映刚才的 3 次查询
+    assert overview["today_query_count"] >= 3
     assert overview["dictionary_count"] >= 1
 
     resp = await client.get(
