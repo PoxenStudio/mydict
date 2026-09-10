@@ -25,6 +25,14 @@ class DictsDirFileOut(BaseModel):
     size: int
     modified_at: datetime
     imported: bool
+    is_dir: bool = False
+
+
+class DictsDirListingOut(BaseModel):
+    """当前目录下的条目列表；path 为相对 /data/dicts 的归一化路径，根目录是空串。"""
+
+    path: str
+    entries: list[DictsDirFileOut]
 
 
 class ImportFromDictsDirRequest(BaseModel):

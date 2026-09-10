@@ -1,7 +1,7 @@
 import request from '../request'
 import type {
   DictionaryItem,
-  DictsDirFile,
+  DictsDirListing,
   ImportFromDictsDirPayload,
   TestQueryEntry,
 } from '../../types/dictionary'
@@ -16,8 +16,10 @@ export function uploadDictionary(form: FormData) {
   })
 }
 
-export function listDictsDirFiles() {
-  return request.get<never, DictsDirFile[]>('/admin/dictionaries/dicts-dir-files')
+export function listDictsDirFiles(path = '') {
+  return request.get<never, DictsDirListing>('/admin/dictionaries/dicts-dir-files', {
+    params: path ? { path } : undefined,
+  })
 }
 
 export function importFromDictsDir(payload: ImportFromDictsDirPayload) {

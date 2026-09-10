@@ -20,6 +20,12 @@ export interface DictsDirFile {
   size: number
   modified_at: string
   imported: boolean
+  is_dir: boolean
+}
+
+export interface DictsDirListing {
+  path: string
+  entries: DictsDirFile[]
 }
 
 export interface ImportFromDictsDirPayload {

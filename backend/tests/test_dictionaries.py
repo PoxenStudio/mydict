@@ -152,7 +152,7 @@ async def test_import_from_dicts_dir_leaves_source_files_in_place(
 
     resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
     assert resp.status_code == 200
-    names = {f["name"] for f in resp.json()}
+    names = {f["name"] for f in resp.json()["entries"]}
     assert {"greeting.ifo", "greeting.idx", "greeting.dict"} <= names
 
     resp = await client.post(
@@ -215,7 +215,7 @@ async def test_import_from_dicts_dir_rejects_multiple_ecdict_files(
 
     # 两个都还没导入，dicts-dir-files 里应该都标 imported=false
     resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
-    by_name = {f["name"]: f for f in resp.json()}
+    by_name = {f["name"]: f for f in resp.json()["entries"]}
     assert by_name["dict_a.csv"]["imported"] is False
     assert by_name["dict_b.csv"]["imported"] is False
 
@@ -234,7 +234,7 @@ async def test_import_from_dicts_dir_rejects_multiple_ecdict_files(
     assert resp.status_code == 200, resp.text
 
     resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
-    by_name = {f["name"]: f for f in resp.json()}
+    by_name = {f["name"]: f for f in resp.json()["entries"]}
     assert by_name["dict_a.csv"]["imported"] is True
     assert by_name["dict_b.csv"]["imported"] is False
 
@@ -252,6 +252,73 @@ async def test_import_from_dicts_dir_rejects_path_traversal(
             "lang_to": "zh",
             "files": ["../../etc/passwd"],
         },
+    )
+    assert resp.status_code == 422
+
+
+async def test_dicts_dir_files_lists_and_imports_from_subdirectory(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    settings = get_settings()
+    inbox = settings.dicts_inbox_path
+    import os
+
+    sub_dir = os.path.join(inbox, "cn")
+    os.makedirs(sub_dir, exist_ok=True)
+    with open(os.path.join(sub_dir, "ecdict.csv"), "wb") as f:
+        f.write(_ecdict_csv_bytes())
+    # 根目录另放一个同名文件，验证按目录区分 imported 状态不会互相误标
+    with open(os.path.join(inbox, "ecdict.csv"), "wb") as f:
+        f.write(_ecdict_csv_bytes())
+
+    resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
+    body = resp.json()
+    assert body["path"] == ""
+    by_name = {e["name"]: e for e in body["entries"]}
+    assert by_name["cn"]["is_dir"] is True
+    assert by_name["ecdict.csv"]["is_dir"] is False
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": "cn"},
+        headers=admin_headers,
+    )
+    body = resp.json()
+    assert body["path"] == "cn"
+    by_name = {e["name"]: e for e in body["entries"]}
+    assert by_name["ecdict.csv"]["imported"] is False
+
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "CN ECDICT",
+            "format": "ecdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "en",
+            "files": ["cn/ecdict.csv"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    # 子目录里的文件标为已导入，根目录下的同名文件不受影响
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": "cn"},
+        headers=admin_headers,
+    )
+    assert {e["name"]: e for e in resp.json()["entries"]}["ecdict.csv"]["imported"] is True
+    resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
+    assert {e["name"]: e for e in resp.json()["entries"]}["ecdict.csv"]["imported"] is False
+
+
+async def test_dicts_dir_files_rejects_subdirectory_traversal(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": "../etc"},
+        headers=admin_headers,
     )
     assert resp.status_code == 422
 

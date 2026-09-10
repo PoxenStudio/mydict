@@ -14,7 +14,7 @@ from app.core.exceptions import ValidationAppError
 from app.models.admin import Admin
 from app.schemas.dictionary import (
     DictionaryOut,
-    DictsDirFileOut,
+    DictsDirListingOut,
     ImportFromDictsDirRequest,
     ReorderRequest,
     TestQueryEntryOut,
@@ -96,13 +96,15 @@ async def upload_and_import(
     )
 
 
-@router.get("/dicts-dir-files", response_model=list[DictsDirFileOut])
+@router.get("/dicts-dir-files", response_model=DictsDirListingOut)
 def dicts_dir_files(
+    path: str = "",
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
-) -> list[DictsDirFileOut]:
-    return dictionary_service.list_dicts_dir_files(db, settings)
+) -> DictsDirListingOut:
+    normalized, entries = dictionary_service.list_dicts_dir_files(db, settings, path)
+    return DictsDirListingOut(path=normalized, entries=entries)
 
 
 @router.post("/import-from-dicts-dir", response_model=DictionaryOut)

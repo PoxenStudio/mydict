@@ -55,48 +55,94 @@ def list_dictionaries(db: Session) -> list[Dictionary]:
     return db.query(Dictionary).order_by(Dictionary.sort_order, Dictionary.id).all()
 
 
-def _imported_dicts_dir_filenames(db: Session) -> set[str]:
+def _imported_dicts_dir_relpaths(db: Session, inbox: Path) -> set[str]:
     """dicts_dir 方式导入时 file_path 存的是原始文件的绝对路径（分号分隔，见
-    import_dictionary），取文件名部分即可知道 /data/dicts 里哪些文件已经导入过。"""
+    import_dictionary），换算成相对 /data/dicts 的路径用于比对——支持子目录后不同目录下的
+    同名文件不能只按文件名判断是否已导入，否则会互相误标。"""
     rows = db.query(Dictionary.file_path).filter(Dictionary.import_method == "dicts_dir").all()
-    names: set[str] = set()
+    relpaths: set[str] = set()
     for (file_path,) in rows:
         if not file_path:
             continue
-        names.update(Path(p.strip()).name for p in file_path.split(";") if p.strip())
-    return names
+        for raw in file_path.split(";"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                relpaths.add(Path(raw).resolve().relative_to(inbox).as_posix())
+            except ValueError:
+                continue
+    return relpaths
 
 
-def list_dicts_dir_files(db: Session, settings: Settings) -> list[dict]:
-    inbox = Path(settings.dicts_inbox_path)
-    if not inbox.exists():
-        return []
-    imported_names = _imported_dicts_dir_filenames(db)
-    files = []
-    for path in sorted(inbox.iterdir()):
-        if not path.is_file():
-            continue
+def _resolve_dicts_subdir(inbox: Path, subpath: str) -> Path:
+    """把前端传来的相对路径（如 "sub/dir"）拼到 /data/dicts 下并校验没有越权到目录外。"""
+    parts = [p for p in subpath.split("/") if p]
+    if any(p in (".", "..") for p in parts):
+        raise ValidationAppError(f"非法路径：{subpath}")
+    target = (inbox / Path(*parts)).resolve() if parts else inbox
+    if target != inbox and inbox not in target.parents:
+        raise ValidationAppError(f"非法路径：{subpath}")
+    return target
+
+
+def list_dicts_dir_files(
+    db: Session, settings: Settings, subpath: str = ""
+) -> tuple[str, list[dict]]:
+    inbox = Path(settings.dicts_inbox_path).resolve()
+    target = _resolve_dicts_subdir(inbox, subpath)
+    normalized = "" if target == inbox else target.relative_to(inbox).as_posix()
+    if not target.is_dir():
+        return normalized, []
+
+    imported_relpaths = _imported_dicts_dir_relpaths(db, inbox)
+    dirs: list[Path] = []
+    files: list[Path] = []
+    for path in target.iterdir():
+        if path.is_dir():
+            dirs.append(path)
+        elif path.is_file():
+            files.append(path)
+
+    entries: list[dict] = []
+    for path in sorted(dirs, key=lambda p: p.name.lower()):
         stat = path.stat()
-        files.append(
+        entries.append(
+            {
+                "name": path.name,
+                "size": 0,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                "imported": False,
+                "is_dir": True,
+            }
+        )
+    for path in sorted(files, key=lambda p: p.name.lower()):
+        stat = path.stat()
+        relpath = path.relative_to(inbox).as_posix()
+        entries.append(
             {
                 "name": path.name,
                 "size": stat.st_size,
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-                "imported": path.name in imported_names,
+                "imported": relpath in imported_relpaths,
+                "is_dir": False,
             }
         )
-    return files
+    return normalized, entries
 
 
 def resolve_dicts_dir_files(filenames: list[str], settings: Settings) -> list[Path]:
-    """白名单校验：只允许引用 /data/dicts 目录下已存在的文件，禁止路径穿越。"""
+    """白名单校验：只允许引用 /data/dicts 目录（含子目录）下已存在的文件，禁止路径穿越。"""
     inbox = Path(settings.dicts_inbox_path).resolve()
     resolved: list[Path] = []
     for filename in filenames:
-        if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+        if not filename or filename.startswith("/") or "\\" in filename:
             raise ValidationAppError(f"非法文件名：{filename}")
-        candidate = (inbox / filename).resolve()
-        if candidate.parent != inbox or not candidate.is_file():
+        parts = [p for p in filename.split("/") if p]
+        if not parts or any(p in (".", "..") for p in parts):
+            raise ValidationAppError(f"非法文件名：{filename}")
+        candidate = (inbox / Path(*parts)).resolve()
+        if (candidate != inbox and inbox not in candidate.parents) or not candidate.is_file():
             raise ValidationAppError(f"文件不存在于待导入目录：{filename}")
         resolved.append(candidate)
     return resolved

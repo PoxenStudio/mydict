@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document } from '@element-plus/icons-vue'
+import { Back, Document, Folder, HomeFilled } from '@element-plus/icons-vue'
 import * as dictApi from '../../api/admin/dictionaries'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
 import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
@@ -95,7 +95,8 @@ const importForm = reactive({
   lang_to: 'zh-Hans',
 })
 const uploadFileList = ref<File[]>([])
-const dictsDirFiles = ref<DictsDirFile[]>([])
+const dictsDirEntries = ref<DictsDirFile[]>([])
+const dictsDirPath = ref('')
 const selectedDictsDirFiles = ref<string[]>([])
 const dictsDirSingleFile = ref('')
 // ECDICT 一个 CSV 就是一部完整词典，选多个会被后端拒绝（EcdictParser 只认第一个），
@@ -112,6 +113,13 @@ watch(
   },
 )
 
+// 目录里的选择只在当前目录有效，切到别的目录后沿用旧选择容易造成误解（选中的文件已经
+// 看不见了），统一清空
+watch(dictsDirPath, () => {
+  selectedDictsDirFiles.value = []
+  dictsDirSingleFile.value = ''
+})
+
 function openImportDialog() {
   importForm.name = ''
   importForm.format = 'ecdict'
@@ -124,9 +132,31 @@ function openImportDialog() {
   importDialogVisible.value = true
 }
 
+async function loadDictsDirEntries(path: string) {
+  const listing = await dictApi.listDictsDirFiles(path)
+  dictsDirPath.value = listing.path
+  dictsDirEntries.value = listing.entries
+}
+
 async function switchToDictsDirTab() {
   importMode.value = 'dicts-dir'
-  dictsDirFiles.value = await dictApi.listDictsDirFiles()
+  await loadDictsDirEntries('')
+}
+
+function openDictsDirEntry(entry: DictsDirFile) {
+  if (!entry.is_dir) return
+  loadDictsDirEntries(dictsDirPath.value ? `${dictsDirPath.value}/${entry.name}` : entry.name)
+}
+
+function goToDictsDirRoot() {
+  if (dictsDirPath.value) loadDictsDirEntries('')
+}
+
+function goToDictsDirParent() {
+  if (!dictsDirPath.value) return
+  const parts = dictsDirPath.value.split('/')
+  parts.pop()
+  loadDictsDirEntries(parts.join('/'))
 }
 
 function handleTabChange(name: string | number) {
@@ -171,11 +201,15 @@ async function submitImport() {
       uploadFileList.value.forEach((file) => form.append('files', file))
       created = await dictApi.uploadDictionary(form)
     } else {
-      const files = isSingleFileFormat.value
+      // 选择结果只是当前目录内的文件名，后端需要相对 /data/dicts 的完整路径才能定位到子目录
+      const toFullPath = (name: string) =>
+        dictsDirPath.value ? `${dictsDirPath.value}/${name}` : name
+      const names = isSingleFileFormat.value
         ? dictsDirSingleFile.value
           ? [dictsDirSingleFile.value]
           : []
         : selectedDictsDirFiles.value
+      const files = names.map(toFullPath)
       if (files.length === 0) {
         ElMessage.warning('请选择服务器目录下的词典文件')
         return
@@ -343,27 +377,52 @@ function definitionHtml(definition: string) {
                 : '选择服务器 /data/dicts 目录下的文件'
             "
           >
-            <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
-              <el-radio v-for="f in dictsDirFiles" :key="f.name" :value="f.name" :disabled="f.imported">
-                <el-icon class="file-icon"><Document /></el-icon>{{ f.name
-                }}<span v-if="f.imported" class="hint"> （已导入）</span>
-              </el-radio>
-            </el-radio-group>
-            <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
-              <el-checkbox
-                v-for="f in dictsDirFiles"
-                :key="f.name"
-                :value="f.name"
-                :label="f.name"
-                :disabled="f.imported"
+            <div class="dicts-dir-path">
+              <el-icon
+                class="path-icon"
+                :class="{ disabled: !dictsDirPath }"
+                title="回到根目录 /data/dicts"
+                @click="goToDictsDirRoot"
               >
-                <el-icon class="file-icon"><Document /></el-icon>{{ f.name
-                }}<span v-if="f.imported" class="hint"> （已导入）</span>
-              </el-checkbox>
-            </el-checkbox-group>
-            <p v-if="dictsDirFiles.length === 0" class="hint">
-              /data/dicts 目录下暂无文件，请先将词典文件放入该目录。
-            </p>
+                <HomeFilled />
+              </el-icon>
+              <el-icon
+                class="path-icon"
+                :class="{ disabled: !dictsDirPath }"
+                title="返回上一级目录"
+                @click="goToDictsDirParent"
+              >
+                <Back />
+              </el-icon>
+              <span class="path-text">/data/dicts{{ dictsDirPath ? '/' + dictsDirPath : '' }}</span>
+            </div>
+            <div class="dicts-dir-scroll">
+              <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
+                <template v-for="f in dictsDirEntries" :key="f.name">
+                  <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
+                    <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
+                  </div>
+                  <el-radio v-else :value="f.name" :disabled="f.imported">
+                    <el-icon class="file-icon"><Document /></el-icon>{{ f.name
+                    }}<span v-if="f.imported" class="hint"> （已导入）</span>
+                  </el-radio>
+                </template>
+              </el-radio-group>
+              <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
+                <template v-for="f in dictsDirEntries" :key="f.name">
+                  <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
+                    <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
+                  </div>
+                  <el-checkbox v-else :value="f.name" :label="f.name" :disabled="f.imported">
+                    <el-icon class="file-icon"><Document /></el-icon>{{ f.name
+                    }}<span v-if="f.imported" class="hint"> （已导入）</span>
+                  </el-checkbox>
+                </template>
+              </el-checkbox-group>
+              <p v-if="dictsDirEntries.length === 0" class="hint">
+                当前目录下暂无文件，请先将词典文件放入该目录。
+              </p>
+            </div>
           </el-form-item>
         </template>
       </el-form>
@@ -502,11 +561,64 @@ function definitionHtml(definition: string) {
   gap: var(--space-2);
 }
 
+.dicts-dir-path {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.path-icon {
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.path-icon:hover {
+  color: var(--color-brand-600);
+}
+
+.path-icon.disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+  pointer-events: none;
+}
+
+.path-text {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+.dicts-dir-scroll {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .dicts-dir-options {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-2);
+}
+
+.dir-row {
+  display: flex;
+  align-items: center;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.dir-row:hover {
+  color: var(--color-brand-600);
+}
+
+.dir-icon {
+  margin-right: var(--space-1);
+  color: var(--color-text-secondary);
+  vertical-align: -0.15em;
 }
 
 .file-icon {
