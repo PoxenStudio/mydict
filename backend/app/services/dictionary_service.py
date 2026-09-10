@@ -264,10 +264,13 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
 
 def _vacuum(db: Session) -> None:
     """回收删除词条后 SQLite 文件里的空闲页；VACUUM 不能在事务内跑，用独立的
-    autocommit 连接执行，不影响外层 db 会话。"""
+    autocommit 连接执行，不影响外层 db 会话。WAL 模式下 VACUUM 本身不会把文件截断到
+    实际大小（新内容通过 WAL 写入，磁盘上的文件长度要等 checkpoint 才会收缩），额外
+    执行一次 TRUNCATE 模式的 checkpoint 才能让文件大小真正降下来。"""
     engine = db.get_bind()
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         conn.execute(text("VACUUM"))
+        conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
 
 
 def reorder_dictionaries(db: Session, ordered_ids: list[int], admin_id: int) -> list[Dictionary]:
