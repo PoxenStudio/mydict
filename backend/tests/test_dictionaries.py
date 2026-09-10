@@ -193,3 +193,36 @@ async def test_reorder_dictionaries(client: AsyncClient, admin_headers: dict[str
 async def test_dictionary_api_requires_admin(client: AsyncClient) -> None:
     resp = await client.get("/api/admin/dictionaries")
     assert resp.status_code == 401
+
+
+async def test_upload_rejects_mismatched_file_extension(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries",
+        headers=admin_headers,
+        data={"name": "bad-ext", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+        files={"files": ("not-a-dict.exe", b"MZ\x90\x00fake", "application/octet-stream")},
+    )
+    assert resp.status_code == 422
+    assert "not-a-dict.exe" in resp.json()["message"]
+
+
+async def test_incomplete_stardict_upload_returns_clean_error(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    # 只上传 .ifo，缺少 .idx/.dict：应返回可读的 4xx，而不是未处理异常导致的 500
+    resp = await client.post(
+        "/api/admin/dictionaries",
+        headers=admin_headers,
+        data={"name": "incomplete", "format": "stardict", "lang_from": "en", "lang_to": "zh"},
+        files={
+            "files": (
+                "only.ifo",
+                b"StarDict's dict ifo file\nversion=2.4.2\nwordcount=0\n",
+                "text/plain",
+            )
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "validation_error"

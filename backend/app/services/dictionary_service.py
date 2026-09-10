@@ -24,6 +24,22 @@ _PARSERS: dict[str, type[DictionaryParser]] = {
     "ecdict": EcdictParser,
 }
 
+# 上传/目录导入时按声明的 format 做文件后缀白名单校验，防止内容与声明格式不符
+# （如把任意文件伪装成词典上传）；具体格式细节仍由各 Parser 在解析阶段兜底校验。
+_ALLOWED_EXTENSIONS: dict[str, set[str]] = {
+    "mdict": {".mdx", ".mdd"},
+    "stardict": {".ifo", ".idx", ".dict", ".syn", ".dict.dz", ".idx.gz"},
+    "ecdict": {".csv"},
+}
+
+
+def _validate_file_extensions(format_: str, paths: list[Path]) -> None:
+    allowed = _ALLOWED_EXTENSIONS[format_]
+    for path in paths:
+        name = path.name.lower()
+        if not any(name.endswith(ext) for ext in allowed):
+            raise ValidationAppError(f"文件 {path.name} 的类型与所选格式「{format_}」不匹配")
+
 
 def list_dictionaries(db: Session) -> list[Dictionary]:
     return db.query(Dictionary).order_by(Dictionary.sort_order, Dictionary.id).all()
@@ -84,6 +100,7 @@ def import_dictionary(
     失败时清理已写入的 dict_entries/资源文件/词典记录，staged_paths 保留在原处（便于重试）。
     """
     _validate_format(format_)
+    _validate_file_extensions(format_, staged_paths)
 
     dictionary = Dictionary(
         name=name,
@@ -118,12 +135,16 @@ def import_dictionary(
         dictionary.word_count = word_count
         dictionary.file_path = str(source_dir)
         db.commit()
-    except Exception:
+    except Exception as exc:
         # dict_id 所在的行/词条从未提交过，rollback 即可完整撤销数据库侧改动；
         # 只需额外清理已落盘的资源目录（不受事务管理）。
         db.rollback()
         if storage_root.exists():
             shutil.rmtree(storage_root, ignore_errors=True)
+        # 解析器对文件内容/完整性的校验以 ValueError 表达，统一转成 4xx 而非 500，
+        # 让管理员看到具体原因（如缺少必要文件）；其余异常视为未预期的内部错误照常抛出。
+        if isinstance(exc, ValueError):
+            raise ValidationAppError(str(exc)) from exc
         raise
 
     log_action(

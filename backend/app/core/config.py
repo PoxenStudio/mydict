@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     jwt_secret: str = ""
-    admin_default_username: str = "admin"
     open_access_default: bool = False
     allow_registration_default: bool = True
     token_default_daily_limit: int = 1000
@@ -16,7 +15,6 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 512
     enable_scheduler: bool = True
 
-    data_root: str = "/data"
     config_storage_path: str = "/data/config"
     dicts_inbox_path: str = "/data/dicts"
     database_path: str = "/data/db/mydict.sqlite3"

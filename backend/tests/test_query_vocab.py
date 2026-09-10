@@ -323,3 +323,29 @@ async def test_public_settings_endpoint(
     assert "token_default_daily_limit" not in body
 
     set_setting(db_session, "site_name", "MyDict")
+
+
+async def test_query_cache_invalidated_on_new_dictionary_import(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    word = "freshlyimported"
+
+    # 先查一次未命中的结果，确保写入查询结果缓存
+    resp = await client.get("/api/v1/query", params={"word": word})
+    assert resp.json() == {"results": []}
+
+    await _create_enabled_dictionary(
+        client,
+        admin_headers,
+        "EN-ZH-CACHE",
+        "en",
+        "zh",
+        [{"word": word, "translation": "刚刚导入的词"}],
+    )
+
+    # 导入并启用后应立即查到，而不是命中导入前缓存的空结果
+    resp = await client.get("/api/v1/query", params={"word": word})
+    results = resp.json()["results"]
+    assert len(results) == 1
+    assert results[0]["word"] == word

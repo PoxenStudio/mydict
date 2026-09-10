@@ -1,11 +1,15 @@
 services:
-  app:
-    build: .
+  mydict:
     image: mydict:latest
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./data:/data
     restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
