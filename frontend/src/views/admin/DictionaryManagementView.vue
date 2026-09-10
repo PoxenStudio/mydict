@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as dictApi from '../../api/admin/dictionaries'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
@@ -88,6 +88,20 @@ const importForm = reactive({
 const uploadFileList = ref<File[]>([])
 const dictsDirFiles = ref<DictsDirFile[]>([])
 const selectedDictsDirFiles = ref<string[]>([])
+const dictsDirSingleFile = ref('')
+// ECDICT 一个 CSV 就是一部完整词典，选多个会被后端拒绝（EcdictParser 只认第一个），
+// 界面上直接限制成单选，避免选完提交才报错。
+const isSingleFileFormat = computed(() => importForm.format === 'ecdict')
+
+// 切换格式后旧的文件选择大概率不再适用（后缀都对不上），统一清空避免残留无效状态
+watch(
+  () => importForm.format,
+  () => {
+    uploadFileList.value = []
+    selectedDictsDirFiles.value = []
+    dictsDirSingleFile.value = ''
+  },
+)
 
 function openImportDialog() {
   importForm.name = ''
@@ -96,6 +110,7 @@ function openImportDialog() {
   importForm.lang_to = 'zh'
   uploadFileList.value = []
   selectedDictsDirFiles.value = []
+  dictsDirSingleFile.value = ''
   importMode.value = 'upload'
   importDialogVisible.value = true
 }
@@ -114,7 +129,12 @@ function handleTabChange(name: string | number) {
 }
 
 function handleFileChange(uploadFile: { raw?: File }) {
-  if (uploadFile.raw) uploadFileList.value.push(uploadFile.raw)
+  if (!uploadFile.raw) return
+  if (isSingleFileFormat.value) {
+    uploadFileList.value = [uploadFile.raw]
+    return
+  }
+  uploadFileList.value.push(uploadFile.raw)
 }
 
 function removeUploadFile(index: number) {
@@ -142,7 +162,12 @@ async function submitImport() {
       uploadFileList.value.forEach((file) => form.append('files', file))
       created = await dictApi.uploadDictionary(form)
     } else {
-      if (selectedDictsDirFiles.value.length === 0) {
+      const files = isSingleFileFormat.value
+        ? dictsDirSingleFile.value
+          ? [dictsDirSingleFile.value]
+          : []
+        : selectedDictsDirFiles.value
+      if (files.length === 0) {
         ElMessage.warning('请选择服务器目录下的词典文件')
         return
       }
@@ -151,7 +176,7 @@ async function submitImport() {
         format: importForm.format,
         lang_from: importForm.lang_from,
         lang_to: importForm.lang_to,
-        files: selectedDictsDirFiles.value,
+        files,
       })
     }
     dictionaries.value.push(created)
@@ -268,11 +293,13 @@ function definitionHtml(definition: string) {
         </div>
 
         <template v-if="importMode === 'upload'">
-          <el-form-item label="词典文件（可多选，如 .mdx + .mdd）">
+          <el-form-item
+            :label="isSingleFileFormat ? '词典文件（ECDICT 只能选 1 个 CSV）' : '词典文件（可多选，如 .mdx + .mdd）'"
+          >
             <el-upload
               :auto-upload="false"
               :show-file-list="false"
-              multiple
+              :multiple="!isSingleFileFormat"
               @change="handleFileChange"
             >
               <el-button>选择文件</el-button>
@@ -286,10 +313,27 @@ function definitionHtml(definition: string) {
           </el-form-item>
         </template>
         <template v-else>
-          <el-form-item label="选择服务器 /data/dicts 目录下的文件">
-            <el-checkbox-group v-model="selectedDictsDirFiles">
-              <el-checkbox v-for="f in dictsDirFiles" :key="f.name" :value="f.name" :label="f.name">
-                {{ f.name }}
+          <el-form-item
+            :label="
+              isSingleFileFormat
+                ? '选择服务器 /data/dicts 目录下的文件（ECDICT 只能选 1 个）'
+                : '选择服务器 /data/dicts 目录下的文件'
+            "
+          >
+            <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
+              <el-radio v-for="f in dictsDirFiles" :key="f.name" :value="f.name" :disabled="f.imported">
+                {{ f.name }}<span v-if="f.imported" class="hint"> （已导入）</span>
+              </el-radio>
+            </el-radio-group>
+            <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
+              <el-checkbox
+                v-for="f in dictsDirFiles"
+                :key="f.name"
+                :value="f.name"
+                :label="f.name"
+                :disabled="f.imported"
+              >
+                {{ f.name }}<span v-if="f.imported" class="hint"> （已导入）</span>
               </el-checkbox>
             </el-checkbox-group>
             <p v-if="dictsDirFiles.length === 0" class="hint">
@@ -422,6 +466,12 @@ function definitionHtml(definition: string) {
 .file-list li {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+}
+
+.dicts-dir-options {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
 }
 

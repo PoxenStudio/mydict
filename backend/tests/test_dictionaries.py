@@ -184,6 +184,61 @@ async def test_import_from_dicts_dir_leaves_source_files_in_place(
     assert os.path.exists(os.path.join(inbox, "greeting.ifo"))
 
 
+async def test_import_from_dicts_dir_rejects_multiple_ecdict_files(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    settings = get_settings()
+    inbox = settings.dicts_inbox_path
+    import os
+
+    os.makedirs(inbox, exist_ok=True)
+    csv_bytes = _ecdict_csv_bytes()
+    for name in ("dict_a.csv", "dict_b.csv"):
+        with open(os.path.join(inbox, name), "wb") as f:
+            f.write(csv_bytes)
+
+    # 选了两个 CSV 一起提交：EcdictParser 只读 file_paths[0]，不拦住会静默只导入第一个，
+    # 必须在这里就报错，而不是悄悄丢掉第二个文件。
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "Two CSV",
+            "format": "ecdict",
+            "lang_from": "en",
+            "lang_to": "zh",
+            "files": ["dict_a.csv", "dict_b.csv"],
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "validation_error"
+
+    # 两个都还没导入，dicts-dir-files 里应该都标 imported=false
+    resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
+    by_name = {f["name"]: f for f in resp.json()}
+    assert by_name["dict_a.csv"]["imported"] is False
+    assert by_name["dict_b.csv"]["imported"] is False
+
+    # 单选一个应该能正常导入，导入后该文件在列表里标为 imported=true，另一个仍是 false
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "Dict A",
+            "format": "ecdict",
+            "lang_from": "en",
+            "lang_to": "zh",
+            "files": ["dict_a.csv"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
+    by_name = {f["name"]: f for f in resp.json()}
+    assert by_name["dict_a.csv"]["imported"] is True
+    assert by_name["dict_b.csv"]["imported"] is False
+
+
 async def test_import_from_dicts_dir_rejects_path_traversal(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
@@ -199,6 +254,23 @@ async def test_import_from_dicts_dir_rejects_path_traversal(
         },
     )
     assert resp.status_code == 422
+
+
+async def test_upload_rejects_multiple_ecdict_files(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    csv_bytes = _ecdict_csv_bytes()
+    resp = await client.post(
+        "/api/admin/dictionaries",
+        headers=admin_headers,
+        data={"name": "Two CSV Upload", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+        files=[
+            ("files", ("a.csv", csv_bytes, "text/csv")),
+            ("files", ("b.csv", csv_bytes, "text/csv")),
+        ],
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "validation_error"
 
 
 async def test_reorder_dictionaries(client: AsyncClient, admin_headers: dict[str, str]) -> None:

@@ -19,6 +19,7 @@ export interface DictsDirFile {
   name: string
   size: number
   modified_at: string
+  imported: boolean
 }
 
 export interface ImportFromDictsDirPayload {

@@ -98,10 +98,11 @@ async def upload_and_import(
 
 @router.get("/dicts-dir-files", response_model=list[DictsDirFileOut])
 def dicts_dir_files(
+    db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
 ) -> list[DictsDirFileOut]:
-    return dictionary_service.list_dicts_dir_files(settings)
+    return dictionary_service.list_dicts_dir_files(db, settings)
 
 
 @router.post("/import-from-dicts-dir", response_model=DictionaryOut)

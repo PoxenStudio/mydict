@@ -41,16 +41,33 @@ def _validate_file_extensions(format_: str, paths: list[Path]) -> None:
         name = path.name.lower()
         if not any(name.endswith(ext) for ext in allowed):
             raise ValidationAppError(f"文件 {path.name} 的类型与所选格式「{format_}」不匹配")
+    # ECDICT 一个 CSV 就是一部完整词典，选多个会静默只解析第一个（EcdictParser 只读
+    # file_paths[0]），选错容易误以为都导入了，这里提前挡住给出明确提示。
+    if format_ == "ecdict" and len(paths) != 1:
+        raise ValidationAppError("ECDICT 格式只能选择一个 CSV 文件；多个 CSV 请分别单独导入")
 
 
 def list_dictionaries(db: Session) -> list[Dictionary]:
     return db.query(Dictionary).order_by(Dictionary.sort_order, Dictionary.id).all()
 
 
-def list_dicts_dir_files(settings: Settings) -> list[dict]:
+def _imported_dicts_dir_filenames(db: Session) -> set[str]:
+    """dicts_dir 方式导入时 file_path 存的是原始文件的绝对路径（分号分隔，见
+    import_dictionary），取文件名部分即可知道 /data/dicts 里哪些文件已经导入过。"""
+    rows = db.query(Dictionary.file_path).filter(Dictionary.import_method == "dicts_dir").all()
+    names: set[str] = set()
+    for (file_path,) in rows:
+        if not file_path:
+            continue
+        names.update(Path(p.strip()).name for p in file_path.split(";") if p.strip())
+    return names
+
+
+def list_dicts_dir_files(db: Session, settings: Settings) -> list[dict]:
     inbox = Path(settings.dicts_inbox_path)
     if not inbox.exists():
         return []
+    imported_names = _imported_dicts_dir_filenames(db)
     files = []
     for path in sorted(inbox.iterdir()):
         if not path.is_file():
@@ -61,6 +78,7 @@ def list_dicts_dir_files(settings: Settings) -> list[dict]:
                 "name": path.name,
                 "size": stat.st_size,
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                "imported": path.name in imported_names,
             }
         )
     return files
