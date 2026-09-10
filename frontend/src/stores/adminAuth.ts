@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import * as adminAuthApi from '../api/admin/auth'
-import { clearTokens, getAccessToken, setTokens } from '../utils/authStorage'
+import { clearTokens, isLoggedInRef, setTokens } from '../utils/authStorage'
 import type { AdminPublic } from '../types/auth'
 
 export const useAdminAuthStore = defineStore('adminAuth', {
@@ -8,7 +8,7 @@ export const useAdminAuthStore = defineStore('adminAuth', {
     profile: null as AdminPublic | null,
   }),
   getters: {
-    isLoggedIn: () => Boolean(getAccessToken('admin')),
+    isLoggedIn: () => isLoggedInRef('admin').value,
   },
   actions: {
     async setup(username: string, password: string) {

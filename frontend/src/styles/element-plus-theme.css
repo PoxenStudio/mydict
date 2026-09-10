@@ -1,4 +1,6 @@
-/* 把自有 Token 映射到 Element Plus 的 --el-* 变量，管理后台组件自动跟随全局主题 */
+/* 把自有 Token 映射到 Element Plus 的 --el-* 变量，管理后台组件自动跟随全局主题。
+   --el-bg-color-overlay 单独控制 popover/dropdown/select/date-picker/message 等
+   悬浮层背景，不受 --el-bg-color 影响，漏映射就会导致这些组件在深色模式下背景还是亮的。 */
 :root {
   --el-color-primary: var(--color-brand-500);
   --el-color-primary-light-3: var(--color-brand-300);
@@ -7,9 +9,27 @@
   --el-color-danger: var(--color-danger);
   --el-color-info: var(--color-info);
   --el-border-radius-base: var(--radius-md);
+
   --el-bg-color: var(--color-bg-surface);
+  --el-bg-color-page: var(--color-bg-base);
+  --el-bg-color-overlay: var(--color-bg-surface-raised);
+
   --el-text-color-primary: var(--color-text-primary);
   --el-text-color-regular: var(--color-text-secondary);
+  --el-text-color-secondary: var(--color-text-tertiary);
+  --el-text-color-placeholder: var(--color-text-tertiary);
+  --el-text-color-disabled: var(--color-text-tertiary);
+
   --el-border-color: var(--color-border);
   --el-border-color-hover: var(--color-border-hover);
+  --el-border-color-light: var(--color-border);
+  --el-border-color-lighter: var(--color-border);
+  --el-border-color-extra-light: var(--color-border);
+  --el-border-color-dark: var(--color-border-hover);
+  --el-border-color-darker: var(--color-border-hover);
+
+  --el-fill-color: var(--color-bg-base);
+  --el-fill-color-light: var(--color-bg-base);
+  --el-fill-color-lighter: var(--color-bg-base);
+  --el-fill-color-blank: var(--color-bg-surface);
 }

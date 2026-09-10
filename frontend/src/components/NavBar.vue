@@ -1,16 +1,27 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
 import ThemeToggle from './ThemeToggle.vue'
+import ChangePasswordDialog from './ChangePasswordDialog.vue'
 
 const authStore = useUserAuthStore()
 const settingsStore = useSettingsStore()
+const changePasswordVisible = ref(false)
 
 onMounted(() => {
   if (!settingsStore.loaded) settingsStore.load().catch(() => undefined)
   if (authStore.isLoggedIn && !authStore.profile) authStore.loadProfile().catch(() => undefined)
 })
+
+function handleUserCommand(command: string) {
+  if (command === 'change-password') {
+    changePasswordVisible.value = true
+  } else if (command === 'logout') {
+    authStore.logout()
+  }
+}
 </script>
 
 <template>
@@ -28,14 +39,26 @@ onMounted(() => {
     <div class="nav-actions">
       <ThemeToggle />
       <template v-if="authStore.isLoggedIn">
-        <span class="username">{{ authStore.profile?.username ?? '...' }}</span>
-        <button class="link-btn" type="button" @click="authStore.logout()">退出</button>
+        <el-dropdown trigger="click" @command="handleUserCommand">
+          <span class="username-trigger">
+            {{ authStore.profile?.username ?? '...' }}
+            <el-icon class="dropdown-icon"><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
+              <el-dropdown-item command="logout" divided>退出</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </template>
       <template v-else>
         <router-link to="/login" class="link-btn">登录</router-link>
         <router-link to="/register" class="link-btn">注册</router-link>
       </template>
     </div>
+
+    <ChangePasswordDialog v-model:visible="changePasswordVisible" />
   </header>
 </template>
 
@@ -91,8 +114,20 @@ onMounted(() => {
   font-size: var(--text-sm);
 }
 
-.username {
+.username-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.username-trigger:hover {
+  color: var(--color-text-primary);
+}
+
+.dropdown-icon {
+  font-size: var(--text-xs);
 }
 
 .link-btn {
