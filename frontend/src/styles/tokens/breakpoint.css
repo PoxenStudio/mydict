@@ -1,0 +1,5 @@
+:root {
+  /* 供 JS 媒体查询逻辑读取的数值变量；实际断点判断见 utils/breakpoint.ts */
+  --bp-mobile: 640px;
+  --bp-tablet: 1024px;
+}

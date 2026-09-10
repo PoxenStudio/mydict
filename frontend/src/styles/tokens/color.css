@@ -1,0 +1,60 @@
+:root {
+  /* 品牌色 */
+  --color-brand-50: #eafbf4;
+  --color-brand-100: #cff5e4;
+  --color-brand-300: #7fddba;
+  --color-brand-500: #2fbf8f;
+  --color-brand-600: #22a67b;
+  --color-brand-700: #178c66;
+  --color-brand-900: #0b4a38;
+
+  /* 中性色 - 浅色主题 */
+  --color-bg-base: #f6f8f7;
+  --color-bg-surface: #ffffff;
+  --color-bg-surface-raised: #ffffff;
+  --color-border: #e4e9e7;
+  --color-border-hover: #c7d1cd;
+  --color-text-primary: #1a2420;
+  --color-text-secondary: #5b6b65;
+  --color-text-tertiary: #8b9a94;
+
+  /* 语义色 - 浅色主题 */
+  --color-success: #2fbf8f;
+  --color-warning: #e8a33d;
+  --color-danger: #e15656;
+  --color-info: #4c8dff;
+}
+
+:root[data-theme='dark'] {
+  --color-bg-base: #12161a;
+  --color-bg-surface: #1b2126;
+  --color-bg-surface-raised: #232b31;
+  --color-border: #2c363d;
+  --color-border-hover: #3c4850;
+  --color-text-primary: #eaf1ee;
+  --color-text-secondary: #9db0aa;
+  --color-text-tertiary: #71827c;
+
+  --color-success: #3fd8a3;
+  --color-warning: #f0b85c;
+  --color-danger: #f1726f;
+  --color-info: #6fa2ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-bg-base: #12161a;
+    --color-bg-surface: #1b2126;
+    --color-bg-surface-raised: #232b31;
+    --color-border: #2c363d;
+    --color-border-hover: #3c4850;
+    --color-text-primary: #eaf1ee;
+    --color-text-secondary: #9db0aa;
+    --color-text-tertiary: #71827c;
+
+    --color-success: #3fd8a3;
+    --color-warning: #f0b85c;
+    --color-danger: #f1726f;
+    --color-info: #6fa2ff;
+  }
+}

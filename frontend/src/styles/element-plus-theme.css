@@ -1,0 +1,15 @@
+/* 把自有 Token 映射到 Element Plus 的 --el-* 变量，管理后台组件自动跟随全局主题 */
+:root {
+  --el-color-primary: var(--color-brand-500);
+  --el-color-primary-light-3: var(--color-brand-300);
+  --el-color-success: var(--color-success);
+  --el-color-warning: var(--color-warning);
+  --el-color-danger: var(--color-danger);
+  --el-color-info: var(--color-info);
+  --el-border-radius-base: var(--radius-md);
+  --el-bg-color: var(--color-bg-surface);
+  --el-text-color-primary: var(--color-text-primary);
+  --el-text-color-regular: var(--color-text-secondary);
+  --el-border-color: var(--color-border);
+  --el-border-color-hover: var(--color-border-hover);
+}

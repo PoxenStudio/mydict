@@ -1,0 +1,14 @@
+:root {
+  --motion-duration-fast: 150ms;
+  --motion-duration-base: 200ms;
+  --motion-ease-standard: ease;
+}
+
+/* 仅对主题切换涉及的视觉属性做过渡，避免布局属性跟着抖动 */
+* {
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
