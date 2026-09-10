@@ -23,6 +23,11 @@
   --color-warning: #e8a33d;
   --color-danger: #e15656;
   --color-info: #4c8dff;
+
+  /* 行/列表项/图标按钮的 hover 高亮底色。不能直接复用 --color-brand-50——那个值固定
+     浅色，配合 --color-text-primary 这类深浅主题反转的文字在深色主题下会"亮底亮字"看不清；
+     这里单独一个 Token，深色主题换成把品牌色掺进当前表面色得到的深色调。 */
+  --color-hover-tint: var(--color-brand-50);
 }
 
 :root[data-theme='dark'] {
@@ -39,6 +44,8 @@
   --color-warning: #f0b85c;
   --color-danger: #f1726f;
   --color-info: #6fa2ff;
+
+  --color-hover-tint: color-mix(in srgb, var(--color-brand-500) 18%, var(--color-bg-surface));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -56,5 +63,7 @@
     --color-warning: #f0b85c;
     --color-danger: #f1726f;
     --color-info: #6fa2ff;
+
+    --color-hover-tint: color-mix(in srgb, var(--color-brand-500) 18%, var(--color-bg-surface));
   }
 }

@@ -16,6 +16,10 @@
   <img src="document/main_ui.png" alt="User UI" />
 </p>
 
+<p align="center">
+  <img src="document/vocabs_ui.png" alt="Vocab UI" />
+</p>
+
 后台管理UI
 <p align="center">
   <img src="document/admin_ui.png" alt="Admin UI" />
