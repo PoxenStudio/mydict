@@ -61,6 +61,9 @@ docker run -d --name mydict -p 8000:8000 -v $(pwd)/data:/data mydict
 
 启动后访问 `http://<host>:8000` 即可。
 
+## 用户分离
+系统管理员不在用户列表中，不能进行普通用户的查询操作。
+
 ## 首次初始化
 
 1. 访问 `http://<host>:8000/admin/setup`，设置管理员用户名密码（仅首次部署会出现该页面）。
