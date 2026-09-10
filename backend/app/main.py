@@ -1,16 +1,18 @@
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
 from app.api.admin.auth import router as admin_auth_router
+from app.api.admin.dictionaries import router as admin_dictionaries_router
 from app.api.health import router as health_router
 from app.api.web.auth import router as web_auth_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.migrate import run_migrations
+from app.services.resource_service import normalize_resource_path
 
 settings = get_settings()
 settings.ensure_data_dirs()
@@ -30,6 +32,21 @@ def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
 app.include_router(health_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(web_auth_router, prefix="/api")
+app.include_router(admin_dictionaries_router, prefix="/api")
+
+
+@app.get("/dict-res/{dictionary_id}/res/{resource_path:path}")
+def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
+    """只读对外暴露词典 res/ 子目录；source/ 原始文件不经此路由可达。"""
+    try:
+        normalized = normalize_resource_path(resource_path)
+    except ValueError:
+        raise HTTPException(status_code=404) from None
+    target = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res" / normalized
+    if not target.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(target)
+
 
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():

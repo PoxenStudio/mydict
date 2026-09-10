@@ -24,6 +24,12 @@ const router = createRouter({
       component: () => import('../views/admin/AdminDashboardView.vue'),
       meta: { requiresAdmin: true },
     },
+    {
+      path: '/admin/dictionaries',
+      name: 'admin-dictionaries',
+      component: () => import('../views/admin/DictionaryManagementView.vue'),
+      meta: { requiresAdmin: true },
+    },
   ],
 })
 

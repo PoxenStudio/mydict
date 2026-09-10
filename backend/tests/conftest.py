@@ -15,9 +15,26 @@ os.environ["DICTIONARY_STORAGE_PATH"] = os.path.join(_tmp_dir, "dictionaries")
 # 建表与 system_settings 默认值播种均由 Alembic migration 完成，无需在测试里重复处理。
 from app.main import app  # noqa: E402
 
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "adminpass123"
+
 
 @pytest.fixture
 async def client() -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+async def admin_headers(client: AsyncClient) -> dict[str, str]:
+    """幂等获取管理员登录态：未初始化则先初始化，已初始化则直接登录。"""
+    resp = await client.post(
+        "/api/admin/setup", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}
+    )
+    if resp.status_code != 200:
+        resp = await client.post(
+            "/api/admin/login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}
+        )
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}

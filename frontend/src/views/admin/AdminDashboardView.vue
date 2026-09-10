@@ -15,7 +15,10 @@ onMounted(() => {
   <div class="dashboard">
     <h1>管理后台</h1>
     <p v-if="authStore.profile">欢迎，{{ authStore.profile.username }}</p>
-    <p class="hint">词典管理 / Token 管理 / 用户管理 / 统计 / 系统设置将在后续步骤中实现。</p>
+    <nav class="admin-nav">
+      <router-link to="/admin/dictionaries">词典管理</router-link>
+    </nav>
+    <p class="hint">Token 管理 / 用户管理 / 统计 / 系统设置将在后续步骤中实现。</p>
   </div>
 </template>
 
@@ -33,6 +36,18 @@ h1 {
   margin: 0 0 var(--space-3);
   font-size: var(--text-xl);
   color: var(--color-text-primary);
+}
+
+.admin-nav {
+  display: flex;
+  gap: var(--space-4);
+  margin: var(--space-4) 0;
+}
+
+.admin-nav a {
+  color: var(--color-brand-600);
+  font-size: var(--text-sm);
+  text-decoration: none;
 }
 
 .hint {
