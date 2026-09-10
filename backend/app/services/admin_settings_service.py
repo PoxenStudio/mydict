@@ -8,7 +8,9 @@ from app.services.audit_service import log_action
 _BOOL_KEYS = {"open_access", "allow_registration"}
 _INT_KEYS = {"token_default_daily_limit", "anonymous_ip_rate_limit_per_min"}
 _OPTIONAL_INT_KEYS = {"vocab_max_items_per_owner"}
-_STR_KEYS = {"site_name"}
+_STR_KEYS = {"site_name", "search_hint_text"}
+
+_SEARCH_HINT_DEFAULT = "小搜一下, 大进一步"
 
 
 def get_all_settings(db: Session, defaults: Settings) -> dict:
@@ -27,6 +29,9 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         ),
         "vocab_max_items_per_owner": _get_optional_int(db, "vocab_max_items_per_owner"),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
+        "search_hint_text": settings_service.get_setting(
+            db, "search_hint_text", _SEARCH_HINT_DEFAULT
+        ),
     }
 
 
@@ -40,6 +45,9 @@ def get_public_settings(db: Session, defaults: Settings) -> dict:
         ),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
         "initialized": is_initialized(db),
+        "search_hint_text": settings_service.get_setting(
+            db, "search_hint_text", _SEARCH_HINT_DEFAULT
+        ),
     }
 
 

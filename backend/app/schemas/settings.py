@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SystemSettingsOut(BaseModel):
@@ -8,6 +8,7 @@ class SystemSettingsOut(BaseModel):
     anonymous_ip_rate_limit_per_min: int
     vocab_max_items_per_owner: int | None
     site_name: str
+    search_hint_text: str
 
 
 class PublicSettingsOut(BaseModel):
@@ -17,6 +18,7 @@ class PublicSettingsOut(BaseModel):
     allow_registration: bool
     site_name: str
     initialized: bool
+    search_hint_text: str
 
 
 class SystemSettingsUpdateRequest(BaseModel):
@@ -26,3 +28,4 @@ class SystemSettingsUpdateRequest(BaseModel):
     anonymous_ip_rate_limit_per_min: int | None = None
     vocab_max_items_per_owner: int | None = None
     site_name: str | None = None
+    search_hint_text: str | None = Field(default=None, max_length=100)

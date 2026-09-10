@@ -13,6 +13,7 @@ export const useSettingsStore = defineStore('settings', {
     allowRegistration: (state) => state.settings?.allow_registration ?? true,
     // 未加载完成前默认 true，避免请求返回前先闪现一次跳转
     initialized: (state) => state.settings?.initialized ?? true,
+    searchHintText: (state) => state.settings?.search_hint_text ?? '小搜一下, 大进一步',
   },
   actions: {
     async load() {

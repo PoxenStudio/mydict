@@ -14,6 +14,7 @@ const form = reactive({
   anonymous_ip_rate_limit_per_min: 60,
   vocab_max_items_per_owner: null as number | null,
   site_name: 'MyDict',
+  search_hint_text: '小搜一下, 大进一步',
 })
 
 const vocabUnlimited = computed({
@@ -105,6 +106,14 @@ async function save() {
         <h2>站点信息</h2>
         <el-form-item label="站点名称">
           <el-input v-model="form.site_name" style="width: 320px" />
+        </el-form-item>
+        <el-form-item label="搜索提示语（登录用户在首页搜索框下方看到，限 100 字以内）">
+          <el-input
+            v-model="form.search_hint_text"
+            maxlength="100"
+            show-word-limit
+            style="width: 320px"
+          />
         </el-form-item>
       </section>
 

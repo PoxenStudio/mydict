@@ -377,51 +377,53 @@ function definitionHtml(definition: string) {
                 : '选择服务器 /data/dicts 目录下的文件'
             "
           >
-            <div class="dicts-dir-path">
-              <el-icon
-                class="path-icon"
-                :class="{ disabled: !dictsDirPath }"
-                title="回到根目录 /data/dicts"
-                @click="goToDictsDirRoot"
-              >
-                <HomeFilled />
-              </el-icon>
-              <el-icon
-                class="path-icon"
-                :class="{ disabled: !dictsDirPath }"
-                title="返回上一级目录"
-                @click="goToDictsDirParent"
-              >
-                <Back />
-              </el-icon>
-              <span class="path-text">/data/dicts{{ dictsDirPath ? '/' + dictsDirPath : '' }}</span>
-            </div>
-            <div class="dicts-dir-scroll">
-              <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
-                <template v-for="f in dictsDirEntries" :key="f.name">
-                  <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
-                    <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
-                  </div>
-                  <el-radio v-else :value="f.name" :disabled="f.imported">
-                    <el-icon class="file-icon"><Document /></el-icon>{{ f.name
-                    }}<span v-if="f.imported" class="hint"> （已导入）</span>
-                  </el-radio>
-                </template>
-              </el-radio-group>
-              <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
-                <template v-for="f in dictsDirEntries" :key="f.name">
-                  <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
-                    <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
-                  </div>
-                  <el-checkbox v-else :value="f.name" :label="f.name" :disabled="f.imported">
-                    <el-icon class="file-icon"><Document /></el-icon>{{ f.name
-                    }}<span v-if="f.imported" class="hint"> （已导入）</span>
-                  </el-checkbox>
-                </template>
-              </el-checkbox-group>
-              <p v-if="dictsDirEntries.length === 0" class="hint">
-                当前目录下暂无文件，请先将词典文件放入该目录。
-              </p>
+            <div class="dicts-dir-browser">
+              <div class="dicts-dir-path">
+                <el-icon
+                  class="path-icon"
+                  :class="{ disabled: !dictsDirPath }"
+                  title="回到根目录 /data/dicts"
+                  @click="goToDictsDirRoot"
+                >
+                  <HomeFilled />
+                </el-icon>
+                <el-icon
+                  class="path-icon"
+                  :class="{ disabled: !dictsDirPath }"
+                  title="返回上一级目录"
+                  @click="goToDictsDirParent"
+                >
+                  <Back />
+                </el-icon>
+                <span class="path-text">/data/dicts{{ dictsDirPath ? '/' + dictsDirPath : '' }}</span>
+              </div>
+              <div class="dicts-dir-scroll">
+                <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
+                  <template v-for="f in dictsDirEntries" :key="f.name">
+                    <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
+                      <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
+                    </div>
+                    <el-radio v-else :value="f.name" :disabled="f.imported">
+                      <el-icon class="file-icon"><Document /></el-icon>{{ f.name
+                      }}<span v-if="f.imported" class="hint"> （已导入）</span>
+                    </el-radio>
+                  </template>
+                </el-radio-group>
+                <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
+                  <template v-for="f in dictsDirEntries" :key="f.name">
+                    <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
+                      <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
+                    </div>
+                    <el-checkbox v-else :value="f.name" :label="f.name" :disabled="f.imported">
+                      <el-icon class="file-icon"><Document /></el-icon>{{ f.name
+                      }}<span v-if="f.imported" class="hint"> （已导入）</span>
+                    </el-checkbox>
+                  </template>
+                </el-checkbox-group>
+                <p v-if="dictsDirEntries.length === 0" class="hint">
+                  当前目录下暂无文件，请先将词典文件放入该目录。
+                </p>
+              </div>
             </div>
           </el-form-item>
         </template>
@@ -559,6 +561,12 @@ function definitionHtml(definition: string) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+.dicts-dir-browser {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
 }
 
 .dicts-dir-path {

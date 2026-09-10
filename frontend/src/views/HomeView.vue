@@ -68,6 +68,8 @@ async function runSearch() {
         <button type="submit" :disabled="showLoginGate">查询</button>
       </form>
 
+      <p v-if="authStore.isLoggedIn" class="search-hint">{{ settingsStore.searchHintText }}</p>
+
       <div v-if="showLoginGate" class="login-gate">
         <p>
           当前需要登录才能查询，<router-link to="/login">立即登录</router-link> 或
@@ -174,6 +176,13 @@ async function runSearch() {
 .search-box button:disabled {
   background: var(--color-border);
   cursor: not-allowed;
+}
+
+.search-hint {
+  margin: calc(var(--space-5) * -1) 0 0;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
 }
 
 .login-gate {

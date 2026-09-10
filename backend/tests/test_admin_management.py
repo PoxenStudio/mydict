@@ -144,6 +144,7 @@ async def test_settings_get_and_partial_update(
     original = resp.json()
     assert original["site_name"] == "MyDict"
     assert original["vocab_max_items_per_owner"] is None
+    assert original["search_hint_text"] == "小搜一下, 大进一步"
 
     resp = await client.put(
         "/api/admin/settings", json={"site_name": "我的词典"}, headers=admin_headers
@@ -170,6 +171,28 @@ async def test_settings_get_and_partial_update(
         "/api/admin/settings", json={"site_name": "MyDict"}, headers=admin_headers
     )
     assert resp.json()["site_name"] == "MyDict"
+
+    resp = await client.put(
+        "/api/admin/settings", json={"search_hint_text": "欢迎回来"}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["search_hint_text"] == "欢迎回来"
+
+    resp = await client.get("/api/public/settings")
+    assert resp.json()["search_hint_text"] == "欢迎回来"
+
+    # 超过 100 字上限拒绝
+    resp = await client.put(
+        "/api/admin/settings", json={"search_hint_text": "长" * 101}, headers=admin_headers
+    )
+    assert resp.status_code == 422
+
+    resp = await client.put(
+        "/api/admin/settings",
+        json={"search_hint_text": "小搜一下, 大进一步"},
+        headers=admin_headers,
+    )
+    assert resp.json()["search_hint_text"] == "小搜一下, 大进一步"
 
 
 async def test_stats_overview_top_words_and_csv_export(
