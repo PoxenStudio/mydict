@@ -98,6 +98,11 @@ async def test_upload_ecdict_and_manage_lifecycle(
     assert resp.status_code == 200
     assert resp.json()["status"] == "enabled"
 
+    # 导入是同步跑完才返回的，响应回来时任务登记表应该已经清空
+    resp = await client.get("/api/admin/tasks/running", headers=admin_headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
     resp = await client.put(f"/api/admin/dictionaries/{dict_id}/disable", headers=admin_headers)
     assert resp.json()["status"] == "disabled"
 
@@ -110,6 +115,11 @@ async def test_upload_ecdict_and_manage_lifecycle(
         headers=admin_headers,
     )
     assert resp.status_code == 404
+
+
+async def test_running_tasks_requires_admin(client: AsyncClient) -> None:
+    resp = await client.get("/api/admin/tasks/running")
+    assert resp.status_code == 401
 
 
 async def test_import_from_dicts_dir_moves_source_files(

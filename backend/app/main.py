@@ -9,6 +9,7 @@ from app.api.admin.auth import router as admin_auth_router
 from app.api.admin.dictionaries import router as admin_dictionaries_router
 from app.api.admin.settings import router as admin_settings_router
 from app.api.admin.stats import router as admin_stats_router
+from app.api.admin.tasks import router as admin_tasks_router
 from app.api.admin.tokens import router as admin_tokens_router
 from app.api.admin.users import router as admin_users_router
 from app.api.health import router as health_router
@@ -55,6 +56,7 @@ app.include_router(admin_tokens_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api")
 app.include_router(admin_settings_router, prefix="/api")
 app.include_router(admin_stats_router, prefix="/api")
+app.include_router(admin_tasks_router, prefix="/api")
 app.include_router(v1_query_router, prefix="/api")
 app.include_router(v1_vocab_router, prefix="/api")
 app.include_router(web_dict_router, prefix="/api")

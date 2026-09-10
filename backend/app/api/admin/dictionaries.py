@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
@@ -81,7 +82,8 @@ async def upload_and_import(
     settings: Settings = Depends(get_settings),
 ) -> DictionaryOut:
     staged_paths = await _save_upload_files(files, settings)
-    return dictionary_service.import_dictionary(
+    return await run_in_threadpool(
+        dictionary_service.import_dictionary,
         db,
         name=name,
         format_=format,

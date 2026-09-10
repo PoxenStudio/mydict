@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAdminAuthStore } from '../../stores/adminAuth'
 import ThemeToggle from '../../components/ThemeToggle.vue'
+import BackgroundTasksIndicator from '../../components/admin/BackgroundTasksIndicator.vue'
 
 const router = useRouter()
 const authStore = useAdminAuthStore()
@@ -40,6 +41,7 @@ function logout() {
       </button>
       <span class="brand">MyDict 管理后台</span>
       <div class="topbar-actions">
+        <BackgroundTasksIndicator />
         <ThemeToggle />
         <span v-if="authStore.profile" class="username">{{ authStore.profile.username }}</span>
         <button type="button" class="link-btn" @click="logout">退出</button>

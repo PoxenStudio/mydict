@@ -15,6 +15,7 @@ from app.parsers.mdict import MDictParser
 from app.parsers.stardict import StarDictParser
 from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
+from app.services.background_task_service import background_tasks
 
 BATCH_SIZE = 2000
 
@@ -119,12 +120,16 @@ def import_dictionary(
     resource_dir = storage_root / "res"
     source_dir = storage_root / "source"
 
+    # 导入过程全程同步跑在这一次请求里（大文件可能耗时较久），这里登记一个后台任务，
+    # 让别的标签页/会话打开管理后台时也能看到"正在导入"的状态，见 background_task_service.py。
+    task = background_tasks.start("dictionary_import", name)
     try:
         parser = _PARSERS[format_]()
         word_count = _batch_insert(
             db,
             dict_id,
             parser.parse(staged_paths, dictionary_id=dict_id, resource_dir=resource_dir),
+            on_progress=lambda done: background_tasks.update_progress(task.id, {"done": done}),
         )
 
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +151,8 @@ def import_dictionary(
         if isinstance(exc, ValueError):
             raise ValidationAppError(str(exc)) from exc
         raise
+    finally:
+        background_tasks.finish(task.id)
 
     log_action(
         db,
@@ -160,7 +167,7 @@ def import_dictionary(
     return dictionary
 
 
-def _batch_insert(db: Session, dictionary_id: int, entries) -> int:
+def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) -> int:
     count = 0
     batch: list[DictEntry] = []
     seen_words: set[str] = set()
@@ -183,9 +190,13 @@ def _batch_insert(db: Session, dictionary_id: int, entries) -> int:
             db.bulk_save_objects(batch)
             db.flush()
             batch.clear()
+            if on_progress:
+                on_progress(count)
     if batch:
         db.bulk_save_objects(batch)
         db.flush()
+    if on_progress:
+        on_progress(count)
     return count
 
 
