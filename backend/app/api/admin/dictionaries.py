@@ -14,6 +14,7 @@ from app.core.exceptions import ValidationAppError
 from app.models.admin import Admin
 from app.schemas.dictionary import (
     DictionaryOut,
+    DictionaryUpdateRequest,
     DictsDirListingOut,
     ImportFromDictsDirRequest,
     ReorderRequest,
@@ -135,6 +136,18 @@ def reorder(
     admin: Admin = Depends(require_admin),
 ) -> list[DictionaryOut]:
     return dictionary_service.reorder_dictionaries(db, body.ordered_ids, admin.id)
+
+
+@router.put("/{dictionary_id}", response_model=DictionaryOut)
+def update_dictionary(
+    dictionary_id: int,
+    body: DictionaryUpdateRequest,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> DictionaryOut:
+    return dictionary_service.update_dictionary_metadata(
+        db, dictionary_id, body.name, body.lang_from, body.lang_to, admin.id
+    )
 
 
 @router.put("/{dictionary_id}/enable", response_model=DictionaryOut)

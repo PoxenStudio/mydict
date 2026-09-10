@@ -183,6 +183,7 @@ async function runSearch() {
   text-align: center;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
+  margin-top: 1px;
 }
 
 .login-gate {

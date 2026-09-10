@@ -5,6 +5,7 @@ import struct
 from httpx import AsyncClient
 
 from app.core.config import get_settings
+from app.services.settings_service import set_setting
 
 
 def _ecdict_csv_bytes() -> bytes:
@@ -131,6 +132,52 @@ async def test_upload_ecdict_and_manage_lifecycle(
 
     db_session.expire_all()
     assert db_session.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).count() == 0
+
+
+async def test_update_dictionary_name_and_lang(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    resp = await client.post(
+        "/api/admin/dictionaries",
+        headers=admin_headers,
+        data={"name": "Mini ECDICT", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+        files={"files": ("ecdict.csv", _ecdict_csv_bytes(), "text/csv")},
+    )
+    dict_id = resp.json()["id"]
+    await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
+
+    # 改名+改语言方向后查询结果里的词典名要立刻是新的，不能因为查询结果有 5 分钟 TTL 缓存而看到旧名字
+    # （lang_from 保持 en 不变，避免连带影响 "apple" 的自动语言路由，改 lang_to 已足够验证字段生效）
+    await client.get("/api/dict/search", params={"word": "apple"})
+    resp = await client.put(
+        f"/api/admin/dictionaries/{dict_id}",
+        headers=admin_headers,
+        json={"name": "改名后的词典", "lang_from": "en", "lang_to": "zh-Hans"},
+    )
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["name"] == "改名后的词典"
+    assert updated["lang_from"] == "en"
+    assert updated["lang_to"] == "zh-Hans"
+    assert updated["format"] == "ecdict"  # format 不允许改
+
+    resp = await client.get("/api/dict/search", params={"word": "apple"})
+    assert resp.json()["results"][0]["dictionary_name"] == "改名后的词典"
+
+    resp = await client.put(
+        "/api/admin/dictionaries/999999",
+        headers=admin_headers,
+        json={"name": "x", "lang_from": "en", "lang_to": "zh"},
+    )
+    assert resp.status_code == 404
+
+    resp = await client.put(
+        f"/api/admin/dictionaries/{dict_id}",
+        headers=admin_headers,
+        json={"name": "", "lang_from": "en", "lang_to": "zh"},
+    )
+    assert resp.status_code == 422
 
 
 async def test_running_tasks_requires_admin(client: AsyncClient) -> None:

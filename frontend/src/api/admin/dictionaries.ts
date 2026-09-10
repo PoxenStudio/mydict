@@ -1,6 +1,7 @@
 import request from '../request'
 import type {
   DictionaryItem,
+  DictionaryUpdatePayload,
   DictsDirListing,
   ImportFromDictsDirPayload,
   TestQueryEntry,
@@ -24,6 +25,10 @@ export function listDictsDirFiles(path = '') {
 
 export function importFromDictsDir(payload: ImportFromDictsDirPayload) {
   return request.post<never, DictionaryItem>('/admin/dictionaries/import-from-dicts-dir', payload)
+}
+
+export function updateDictionary(id: number, payload: DictionaryUpdatePayload) {
+  return request.put<never, DictionaryItem>(`/admin/dictionaries/${id}`, payload)
 }
 
 export function enableDictionary(id: number) {

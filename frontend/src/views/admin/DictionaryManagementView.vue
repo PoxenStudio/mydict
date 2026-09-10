@@ -36,6 +36,42 @@ async function toggleStatus(item: DictionaryItem) {
   if (index !== -1) dictionaries.value[index] = updated
 }
 
+// --- 编辑名称/语言方向 ---
+const editDialogVisible = ref(false)
+const editing = ref(false)
+const editTarget = ref<DictionaryItem | null>(null)
+const editForm = reactive({ name: '', lang_from: '', lang_to: '' })
+
+function openEdit(item: DictionaryItem) {
+  editTarget.value = item
+  editForm.name = item.name
+  editForm.lang_from = item.lang_from
+  editForm.lang_to = item.lang_to
+  editDialogVisible.value = true
+}
+
+async function submitEdit() {
+  if (!editTarget.value) return
+  if (!editForm.name.trim()) {
+    ElMessage.warning('请填写词典名称')
+    return
+  }
+  editing.value = true
+  try {
+    const updated = await dictApi.updateDictionary(editTarget.value.id, {
+      name: editForm.name.trim(),
+      lang_from: editForm.lang_from,
+      lang_to: editForm.lang_to,
+    })
+    const index = dictionaries.value.findIndex((d) => d.id === updated.id)
+    if (index !== -1) dictionaries.value[index] = updated
+    ElMessage.success('已保存')
+    editDialogVisible.value = false
+  } finally {
+    editing.value = false
+  }
+}
+
 // --- 删除 ---
 async function confirmDelete(item: DictionaryItem) {
   const fileHint =
@@ -299,8 +335,9 @@ function definitionHtml(definition: string) {
           <el-switch :model-value="item.status === 'enabled'" @change="toggleStatus(item)" />
         </span>
         <span class="col-actions">
-          <el-button text @click="openTestQuery(item)">测试查询</el-button>
+          <el-button text @click="openEdit(item)">编辑</el-button>
           <el-button text type="danger" @click="confirmDelete(item)">删除</el-button>
+          <el-button text @click="openTestQuery(item)">测试查询</el-button>
         </span>
       </div>
 
@@ -308,6 +345,40 @@ function definitionHtml(definition: string) {
         暂无词典，点击右上角「导入词典」开始导入。
       </div>
     </div>
+
+    <el-dialog v-model="editDialogVisible" title="编辑词典" width="420px">
+      <el-form label-position="top" @submit.prevent="submitEdit">
+        <el-form-item label="词典名称">
+          <el-input v-model="editForm.name" placeholder="如：牛津高阶英汉双解词典" />
+        </el-form-item>
+        <div class="lang-row">
+          <el-form-item label="源语言">
+            <el-select v-model="editForm.lang_from" style="width: 100%">
+              <el-option
+                v-for="opt in LANGUAGE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="目标语言">
+            <el-select v-model="editForm.lang_to" style="width: 100%">
+              <el-option
+                v-for="opt in LANGUAGE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="editing" @click="submitEdit">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="importDialogVisible" title="导入词典" width="560px">
       <el-tabs :model-value="importMode" @tab-change="handleTabChange">
@@ -615,6 +686,13 @@ function definitionHtml(definition: string) {
 .dir-row {
   display: flex;
   align-items: center;
+  height: 32px;
+  /* el-radio-group/el-checkbox-group 自身把 font-size/line-height 重置成 0（配合
+     el-radio/el-checkbox 各自重新设回来，用来消除 inline-flex 子项之间的空白间隙），这里的
+     目录行是普通 div、不在这套重置范围内，会原样继承 0，导致图标（尺寸按 1em 算）和文字一起
+     塌缩成 0，必须显式设回来。 */
+  font-size: var(--text-base);
+  line-height: 1;
   color: var(--color-text-primary);
   cursor: pointer;
 }

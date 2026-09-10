@@ -297,6 +297,32 @@ def set_dictionary_status(
     return dictionary
 
 
+def update_dictionary_metadata(
+    db: Session, dictionary_id: int, name: str, lang_from: str, lang_to: str, admin_id: int
+) -> Dictionary:
+    """只改名称/语言方向，不涉及重新解析——已入库的词条内容不受影响。"""
+    dictionary = db.get(Dictionary, dictionary_id)
+    if dictionary is None:
+        raise NotFoundError("词典不存在")
+    dictionary.name = name
+    dictionary.lang_from = lang_from
+    dictionary.lang_to = lang_to
+    db.commit()
+    log_action(
+        db,
+        actor_type="admin",
+        actor_id=admin_id,
+        action="dictionary.update",
+        target=str(dictionary_id),
+        detail={"name": name, "lang_from": lang_from, "lang_to": lang_to},
+    )
+    # lang_from/lang_to 会影响 resolve_dictionaries 的语言路由匹配，缓存的查询结果里
+    # 也带着词典名称快照，改名/改语言方向后都要让缓存失效
+    invalidate_query_cache()
+    db.refresh(dictionary)
+    return dictionary
+
+
 def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: Settings) -> None:
     dictionary = db.get(Dictionary, dictionary_id)
     if dictionary is None:

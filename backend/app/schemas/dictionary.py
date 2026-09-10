@@ -43,6 +43,14 @@ class ImportFromDictsDirRequest(BaseModel):
     files: list[str] = Field(min_length=1)
 
 
+class DictionaryUpdateRequest(BaseModel):
+    """只允许改名称与语言方向；format 决定了当初怎么解析入库，改了也不会重新解析，不开放修改。"""
+
+    name: str = Field(min_length=1, max_length=255)
+    lang_from: str = Field(min_length=1, max_length=8)
+    lang_to: str = Field(min_length=1, max_length=8)
+
+
 class ReorderRequest(BaseModel):
     ordered_ids: list[int] = Field(min_length=1)
 

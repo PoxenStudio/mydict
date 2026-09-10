@@ -28,6 +28,12 @@ export interface DictsDirListing {
   entries: DictsDirFile[]
 }
 
+export interface DictionaryUpdatePayload {
+  name: string
+  lang_from: string
+  lang_to: string
+}
+
 export interface ImportFromDictsDirPayload {
   name: string
   format: DictionaryFormat
