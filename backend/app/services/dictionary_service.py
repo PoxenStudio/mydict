@@ -1,5 +1,7 @@
 import json
+import logging
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from app.parsers.stardict import StarDictParser
 from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
 from app.services.background_task_service import background_tasks
+
+logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
 
@@ -277,18 +281,24 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
         storage_root.rmdir()
 
     invalidate_query_cache()
-    _vacuum(db)
+    # VACUUM 要重写整个数据库文件，库越大越慢（实测 200MB 库跑到 40+ 秒），同步跑在
+    # 删除请求里会让前端 10 秒超时误以为删除没生效（其实后端还在继续跑、最终会删成功，
+    # 只是响应没能在超时前返回）；丢到后台线程异步执行，删除接口本身只做行删除和文件
+    # 清理，立刻返回。
+    threading.Thread(target=_vacuum, args=(db.get_bind(),), daemon=True).start()
 
 
-def _vacuum(db: Session) -> None:
+def _vacuum(engine) -> None:
     """回收删除词条后 SQLite 文件里的空闲页；VACUUM 不能在事务内跑，用独立的
-    autocommit 连接执行，不影响外层 db 会话。WAL 模式下 VACUUM 本身不会把文件截断到
-    实际大小（新内容通过 WAL 写入，磁盘上的文件长度要等 checkpoint 才会收缩），额外
-    执行一次 TRUNCATE 模式的 checkpoint 才能让文件大小真正降下来。"""
-    engine = db.get_bind()
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        conn.execute(text("VACUUM"))
-        conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+    autocommit 连接执行。WAL 模式下 VACUUM 本身不会把文件截断到实际大小（新内容通过
+    WAL 写入，磁盘上的文件长度要等 checkpoint 才会收缩），额外执行一次 TRUNCATE 模式
+    的 checkpoint 才能让文件大小真正降下来。"""
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM"))
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+    except Exception:
+        logger.exception("VACUUM 失败，不影响词典已经删除成功，磁盘空间下次删除词典时会重试回收")
 
 
 def reorder_dictionaries(db: Session, ordered_ids: list[int], admin_id: int) -> list[Dictionary]:

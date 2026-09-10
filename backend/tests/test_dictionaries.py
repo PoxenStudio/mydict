@@ -256,6 +256,30 @@ async def test_import_from_dicts_dir_rejects_path_traversal(
     assert resp.status_code == 422
 
 
+async def test_delete_dictionary_does_not_block_on_vacuum(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    import time
+
+    resp = await client.post(
+        "/api/admin/dictionaries",
+        headers=admin_headers,
+        data={"name": "Vacuum Timing", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+        files={"files": ("v.csv", _ecdict_csv_bytes(), "text/csv")},
+    )
+    dict_id = resp.json()["id"]
+
+    t0 = time.monotonic()
+    resp = await client.delete(f"/api/admin/dictionaries/{dict_id}", headers=admin_headers)
+    elapsed = time.monotonic() - t0
+
+    assert resp.status_code == 200
+    # VACUUM 重写整个数据库文件，库越大越慢（实测 200MB 库要 40+ 秒），必须丢进后台线程，
+    # 删除接口本身只做行删除+文件清理就应该返回，不能等 VACUUM 跑完，否则前端 10 秒
+    # 超时会显示"删除没反应"，尽管后端其实最终还是删除成功了。
+    assert elapsed < 3
+
+
 async def test_upload_rejects_multiple_ecdict_files(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
