@@ -13,6 +13,7 @@ from app.api.admin.tasks import router as admin_tasks_router
 from app.api.admin.tokens import router as admin_tokens_router
 from app.api.admin.users import router as admin_users_router
 from app.api.health import router as health_router
+from app.api.system import router as system_router
 from app.api.v1.query import router as v1_query_router
 from app.api.v1.vocab import router as v1_vocab_router
 from app.api.web.auth import router as web_auth_router
@@ -23,11 +24,13 @@ from app.core.config import get_settings
 from app.core.exceptions import AppError, RateLimitedError
 from app.core.logging import configure_logging
 from app.core.migrate import run_migrations
+from app.core.version import get_app_version
 from app.services.resource_service import normalize_resource_path
 from app.tasks.scheduler import start_scheduler
 
 settings = get_settings()
 settings.ensure_data_dirs()
+get_app_version()
 run_migrations()
 # alembic 迁移会通过 fileConfig 重新配置 root logger（见 alembic/env.py），
 # 必须放在 run_migrations() 之后调用才不会被它覆盖掉
@@ -49,6 +52,7 @@ def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
 
 
 app.include_router(health_router, prefix="/api")
+app.include_router(system_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(web_auth_router, prefix="/api")
 app.include_router(admin_dictionaries_router, prefix="/api")

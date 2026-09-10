@@ -6,6 +6,7 @@ import WordCard from '../components/WordCard.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { searchWord } from '../api/dict'
+import { getSystemInfo } from '../api/system'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
 import { useFavorites } from '../composables/useFavorites'
@@ -20,12 +21,18 @@ const word = ref('')
 const submittedWord = ref('')
 const results = ref<QueryResultItem[]>([])
 const status = ref<'idle' | 'loading' | 'ok' | 'error'>('idle')
+const version = ref('')
 
 const showLoginGate = computed(
   () => settingsStore.loaded && !settingsStore.openAccess && !authStore.isLoggedIn,
 )
 
 onMounted(async () => {
+  getSystemInfo()
+    .then((info) => {
+      version.value = info.version
+    })
+    .catch(() => undefined)
   if (!settingsStore.loaded) await settingsStore.load().catch(() => undefined)
   if (settingsStore.loaded && !settingsStore.initialized) {
     router.replace('/admin/setup')
@@ -69,6 +76,7 @@ async function runSearch() {
       </form>
 
       <p v-if="authStore.isLoggedIn" class="search-hint">{{ settingsStore.searchHintText }}</p>
+      <p class="search-hint">Ver: {{ version ? version : '0.0.0' }}</p>
 
       <div v-if="showLoginGate" class="login-gate">
         <p>
@@ -179,11 +187,10 @@ async function runSearch() {
 }
 
 .search-hint {
-  margin: calc(var(--space-5) * -1) 0 0;
+  margin: calc((var(--space-5) - var(--space-2)) * -1) 0 0;
   text-align: center;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  margin-top: 1px;
 }
 
 .login-gate {

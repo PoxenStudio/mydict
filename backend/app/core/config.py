@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     anonymous_ip_rate_limit_per_min: int = 60
     max_upload_size_mb: int = 512
     enable_scheduler: bool = True
+    version_file_path: str = "/version.txt"
 
     config_storage_path: str = "/data/config"
     dicts_inbox_path: str = "/data/dicts"
