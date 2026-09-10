@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as userApi from '../../api/admin/users'
+import RefreshButton from '../../components/admin/RefreshButton.vue'
 import type { AdminUserDetail, AdminUserItem } from '../../types/adminUser'
 
 const users = ref<AdminUserItem[]>([])
@@ -38,6 +39,40 @@ watch(search, () => {
     load()
   }, 300)
 })
+
+// --- 添加用户 ---
+const createVisible = ref(false)
+const createLoading = ref(false)
+const createForm = reactive({ username: '', email: '' })
+
+function openCreate() {
+  createForm.username = ''
+  createForm.email = ''
+  createVisible.value = true
+}
+
+async function submitCreate() {
+  const username = createForm.username.trim()
+  if (username.length < 3) {
+    ElMessage.warning('用户名至少 3 位')
+    return
+  }
+  createLoading.value = true
+  try {
+    const { temporary_password } = await userApi.createUser(
+      username,
+      createForm.email.trim() || undefined,
+    )
+    createVisible.value = false
+    tempPasswordUsername.value = username
+    tempPasswordValue.value = temporary_password
+    tempPasswordVisible.value = true
+    page.value = 1
+    await load()
+  } finally {
+    createLoading.value = false
+  }
+}
 
 async function toggleStatus(user: AdminUserItem) {
   const updated =
@@ -94,7 +129,10 @@ function formatDate(value: string | null) {
 <template>
   <div class="page">
     <div class="page-header">
-      <h1>用户管理</h1>
+      <div class="title-row">
+        <h1>用户管理</h1>
+        <RefreshButton :loading="loading" @refresh="load" />
+      </div>
       <div class="filters">
         <el-input v-model="search" placeholder="搜索用户名/邮箱" clearable style="width: 200px" />
         <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 140px">
@@ -102,6 +140,10 @@ function formatDate(value: string | null) {
           <el-option label="禁用" value="disabled" />
         </el-select>
       </div>
+    </div>
+
+    <div class="table-toolbar">
+      <el-button type="primary" @click="openCreate">添加用户</el-button>
     </div>
 
     <div v-loading="loading" class="user-list">
@@ -176,6 +218,21 @@ function formatDate(value: string | null) {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="createVisible" title="添加用户" width="420px">
+      <el-form :model="createForm" label-position="top" @submit.prevent="submitCreate">
+        <el-form-item label="用户名">
+          <el-input v-model="createForm.username" placeholder="至少 3 位" />
+        </el-form-item>
+        <el-form-item label="邮箱（可选）">
+          <el-input v-model="createForm.email" placeholder="user@example.com" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="createLoading" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="tempPasswordVisible" title="临时密码已生成" width="420px">
       <p class="hint">请将以下临时密码告知「{{ tempPasswordUsername }}」，建议其登录后立即修改：</p>
       <div class="reveal-token">
@@ -208,9 +265,21 @@ function formatDate(value: string | null) {
   margin: 0;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .filters {
   display: flex;
   gap: var(--space-3);
+}
+
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3);
 }
 
 .user-list {

@@ -20,6 +20,7 @@ from app.api.web.public_settings import router as web_public_settings_router
 from app.api.web.vocab import router as web_vocab_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError, RateLimitedError
+from app.core.logging import configure_logging
 from app.core.migrate import run_migrations
 from app.services.resource_service import normalize_resource_path
 from app.tasks.scheduler import start_scheduler
@@ -27,6 +28,9 @@ from app.tasks.scheduler import start_scheduler
 settings = get_settings()
 settings.ensure_data_dirs()
 run_migrations()
+# alembic 迁移会通过 fileConfig 重新配置 root logger（见 alembic/env.py），
+# 必须放在 run_migrations() 之后调用才不会被它覆盖掉
+configure_logging()
 if settings.enable_scheduler:
     start_scheduler()
 
@@ -72,7 +76,7 @@ def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
 
 
 static_dir = Path(__file__).parent / "static"
-if static_dir.exists():
+if (static_dir / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
 
     @app.get("/{full_path:path}")

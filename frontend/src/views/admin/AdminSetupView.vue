@@ -3,10 +3,12 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AuthCard from '../../components/AuthCard.vue'
 import { useAdminAuthStore } from '../../stores/adminAuth'
+import { useSettingsStore } from '../../stores/settings'
 import { bootstrapStatus } from '../../api/admin/auth'
 
 const router = useRouter()
 const authStore = useAdminAuthStore()
+const settingsStore = useSettingsStore()
 const loading = ref(false)
 const form = reactive({ username: 'admin', password: '', confirm: '' })
 
@@ -24,7 +26,9 @@ async function onSubmit() {
   loading.value = true
   try {
     await authStore.setup(form.username, form.password)
-    router.push('/admin')
+    // 首页曾在未初始化时缓存过 settings，这里强制刷新一次避免跳回去又被弹回 /admin/setup
+    await settingsStore.load().catch(() => undefined)
+    router.push('/')
   } catch {
     // 错误已由 request.ts 响应拦截器统一提示
   } finally {

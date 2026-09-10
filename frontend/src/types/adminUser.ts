@@ -18,6 +18,11 @@ export interface AdminUserListResponse {
   page_size: number
 }
 
+export interface AdminUserCreateResponse {
+  user: AdminUserItem
+  temporary_password: string
+}
+
 export interface QueryLogEntry {
   word: string
   status: string | null

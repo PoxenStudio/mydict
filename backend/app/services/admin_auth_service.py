@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -13,6 +14,8 @@ from app.core.security import (
 from app.models.admin import Admin
 from app.schemas.auth import TokenPairResponse
 from app.services.audit_service import log_action
+
+logger = logging.getLogger("mydict.auth")
 
 
 def is_initialized(db: Session) -> bool:
@@ -33,9 +36,11 @@ def setup_admin(db: Session, username: str, password: str) -> Admin:
 def authenticate_admin(db: Session, username: str, password: str) -> TokenPairResponse:
     admin = db.query(Admin).filter(Admin.username == username).first()
     if admin is None or not verify_password(password, admin.password_hash):
+        logger.warning("admin login failed: username=%s", username)
         raise InvalidCredentialsError("用户名或密码错误")
     admin.last_login_at = datetime.now(timezone.utc)
     db.commit()
+    logger.info("admin login ok: username=%s id=%s", admin.username, admin.id)
     return TokenPairResponse(
         access_token=create_access_token(admin.id, AUD_ADMIN),
         refresh_token=create_refresh_token(admin.id, AUD_ADMIN),

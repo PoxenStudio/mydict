@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,8 @@ from app.models.user import User
 from app.schemas.auth import TokenPairResponse
 from app.services.settings_service import get_bool_setting
 
+logger = logging.getLogger("mydict.auth")
+
 
 def register_user(db: Session, username: str, password: str, email: str | None) -> User:
     if not get_bool_setting(db, "allow_registration", default=True):
@@ -35,11 +38,14 @@ def register_user(db: Session, username: str, password: str, email: str | None) 
 def authenticate_user(db: Session, username: str, password: str) -> TokenPairResponse:
     user = db.query(User).filter(User.username == username).first()
     if user is None or not verify_password(password, user.password_hash):
+        logger.warning("user login failed: username=%s", username)
         raise InvalidCredentialsError("用户名或密码错误")
     if user.status != "active":
+        logger.warning("user login rejected (disabled): username=%s", username)
         raise ForbiddenError("账号已被禁用")
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
+    logger.info("user login ok: username=%s id=%s", user.username, user.id)
     return TokenPairResponse(
         access_token=create_access_token(user.id, AUD_USER),
         refresh_token=create_refresh_token(user.id, AUD_USER),

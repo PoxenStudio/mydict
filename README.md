@@ -65,7 +65,7 @@ docker exec -it mydict python -m app.cli reset-admin-password --username admin
 
 **数据存在哪里，怎么备份？**
 
-容器内 `/data` 目录（SQLite 数据库、词典文件、自动生成的 JWT 密钥均在其中），备份/迁移只需复制该目录（如启动命令中挂载的宿主机 `./data`）。
+容器内 `/data` 目录（SQLite 数据库、词典文件、自动生成的 JWT 密钥、运行日志均在其中），备份/迁移只需复制该目录（如启动命令中挂载的宿主机 `./data`）。运行日志在 `/data/logs/mydict.log`，按 5MB 自动滚动、保留最近 5 份，登录成功/失败等事件也会写进去，容器内 `docker logs` 能看到同样的内容。
 
 **升级镜像会不会丢数据？**
 

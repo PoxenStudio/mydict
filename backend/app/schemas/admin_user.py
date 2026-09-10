@@ -1,8 +1,13 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 from app.schemas.vocab import VocabItemOut
+
+
+class AdminUserCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    email: EmailStr | None = None
 
 
 class AdminUserOut(BaseModel):
@@ -14,6 +19,11 @@ class AdminUserOut(BaseModel):
     last_login_at: datetime | None
     vocab_count: int
     query_count: int
+
+
+class AdminUserCreateResponse(BaseModel):
+    user: AdminUserOut
+    temporary_password: str
 
 
 class AdminUserListResponse(BaseModel):

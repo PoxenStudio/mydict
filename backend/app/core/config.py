@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     dicts_inbox_path: str = "/data/dicts"
     database_path: str = "/data/db/mydict.sqlite3"
     dictionary_storage_path: str = "/data/dictionaries"
+    log_dir: str = "/data/logs"
 
     @property
     def database_url(self) -> str:
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
             self.dicts_inbox_path,
             Path(self.database_path).parent,
             self.dictionary_storage_path,
+            self.log_dir,
         ):
             Path(path).mkdir(parents=True, exist_ok=True)
 

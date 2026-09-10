@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as settingsApi from '../../api/admin/settings'
+import RefreshButton from '../../components/admin/RefreshButton.vue'
 
 const loading = ref(true)
 const saving = ref(false)
@@ -48,7 +49,10 @@ async function save() {
 
 <template>
   <div v-loading="loading" class="page">
-    <h1>系统设置</h1>
+    <div class="title-row">
+      <h1>系统设置</h1>
+      <RefreshButton :loading="loading" @refresh="load" />
+    </div>
 
     <el-form label-position="top" class="settings-form">
       <section class="panel">
@@ -116,10 +120,17 @@ async function save() {
   padding: 0 var(--space-4);
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
 h1 {
   font-size: var(--text-xl);
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-5);
+  margin: 0;
 }
 
 .panel {

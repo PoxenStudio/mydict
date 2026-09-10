@@ -1,7 +1,7 @@
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.core.security import generate_temp_password, hash_password
 from app.models.query import QueryLog
 from app.models.user import User
@@ -56,6 +56,18 @@ def list_users(
     vocab_map, query_map = _usage_maps(db, [u.id for u in users])
     rows = [_to_out(u, vocab_map.get(u.id, 0), query_map.get(u.id, 0)) for u in users]
     return rows, total
+
+
+def create_user(db: Session, username: str, email: str | None, admin_id: int) -> tuple[dict, str]:
+    if db.query(User).filter(User.username == username).first() is not None:
+        raise ConflictError("用户名已存在")
+    temp_password = generate_temp_password()
+    user = User(username=username, email=email, password_hash=hash_password(temp_password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    log_action(db, actor_type="admin", actor_id=admin_id, action="user.create", target=username)
+    return _to_out(user, 0, 0), temp_password
 
 
 def _get_or_404(db: Session, user_id: int) -> User:

@@ -11,10 +11,15 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 @event.listens_for(engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
-    # SQLite 默认不强制外键约束，ON DELETE CASCADE 需要每个连接显式开启。
+def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
+    # SQLite 默认不强制外键约束，ON DELETE CASCADE 需要每个连接显式开启。
     cursor.execute("PRAGMA foreign_keys=ON")
+    # 默认回滚日志模式下写操作会独占锁，导入大文件时的批量 commit 与后台任务/其他请求
+    # 并发写库会直接报 "database is locked"；WAL 允许读不阻塞写，busy_timeout 让写冲突
+    # 等待重试而不是立刻抛错。
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
 
 

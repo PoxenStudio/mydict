@@ -62,6 +62,33 @@ async def test_token_not_found(client: AsyncClient, admin_headers: dict[str, str
     assert resp.status_code == 404
 
 
+async def test_admin_create_user(client: AsyncClient, admin_headers: dict[str, str]) -> None:
+    resp = await client.post(
+        "/api/admin/users",
+        json={"username": "createduser", "email": "created@example.com"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["user"]["username"] == "createduser"
+    assert body["user"]["email"] == "created@example.com"
+    assert body["user"]["status"] == "active"
+    temp_password = body["temporary_password"]
+    assert len(temp_password) >= 8
+
+    # 临时密码应能直接登录
+    resp = await client.post(
+        "/api/auth/login", json={"username": "createduser", "password": temp_password}
+    )
+    assert resp.status_code == 200
+
+    # 用户名重复应拒绝
+    resp = await client.post(
+        "/api/admin/users", json={"username": "createduser"}, headers=admin_headers
+    )
+    assert resp.status_code == 409
+
+
 async def test_user_management_lifecycle(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:

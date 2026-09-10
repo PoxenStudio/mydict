@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as tokenApi from '../../api/admin/tokens'
+import RefreshButton from '../../components/admin/RefreshButton.vue'
 import type { ApiTokenItem } from '../../types/token'
 
 const tokens = ref<ApiTokenItem[]>([])
@@ -109,7 +110,10 @@ function formatDate(value: string | null) {
 <template>
   <div class="page">
     <div class="page-header">
-      <h1>Token 管理</h1>
+      <div class="title-row">
+        <h1>Token 管理</h1>
+        <RefreshButton :loading="loading" @refresh="load" />
+      </div>
       <el-button type="primary" @click="openCreateDialog">新建 Token</el-button>
     </div>
 
@@ -200,6 +204,12 @@ function formatDate(value: string | null) {
   font-size: var(--text-xl);
   color: var(--color-text-primary);
   margin: 0;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .token-list {

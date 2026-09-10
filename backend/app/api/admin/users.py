@@ -5,6 +5,8 @@ from app.core.db import get_db
 from app.core.deps import require_admin
 from app.models.admin import Admin
 from app.schemas.admin_user import (
+    AdminUserCreateRequest,
+    AdminUserCreateResponse,
     AdminUserDetailResponse,
     AdminUserListResponse,
     AdminUserOut,
@@ -13,6 +15,16 @@ from app.schemas.admin_user import (
 from app.services import user_admin_service
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
+
+
+@router.post("", response_model=AdminUserCreateResponse)
+def create(
+    body: AdminUserCreateRequest,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> AdminUserCreateResponse:
+    user, temp_password = user_admin_service.create_user(db, body.username, body.email, admin.id)
+    return AdminUserCreateResponse(user=user, temporary_password=temp_password)
 
 
 @router.get("", response_model=AdminUserListResponse)

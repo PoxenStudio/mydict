@@ -3,18 +3,24 @@ import { onMounted, ref } from 'vue'
 import { useAdminAuthStore } from '../../stores/adminAuth'
 import * as statsApi from '../../api/admin/stats'
 import type { StatsOverview } from '../../types/stats'
+import RefreshButton from '../../components/admin/RefreshButton.vue'
 
 const authStore = useAdminAuthStore()
 const overview = ref<StatsOverview | null>(null)
 const loading = ref(true)
 
-onMounted(async () => {
-  if (!authStore.profile) authStore.loadProfile().catch(() => undefined)
+async function load() {
+  loading.value = true
   try {
     overview.value = await statsApi.getOverview()
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  if (!authStore.profile) authStore.loadProfile().catch(() => undefined)
+  load()
 })
 
 const cards = [
@@ -27,7 +33,10 @@ const cards = [
 
 <template>
   <div class="page">
-    <h1>概览</h1>
+    <div class="title-row">
+      <h1>概览</h1>
+      <RefreshButton :loading="loading" @refresh="load" />
+    </div>
     <p v-if="authStore.profile" class="welcome">欢迎回来，{{ authStore.profile.username }}</p>
 
     <div v-loading="loading" class="kpi-grid">
@@ -56,10 +65,17 @@ const cards = [
   padding: 0 var(--space-4);
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
 h1 {
   font-size: var(--text-xl);
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-2);
+  margin: 0;
 }
 
 .welcome {

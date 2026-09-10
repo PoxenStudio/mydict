@@ -1,5 +1,17 @@
 import request from '../request'
-import type { AdminUserDetail, AdminUserItem, AdminUserListResponse } from '../../types/adminUser'
+import type {
+  AdminUserCreateResponse,
+  AdminUserDetail,
+  AdminUserItem,
+  AdminUserListResponse,
+} from '../../types/adminUser'
+
+export function createUser(username: string, email?: string) {
+  return request.post<never, AdminUserCreateResponse>('/admin/users', {
+    username,
+    email: email || undefined,
+  })
+}
 
 export function listUsers(search: string, status: string, page: number, pageSize = 20) {
   return request.get<never, AdminUserListResponse>('/admin/users', {

@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import * as statsApi from '../../api/admin/stats'
 import MiniBarChart from '../../components/admin/MiniBarChart.vue'
+import RefreshButton from '../../components/admin/RefreshButton.vue'
 import type { StatRow, StatsDimension, TopWordRow } from '../../types/stats'
 
 const dimension = ref<StatsDimension>('date')
@@ -58,7 +59,10 @@ async function exportCsv() {
 
 <template>
   <div class="page">
-    <h1>用量统计</h1>
+    <div class="title-row">
+      <h1>用量统计</h1>
+      <RefreshButton :loading="loading" @refresh="load" />
+    </div>
 
     <div class="toolbar">
       <el-radio-group v-model="dimension">
@@ -110,10 +114,17 @@ async function exportCsv() {
   padding: 0 var(--space-4);
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
 h1 {
   font-size: var(--text-xl);
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-5);
+  margin: 0;
 }
 
 .toolbar {

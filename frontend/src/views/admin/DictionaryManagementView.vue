@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as dictApi from '../../api/admin/dictionaries'
+import RefreshButton from '../../components/admin/RefreshButton.vue'
 import type {
   DictionaryFormat,
   DictionaryItem,
@@ -178,7 +179,10 @@ async function runTestQuery() {
 <template>
   <div class="page">
     <div class="page-header">
-      <h1>词典管理</h1>
+      <div class="title-row">
+        <h1>词典管理</h1>
+        <RefreshButton :loading="loading" @refresh="loadDictionaries" />
+      </div>
       <el-button type="primary" @click="openImportDialog">导入词典</el-button>
     </div>
 
@@ -331,6 +335,12 @@ async function runTestQuery() {
   font-size: var(--text-xl);
   color: var(--color-text-primary);
   margin: 0;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .dict-list {
