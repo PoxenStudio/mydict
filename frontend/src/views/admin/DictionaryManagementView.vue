@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Document } from '@element-plus/icons-vue'
 import * as dictApi from '../../api/admin/dictionaries'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
 import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
@@ -344,7 +345,8 @@ function definitionHtml(definition: string) {
           >
             <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
               <el-radio v-for="f in dictsDirFiles" :key="f.name" :value="f.name" :disabled="f.imported">
-                {{ f.name }}<span v-if="f.imported" class="hint"> （已导入）</span>
+                <el-icon class="file-icon"><Document /></el-icon>{{ f.name
+                }}<span v-if="f.imported" class="hint"> （已导入）</span>
               </el-radio>
             </el-radio-group>
             <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
@@ -355,7 +357,8 @@ function definitionHtml(definition: string) {
                 :label="f.name"
                 :disabled="f.imported"
               >
-                {{ f.name }}<span v-if="f.imported" class="hint"> （已导入）</span>
+                <el-icon class="file-icon"><Document /></el-icon>{{ f.name
+                }}<span v-if="f.imported" class="hint"> （已导入）</span>
               </el-checkbox>
             </el-checkbox-group>
             <p v-if="dictsDirFiles.length === 0" class="hint">
@@ -502,7 +505,14 @@ function definitionHtml(definition: string) {
 .dicts-dir-options {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-2);
+}
+
+.file-icon {
+  margin-right: var(--space-1);
+  color: var(--color-text-tertiary);
+  vertical-align: -0.15em;
 }
 
 .remove-btn {
