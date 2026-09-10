@@ -69,8 +69,10 @@ def _build_stardict_bytes() -> dict[str, bytes]:
 
 
 async def test_upload_ecdict_and_manage_lifecycle(
-    client: AsyncClient, admin_headers: dict[str, str]
+    client: AsyncClient, admin_headers: dict[str, str], db_session
 ) -> None:
+    import os
+
     csv_bytes = _ecdict_csv_bytes()
     resp = await client.post(
         "/api/admin/dictionaries",
@@ -82,7 +84,12 @@ async def test_upload_ecdict_and_manage_lifecycle(
     dictionary = resp.json()
     assert dictionary["word_count"] == 2
     assert dictionary["status"] == "disabled"
+    assert dictionary["import_method"] == "upload"
     dict_id = dictionary["id"]
+
+    settings = get_settings()
+    source_dir = os.path.join(settings.dictionary_storage_path, str(dict_id), "source")
+    assert os.path.exists(source_dir)  # 浏览器上传的文件应归档到 source/
 
     # 未启用时也允许后台预览测试查询
     resp = await client.get(
@@ -116,13 +123,22 @@ async def test_upload_ecdict_and_manage_lifecycle(
     )
     assert resp.status_code == 404
 
+    # upload 方式的 source/ 是本应用管理的暂存归档，删除词典应一并清理
+    assert not os.path.exists(source_dir)
+
+    # dict_entries 应通过外键 ON DELETE CASCADE 一并删除，不是只删了 dictionaries 那一行
+    from app.models.dictionary import DictEntry
+
+    db_session.expire_all()
+    assert db_session.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).count() == 0
+
 
 async def test_running_tasks_requires_admin(client: AsyncClient) -> None:
     resp = await client.get("/api/admin/tasks/running")
     assert resp.status_code == 401
 
 
-async def test_import_from_dicts_dir_moves_source_files(
+async def test_import_from_dicts_dir_leaves_source_files_in_place(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
     settings = get_settings()
@@ -153,11 +169,19 @@ async def test_import_from_dicts_dir_moves_source_files(
     assert resp.status_code == 200, resp.text
     dictionary = resp.json()
     assert dictionary["word_count"] == 2
+    assert dictionary["import_method"] == "dicts_dir"
 
-    # 成功导入后源文件应从 /data/dicts 移走
-    assert not os.path.exists(os.path.join(inbox, "greeting.ifo"))
+    # /data/dicts 下的文件是用户自己放进去的，导入不应移动/删除，删不删由用户自己决定
+    assert os.path.exists(os.path.join(inbox, "greeting.ifo"))
     source_dir = os.path.join(settings.dictionary_storage_path, str(dictionary["id"]), "source")
-    assert os.path.exists(os.path.join(source_dir, "greeting.ifo"))
+    assert not os.path.exists(source_dir)
+
+    # 删除词典同理不应该碰 /data/dicts 下的原始文件
+    resp = await client.delete(
+        f"/api/admin/dictionaries/{dictionary['id']}", headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert os.path.exists(os.path.join(inbox, "greeting.ifo"))
 
 
 async def test_import_from_dicts_dir_rejects_path_traversal(

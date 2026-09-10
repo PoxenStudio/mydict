@@ -20,6 +20,9 @@ class Dictionary(Base):
     __table_args__ = (
         CheckConstraint("format IN ('mdict','stardict','ecdict')", name="ck_dictionaries_format"),
         CheckConstraint("status IN ('enabled','disabled')", name="ck_dictionaries_status"),
+        CheckConstraint(
+            "import_method IN ('upload','dicts_dir')", name="ck_dictionaries_import_method"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -28,6 +31,11 @@ class Dictionary(Base):
     lang_from: Mapped[str] = mapped_column(String(8), nullable=False)
     lang_to: Mapped[str] = mapped_column(String(8), nullable=False)
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # upload：浏览器上传，源文件由本应用暂存归档，删除词典时一并清理；
+    # dicts_dir：从 /data/dicts 导入，源文件是用户自己放进去的，不移动、不代删。
+    import_method: Mapped[str] = mapped_column(
+        String(16), default="dicts_dir", server_default="dicts_dir"
+    )
     word_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(16), default="disabled", server_default="disabled")

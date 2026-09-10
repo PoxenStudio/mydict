@@ -1,5 +1,6 @@
 export type DictionaryFormat = 'mdict' | 'stardict' | 'ecdict'
 export type DictionaryStatus = 'enabled' | 'disabled'
+export type DictionaryImportMethod = 'upload' | 'dicts_dir'
 
 export interface DictionaryItem {
   id: number
@@ -10,6 +11,7 @@ export interface DictionaryItem {
   word_count: number
   sort_order: number
   status: DictionaryStatus
+  import_method: DictionaryImportMethod
   imported_at: string
 }
 

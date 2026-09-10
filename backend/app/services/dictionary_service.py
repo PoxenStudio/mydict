@@ -3,6 +3,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -94,9 +95,14 @@ def import_dictionary(
     staged_paths: list[Path],
     settings: Settings,
     admin_id: int,
-    move_source: bool = True,
+    import_method: str,
 ) -> Dictionary:
-    """解析并导入词典；成功后把 staged_paths 移动到该词典的 source/ 归档目录。
+    """解析并导入词典。
+
+    import_method="upload"：staged_paths 是浏览器上传的暂存文件，成功后移动归档到该词典的
+    source/ 目录，由本应用管理，删除词典时一并清理。
+    import_method="dicts_dir"：staged_paths 是用户自己放进 /data/dicts 的文件，不移动、不
+    归档、不在删除词典时代为清理——目录是用户自己管的，删不删由用户自己决定。
 
     失败时清理已写入的 dict_entries/资源文件/词典记录，staged_paths 保留在原处（便于重试）。
     """
@@ -111,6 +117,7 @@ def import_dictionary(
         file_path="",
         status="disabled",
         imported_by=admin_id,
+        import_method=import_method,
     )
     db.add(dictionary)
     db.flush()  # 拿到自增 id，供资源目录与 HTML 改写使用
@@ -132,13 +139,15 @@ def import_dictionary(
             on_progress=lambda done: background_tasks.update_progress(task.id, {"done": done}),
         )
 
-        source_dir.mkdir(parents=True, exist_ok=True)
-        if move_source:
+        if import_method == "upload":
+            source_dir.mkdir(parents=True, exist_ok=True)
             for path in staged_paths:
                 shutil.move(str(path), str(source_dir / path.name))
+            dictionary.file_path = str(source_dir)
+        else:
+            dictionary.file_path = "; ".join(str(p) for p in staged_paths)
 
         dictionary.word_count = word_count
-        dictionary.file_path = str(source_dir)
         db.commit()
     except Exception as exc:
         # dict_id 所在的行/词条从未提交过，rollback 即可完整撤销数据库侧改动；
@@ -224,7 +233,8 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
     dictionary = db.get(Dictionary, dictionary_id)
     if dictionary is None:
         raise NotFoundError("词典不存在")
-    db.delete(dictionary)
+    import_method = dictionary.import_method
+    db.delete(dictionary)  # dict_entries 由外键 ON DELETE CASCADE 一并删除，见 db.py 的 FK pragma
     db.commit()
     log_action(
         db,
@@ -234,10 +244,30 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
         target=str(dictionary_id),
     )
 
+    # res/ 是解析时提取的图片/音频等派生资源，与导入方式无关，直接清理；
+    # source/ 只有 upload 方式才是本应用暂存归档的文件，dicts_dir 方式源文件是用户自己放进
+    # /data/dicts 的，不属于本应用管理，删不删由用户自己决定，这里不碰。
     storage_root = Path(settings.dictionary_storage_path) / str(dictionary_id)
-    if storage_root.exists():
-        shutil.rmtree(storage_root, ignore_errors=True)
+    resource_dir = storage_root / "res"
+    if resource_dir.exists():
+        shutil.rmtree(resource_dir, ignore_errors=True)
+    if import_method == "upload":
+        source_dir = storage_root / "source"
+        if source_dir.exists():
+            shutil.rmtree(source_dir, ignore_errors=True)
+    if storage_root.exists() and not any(storage_root.iterdir()):
+        storage_root.rmdir()
+
     invalidate_query_cache()
+    _vacuum(db)
+
+
+def _vacuum(db: Session) -> None:
+    """回收删除词条后 SQLite 文件里的空闲页；VACUUM 不能在事务内跑，用独立的
+    autocommit 连接执行，不影响外层 db 会话。"""
+    engine = db.get_bind()
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text("VACUUM"))
 
 
 def reorder_dictionaries(db: Session, ordered_ids: list[int], admin_id: int) -> list[Dictionary]:

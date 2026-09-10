@@ -36,12 +36,20 @@ async function toggleStatus(item: DictionaryItem) {
 
 // --- 删除 ---
 async function confirmDelete(item: DictionaryItem) {
+  const fileHint =
+    item.import_method === 'upload'
+      ? '同时会删除已上传归档的原始词典文件。'
+      : '从服务器目录导入的原始文件不会被删除，仍留在 /data/dicts，如不再需要请自行清理。'
   try {
-    await ElMessageBox.confirm(`确认删除词典「${item.name}」？此操作不可恢复。`, '删除确认', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      confirmButtonClass: 'el-button--danger',
-    })
+    await ElMessageBox.confirm(
+      `确认删除词典「${item.name}」？此操作不可恢复，词条数据将被清空。${fileHint}`,
+      '删除确认',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
   } catch {
     return
   }

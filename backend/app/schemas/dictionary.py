@@ -14,6 +14,7 @@ class DictionaryOut(BaseModel):
     word_count: int
     sort_order: int
     status: str
+    import_method: str
     imported_at: datetime
 
     model_config = {"from_attributes": True}

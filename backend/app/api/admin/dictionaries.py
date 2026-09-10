@@ -92,6 +92,7 @@ async def upload_and_import(
         staged_paths=staged_paths,
         settings=settings,
         admin_id=admin.id,
+        import_method="upload",
     )
 
 
@@ -120,6 +121,7 @@ def import_from_dicts_dir(
         staged_paths=staged_paths,
         settings=settings,
         admin_id=admin.id,
+        import_method="dicts_dir",
     )
 
 
