@@ -2,9 +2,11 @@
 import { onMounted, ref } from 'vue'
 import { useTheme, type ThemeMode } from '../composables/useTheme'
 import { getHealth } from '../api/health'
+import { useUserAuthStore } from '../stores/userAuth'
 
 const { theme, setTheme } = useTheme()
 const apiStatus = ref('checking...')
+const authStore = useUserAuthStore()
 
 const modes: ThemeMode[] = ['light', 'dark', 'system']
 
@@ -15,14 +17,28 @@ onMounted(async () => {
   } catch {
     apiStatus.value = 'unreachable'
   }
+  if (authStore.isLoggedIn && !authStore.profile) {
+    authStore.loadProfile().catch(() => undefined)
+  }
 })
 </script>
 
 <template>
   <main class="home">
+    <nav class="user-nav">
+      <template v-if="authStore.isLoggedIn">
+        <span>{{ authStore.profile?.username ?? '...' }}</span>
+        <button class="link-btn" type="button" @click="authStore.logout()">退出登录</button>
+      </template>
+      <template v-else>
+        <router-link to="/login">登录</router-link>
+        <router-link to="/register">注册</router-link>
+      </template>
+    </nav>
+
     <img class="logo" src="/logo.png" alt="MyDict" />
     <h1>MyDict</h1>
-    <p class="tagline">词典查询与生词本 · 占位页（Step 0）</p>
+    <p class="tagline">词典查询与生词本 · 查询/生词本页面将在 Step 5 实现</p>
 
     <div class="theme-switch">
       <button
@@ -43,6 +59,7 @@ onMounted(async () => {
 
 <style scoped>
 .home {
+  position: relative;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -98,5 +115,30 @@ h1 {
 .api-status {
   font-size: var(--text-sm);
   color: var(--color-text-tertiary);
+}
+
+.user-nav {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.user-nav a {
+  color: var(--color-brand-500);
+  text-decoration: none;
+}
+
+.link-btn {
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 0;
 }
 </style>

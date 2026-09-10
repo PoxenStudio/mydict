@@ -6,8 +6,11 @@ data/
 # 依赖与构建产物
 node_modules/
 frontend/dist/
+backend/app/static/
 backend/.venv/
 backend/.localdata/
+backend/.pytest_cache/
+backend/.ruff_cache/
 __pycache__/
 *.pyc
 
