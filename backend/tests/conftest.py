@@ -1,6 +1,6 @@
 import os
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,10 +13,20 @@ os.environ["DICTIONARY_STORAGE_PATH"] = os.path.join(_tmp_dir, "dictionaries")
 
 # 导入 app 会触发 ensure_data_dirs() + run_migrations()，
 # 建表与 system_settings 默认值播种均由 Alembic migration 完成，无需在测试里重复处理。
+from app.core.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "adminpass123"
+
+
+@pytest.fixture
+def db_session() -> Iterator:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 @pytest.fixture

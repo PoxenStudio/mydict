@@ -17,6 +17,16 @@ def get_bool_setting(db: Session, key: str, default: bool = False) -> bool:
     return value.lower() in _TRUE_VALUES
 
 
+def get_int_setting(db: Session, key: str, default: int) -> int:
+    value = get_setting(db, key)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def set_setting(db: Session, key: str, value: str) -> None:
     row = db.get(SystemSetting, key)
     if row is None:

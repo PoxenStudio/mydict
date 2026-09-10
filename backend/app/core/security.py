@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,10 @@ def hash_password(raw: str) -> str:
 
 def verify_password(raw: str, hashed: str) -> bool:
     return bcrypt.checkpw(raw.encode(), hashed.encode())
+
+
+def hash_api_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _load_or_create_jwt_secret() -> str:

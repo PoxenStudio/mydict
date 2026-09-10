@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
+from app.core.query_cache import invalidate as invalidate_query_cache
 from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
@@ -133,6 +134,7 @@ def import_dictionary(
         target=str(dict_id),
         detail={"name": name, "format": format_, "word_count": dictionary.word_count},
     )
+    invalidate_query_cache()
     db.refresh(dictionary)
     return dictionary
 
@@ -181,6 +183,7 @@ def set_dictionary_status(
         action=f"dictionary.{status}",
         target=str(dictionary_id),
     )
+    invalidate_query_cache()
     db.refresh(dictionary)
     return dictionary
 
@@ -202,6 +205,7 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
     storage_root = Path(settings.dictionary_storage_path) / str(dictionary_id)
     if storage_root.exists():
         shutil.rmtree(storage_root, ignore_errors=True)
+    invalidate_query_cache()
 
 
 def reorder_dictionaries(db: Session, ordered_ids: list[int], admin_id: int) -> list[Dictionary]:
