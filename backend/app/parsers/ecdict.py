@@ -56,8 +56,11 @@ class EcdictParser(DictionaryParser):
                 word = (row.get("word") or "").strip()
                 if not word:
                     continue
-                definition_en = (row.get("definition") or "").strip()
-                translation_zh = (row.get("translation") or "").strip()
+                # ECDICT 源 CSV 里同一单元格的多行释义用字面 "\n"（反斜杠+n）分隔，
+                # 不是真正的换行符（CSV 字段本身避免嵌入真实换行），这里转成真换行，
+                # 前端 white-space: pre-wrap 才能正确断行，而不是显示出字面的 \n。
+                definition_en = (row.get("definition") or "").strip().replace("\\n", "\n")
+                translation_zh = (row.get("translation") or "").strip().replace("\\n", "\n")
                 combined = "\n\n".join(part for part in (definition_en, translation_zh) if part)
                 yield ParsedEntry(
                     word=word,

@@ -146,6 +146,58 @@ def test_ecdict_parser_basic(tmp_path: Path) -> None:
     assert banana.extra is None
 
 
+def test_ecdict_parser_converts_literal_newlines(tmp_path: Path) -> None:
+    """ECDICT 源 CSV 里同一单元格多行释义用字面 "\\n" 分隔，不是真换行，解析时应转换，
+    否则页面上会直接显示出 \\n 这两个字符而不是换行。"""
+    import csv
+
+    csv_path = tmp_path / "ecdict.csv"
+    fieldnames = [
+        "word",
+        "phonetic",
+        "definition",
+        "translation",
+        "pos",
+        "collins",
+        "oxford",
+        "tag",
+        "bnc",
+        "frq",
+        "exchange",
+        "detail",
+        "audio",
+    ]
+    rows = [
+        {
+            "word": "people",
+            "phonetic": "",
+            "definition": "n. group of humans\\nv. fill with people",
+            "translation": "n. 人民\\nvt. 居住于",
+            "pos": "",
+            "collins": "",
+            "oxford": "",
+            "tag": "",
+            "bnc": "",
+            "frq": "",
+            "exchange": "",
+            "detail": "",
+            "audio": "",
+        },
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+
+    parser = EcdictParser()
+    results = list(parser.parse([csv_path], dictionary_id=1, resource_dir=tmp_path))
+
+    definition = results[0].definition
+    assert "\\n" not in definition
+    assert "n. group of humans\nv. fill with people" in definition
+    assert "n. 人民\nvt. 居住于" in definition
+
+
 def test_mdict_parser_with_resources(tmp_path: Path) -> None:
     from mdict_utils import writer
 

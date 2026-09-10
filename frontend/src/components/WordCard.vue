@@ -43,6 +43,10 @@ const collinsStars = computed(() => {
 
 const isOxford3000 = computed(() => Boolean(props.result.extra?.oxford))
 
+// 部分 ECDICT 数据（含已导入的旧数据）把多行释义存成字面 "\n" 而非真换行，
+// 这里兜底转换一次，避免页面上直接显示出 \n 这两个字符；真 HTML 内容（MDict）不受影响。
+const definitionHtml = computed(() => props.result.definition.replace(/\\n/g, '\n'))
+
 const arrayFields = computed(() => {
   if (!props.result.extra) return []
   return Object.entries(props.result.extra)
@@ -101,7 +105,7 @@ const textFields = computed(() => {
       <span v-for="t in tagBadges" :key="t" class="badge badge-info">{{ t }}</span>
     </div>
 
-    <div class="definition" v-html="result.definition"></div>
+    <div class="definition" v-html="definitionHtml"></div>
 
     <ul v-if="arrayFields.length" class="extra-list">
       <li v-for="field in arrayFields" :key="field.label">

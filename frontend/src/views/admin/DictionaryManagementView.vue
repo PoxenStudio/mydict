@@ -182,6 +182,12 @@ async function runTestQuery() {
     testQueryWord.value.trim(),
   )
 }
+
+// 部分 ECDICT 数据（含已导入的旧数据）把多行释义存成字面 "\n" 而非真换行，
+// 这里兜底转换一次，避免预览里直接显示出 \n 这两个字符。
+function definitionHtml(definition: string) {
+  return definition.replace(/\\n/g, '\n')
+}
 </script>
 
 <template>
@@ -316,7 +322,7 @@ async function runTestQuery() {
               {{ entry.word }}
               <span v-if="entry.phonetic" class="result-phonetic">[{{ entry.phonetic }}]</span>
             </div>
-            <div class="result-definition" v-html="entry.definition"></div>
+            <div class="result-definition" v-html="definitionHtml(entry.definition)"></div>
           </div>
           <p v-if="testQueryWord && testQueryResults.length === 0" class="hint">未查询到结果</p>
         </div>
