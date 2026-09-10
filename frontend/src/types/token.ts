@@ -8,6 +8,7 @@ export interface ApiTokenItem {
   last_used_at: string | null
   today_count: number
   total_count: number
+  allowed_dictionary_ids: number[] | null
 }
 
 export interface ApiTokenCreateResponse extends ApiTokenItem {

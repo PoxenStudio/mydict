@@ -19,3 +19,9 @@ export function changePassword(oldPassword: string, newPassword: string) {
 export function fetchMe() {
   return request.get<never, UserPublic>('/auth/me')
 }
+
+export function setAllowedDictionaries(dictionaryIds: number[] | null) {
+  return request.put<never, UserPublic>('/auth/allowed-dictionaries', {
+    dictionary_ids: dictionaryIds,
+  })
+}

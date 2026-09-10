@@ -10,3 +10,10 @@ export interface QueryResultItem {
 export interface QueryResponse {
   results: QueryResultItem[]
 }
+
+export interface PublicDictionary {
+  id: number
+  name: string
+  lang_from: string
+  lang_to: string
+}

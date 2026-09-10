@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core import rate_limiter
@@ -52,14 +52,17 @@ def _parse_dict_ids(dict_param: str | None) -> list[int] | None:
 def query_word(
     word: str,
     dict: str | None = None,  # noqa: A002 - 与 API 契约中的查询参数名保持一致
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = None,
     caller: ApiCaller = Depends(get_api_caller),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> QueryResponse:
     _enforce_rate_limit(db, caller, settings, word)
 
+    allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
     started = time.perf_counter()
-    results = query_service.search_word(db, word, _parse_dict_ids(dict))
+    results = query_service.search_word(db, word, _parse_dict_ids(dict), from_, to, allowed_ids)
     duration_ms = int((time.perf_counter() - started) * 1000)
 
     query_log_service.log_query(
@@ -85,7 +88,8 @@ def suggest(
     settings: Settings = Depends(get_settings),
 ) -> SuggestResponse:
     _enforce_rate_limit(db, caller, settings, prefix)
-    words = query_service.suggest_prefix(db, prefix, _parse_dict_ids(dict), min(limit, 50))
+    allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
+    words = query_service.suggest_prefix(db, prefix, _parse_dict_ids(dict), min(limit, 50), allowed_ids)
     return SuggestResponse(words=words)
 
 
@@ -96,4 +100,5 @@ def list_dictionaries(
     settings: Settings = Depends(get_settings),
 ) -> list[PublicDictionaryOut]:
     _enforce_rate_limit(db, caller, settings)
-    return query_service.list_public_dictionaries(db)
+    allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
+    return query_service.list_public_dictionaries(db, allowed_ids)

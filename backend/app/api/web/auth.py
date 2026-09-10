@@ -8,13 +8,19 @@ from app.core.exceptions import UnauthorizedError
 from app.core.security import AUD_USER, create_access_token, decode_token
 from app.models.user import User
 from app.schemas.auth import RefreshRequest, TokenPairResponse
+from app.schemas.dictionary import AllowedDictionaryIdsRequest
 from app.schemas.user import (
     ChangePasswordRequest,
     UserLoginRequest,
     UserPublic,
     UserRegisterRequest,
 )
-from app.services.user_auth_service import authenticate_user, change_password, register_user
+from app.services.user_auth_service import (
+    authenticate_user,
+    change_password,
+    register_user,
+    set_allowed_dictionaries,
+)
 
 router = APIRouter(prefix="/auth", tags=["user-auth"])
 
@@ -57,3 +63,12 @@ def change_password_route(
 @router.get("/me", response_model=UserPublic)
 def me(user: User = Depends(require_user)) -> User:
     return user
+
+
+@router.put("/allowed-dictionaries", response_model=UserPublic)
+def set_allowed_dictionaries_route(
+    body: AllowedDictionaryIdsRequest,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> User:
+    return set_allowed_dictionaries(db, user, body.dictionary_ids)

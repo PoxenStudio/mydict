@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.deps import require_admin
 from app.models.admin import Admin
+from app.schemas.dictionary import AllowedDictionaryIdsRequest
 from app.schemas.token import TokenCreateRequest, TokenCreateResponse, TokenOut
 from app.services import token_service
 
@@ -23,7 +24,9 @@ def create_token(
     db: Session = Depends(get_db),
     admin: Admin = Depends(require_admin),
 ) -> TokenCreateResponse:
-    return token_service.create_token(db, body.name, body.daily_limit, admin.id)
+    return token_service.create_token(
+        db, body.name, body.daily_limit, admin.id, body.allowed_dictionary_ids
+    )
 
 
 @router.put("/{token_id}/enable", response_model=TokenOut)
@@ -45,6 +48,16 @@ def regenerate(
     token_id: int, db: Session = Depends(get_db), admin: Admin = Depends(require_admin)
 ) -> TokenCreateResponse:
     return token_service.regenerate_token(db, token_id, admin.id)
+
+
+@router.put("/{token_id}/allowed-dictionaries", response_model=TokenOut)
+def set_allowed_dictionaries(
+    token_id: int,
+    body: AllowedDictionaryIdsRequest,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> TokenOut:
+    return token_service.set_allowed_dictionaries(db, token_id, body.dictionary_ids, admin.id)
 
 
 @router.get("/{token_id}/vocab-count")

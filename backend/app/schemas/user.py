@@ -22,5 +22,6 @@ class UserPublic(BaseModel):
     username: str
     email: str | None = None
     status: str
+    allowed_dictionary_ids: list[int] | None = None
 
     model_config = {"from_attributes": True}

@@ -5,10 +5,21 @@ export function listTokens() {
   return request.get<never, ApiTokenItem[]>('/admin/tokens')
 }
 
-export function createToken(name: string, dailyLimit: number | null) {
+export function createToken(
+  name: string,
+  dailyLimit: number | null,
+  allowedDictionaryIds: number[] | null = null,
+) {
   return request.post<never, ApiTokenCreateResponse>('/admin/tokens', {
     name,
     daily_limit: dailyLimit,
+    allowed_dictionary_ids: allowedDictionaryIds,
+  })
+}
+
+export function setTokenAllowedDictionaries(id: number, dictionaryIds: number[] | null) {
+  return request.put<never, ApiTokenItem>(`/admin/tokens/${id}/allowed-dictionaries`, {
+    dictionary_ids: dictionaryIds,
   })
 }
 

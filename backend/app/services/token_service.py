@@ -8,6 +8,7 @@ from app.models.query import QueryStatsDaily
 from app.models.token import ApiToken
 from app.models.vocab import TokenVocabItem
 from app.services.audit_service import log_action
+from app.services.query_service import filter_existing_dictionary_ids
 
 
 def _usage(db: Session, token_id: int) -> tuple[int, int]:
@@ -51,6 +52,7 @@ def _to_out(token: ApiToken, today_count: int, total_count: int) -> dict:
         "last_used_at": token.last_used_at,
         "today_count": today_count,
         "total_count": total_count,
+        "allowed_dictionary_ids": token.allowed_dictionary_ids,
     }
 
 
@@ -73,7 +75,13 @@ def get_token_out(db: Session, token_id: int) -> dict:
     return _to_out(token, today_count, total_count)
 
 
-def create_token(db: Session, name: str, daily_limit: int | None, admin_id: int) -> dict:
+def create_token(
+    db: Session,
+    name: str,
+    daily_limit: int | None,
+    admin_id: int,
+    allowed_dictionary_ids: list[int] | None = None,
+) -> dict:
     raw = generate_api_token()
     token = ApiToken(
         name=name,
@@ -82,6 +90,7 @@ def create_token(db: Session, name: str, daily_limit: int | None, admin_id: int)
         daily_limit=daily_limit,
         status="active",
         created_by=admin_id,
+        allowed_dictionary_ids=filter_existing_dictionary_ids(db, allowed_dictionary_ids),
     )
     db.add(token)
     db.commit()
@@ -90,6 +99,23 @@ def create_token(db: Session, name: str, daily_limit: int | None, admin_id: int)
         db, actor_type="admin", actor_id=admin_id, action="token.create", target=str(token.id)
     )
     return {**_to_out(token, 0, 0), "token": raw}
+
+
+def set_allowed_dictionaries(
+    db: Session, token_id: int, dictionary_ids: list[int] | None, admin_id: int
+) -> dict:
+    token = _get_or_404(db, token_id)
+    token.allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
+    db.commit()
+    log_action(
+        db,
+        actor_type="admin",
+        actor_id=admin_id,
+        action="token.set_allowed_dictionaries",
+        target=str(token_id),
+        detail={"dictionary_ids": token.allowed_dictionary_ids},
+    )
+    return get_token_out(db, token_id)
 
 
 def set_token_status(db: Session, token_id: int, status: str, admin_id: int) -> dict:

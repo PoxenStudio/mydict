@@ -1,26 +1,42 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
+import { listDictionaries } from '../api/dict'
+import { setAllowedDictionaries } from '../api/auth'
 import ThemeToggle from './ThemeToggle.vue'
 import ChangePasswordDialog from './ChangePasswordDialog.vue'
+import DictionaryPickerDialog from './DictionaryPickerDialog.vue'
+import type { PublicDictionary } from '../types/query'
 
 const authStore = useUserAuthStore()
 const settingsStore = useSettingsStore()
 const changePasswordVisible = ref(false)
+const dictPickerVisible = ref(false)
+const availableDictionaries = ref<PublicDictionary[]>([])
 
 onMounted(() => {
   if (!settingsStore.loaded) settingsStore.load().catch(() => undefined)
   if (authStore.isLoggedIn && !authStore.profile) authStore.loadProfile().catch(() => undefined)
 })
 
-function handleUserCommand(command: string) {
+async function handleUserCommand(command: string) {
   if (command === 'change-password') {
     changePasswordVisible.value = true
   } else if (command === 'logout') {
     authStore.logout()
+  } else if (command === 'dictionaries') {
+    availableDictionaries.value = await listDictionaries()
+    dictPickerVisible.value = true
   }
+}
+
+async function saveAllowedDictionaries(ids: number[] | null) {
+  const profile = await setAllowedDictionaries(ids)
+  if (authStore.profile) authStore.profile.allowed_dictionary_ids = profile.allowed_dictionary_ids
+  ElMessage.success('已保存')
 }
 </script>
 
@@ -46,6 +62,7 @@ function handleUserCommand(command: string) {
           </span>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item command="dictionaries">词典选择</el-dropdown-item>
               <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
               <el-dropdown-item command="logout" divided>退出</el-dropdown-item>
             </el-dropdown-menu>
@@ -59,6 +76,12 @@ function handleUserCommand(command: string) {
     </div>
 
     <ChangePasswordDialog v-model:visible="changePasswordVisible" />
+    <DictionaryPickerDialog
+      v-model:visible="dictPickerVisible"
+      :dictionaries="availableDictionaries"
+      :current-ids="authStore.profile?.allowed_dictionary_ids ?? null"
+      @confirm="saveAllowedDictionaries"
+    />
   </header>
 </template>
 

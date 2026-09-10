@@ -9,6 +9,7 @@ export interface UserPublic {
   username: string
   email: string | null
   status: string
+  allowed_dictionary_ids: number[] | null
 }
 
 export interface AdminPublic {

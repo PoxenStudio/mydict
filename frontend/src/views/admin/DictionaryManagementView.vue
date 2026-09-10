@@ -53,9 +53,16 @@ async function confirmDelete(item: DictionaryItem) {
   } catch {
     return
   }
-  await dictApi.deleteDictionary(item.id)
-  dictionaries.value = dictionaries.value.filter((d) => d.id !== item.id)
+  // 后端删除本身很快，但历史数据量大时清理磁盘空间的部分是异步的，不等接口返回，
+  // 直接从列表里移除，请求失败再把词典恢复显示（具体错误已由响应拦截器统一提示）。
+  const snapshot = dictionaries.value
+  dictionaries.value = snapshot.filter((d) => d.id !== item.id)
   ElMessage.success('已删除')
+  try {
+    await dictApi.deleteDictionary(item.id)
+  } catch {
+    dictionaries.value = snapshot
+  }
 }
 
 // --- 拖拽排序 ---
@@ -76,6 +83,24 @@ async function onDrop(targetIndex: number) {
 }
 
 // --- 导入弹窗 ---
+// 查询侧按 CJK 表意文字识别中文输入，简体/繁体都归到这一类（见后端 query_service.py
+// 的 _ZH_LANG_CODES），这里仍分开列出方便管理员准确记录词典本身的文字版本。
+const LANGUAGE_OPTIONS = [
+  { label: '简体中文', value: 'zh-Hans' },
+  { label: '繁体中文', value: 'zh-Hant' },
+  { label: '英文', value: 'en' },
+  { label: '日文', value: 'ja' },
+]
+// 早期数据 lang_from/lang_to 存的是裸 "zh"（不分简繁），仍是合法值，只是不出现在
+// 新导入的下拉选项里；这里额外加一条用于把旧数据也显示成中文名而不是原始代码。
+const LANGUAGE_LABELS: Record<string, string> = Object.fromEntries([
+  ...LANGUAGE_OPTIONS.map((opt) => [opt.value, opt.label]),
+  ['zh', '中文'],
+])
+
+function langLabel(code: string) {
+  return LANGUAGE_LABELS[code] ?? code
+}
 const importDialogVisible = ref(false)
 const importMode = ref<'upload' | 'dicts-dir'>('upload')
 const importing = ref(false)
@@ -83,7 +108,7 @@ const importForm = reactive({
   name: '',
   format: 'ecdict' as DictionaryFormat,
   lang_from: 'en',
-  lang_to: 'zh',
+  lang_to: 'zh-Hans',
 })
 const uploadFileList = ref<File[]>([])
 const dictsDirFiles = ref<DictsDirFile[]>([])
@@ -107,7 +132,7 @@ function openImportDialog() {
   importForm.name = ''
   importForm.format = 'ecdict'
   importForm.lang_from = 'en'
-  importForm.lang_to = 'zh'
+  importForm.lang_to = 'zh-Hans'
   uploadFileList.value = []
   selectedDictsDirFiles.value = []
   dictsDirSingleFile.value = ''
@@ -250,7 +275,7 @@ function definitionHtml(definition: string) {
         <span class="col-format"
           ><el-tag size="small">{{ item.format }}</el-tag></span
         >
-        <span class="col-lang">{{ item.lang_from }} → {{ item.lang_to }}</span>
+        <span class="col-lang">{{ langLabel(item.lang_from) }} → {{ langLabel(item.lang_to) }}</span>
         <span class="col-count">{{ item.word_count }}</span>
         <span class="col-status">
           <el-switch :model-value="item.status === 'enabled'" @change="toggleStatus(item)" />
@@ -285,10 +310,24 @@ function definitionHtml(definition: string) {
         </el-form-item>
         <div class="lang-row">
           <el-form-item label="源语言">
-            <el-input v-model="importForm.lang_from" placeholder="en / zh" />
+            <el-select v-model="importForm.lang_from" style="width: 100%">
+              <el-option
+                v-for="opt in LANGUAGE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
           </el-form-item>
           <el-form-item label="目标语言">
-            <el-input v-model="importForm.lang_to" placeholder="en / zh" />
+            <el-select v-model="importForm.lang_to" style="width: 100%">
+              <el-option
+                v-for="opt in LANGUAGE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
           </el-form-item>
         </div>
 

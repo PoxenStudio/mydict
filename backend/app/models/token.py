@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -21,3 +21,7 @@ class ApiToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     created_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # None 表示不限制，可查询全部已启用词典；非 None 时是词典 id 列表，查询按交集限定；
+    # 用原生 JSON 列类型（ORM 层自动序列化成 Python list），不是别处那种手动 json.dumps
+    # 的 TEXT 列，因为这里就是单纯的 id 列表，没有 detail/extra 那种自由结构需要透传。
+    allowed_dictionary_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)

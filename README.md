@@ -9,6 +9,18 @@
 
 一个可用 Docker 一键部署的自托管词典服务：既提供带 Token 鉴权的查询/收藏 API 给第三方调用，也提供一个开箱即用的 Vue3 网页词典——查询、生词本、深浅主题都有；管理员可在后台导入 MDict/StarDict/ECDICT 三种格式的词典（含英汉、汉英、汉语单语词典），管理 Token/用户、查看用量统计、调整系统设置。
 
+## UI
+
+用户UI
+<p align="center">
+  <img src="document/main_ui.png" alt="User UI" />
+</p>
+
+后台管理UI
+<p align="center">
+  <img src="document/admin_ui.png" alt="Admin UI" />
+</p>
+
 ## 功能特性
 
 - **词典导入**：支持 MDict（`.mdx`+`.mdd`）、StarDict（`.ifo/.idx/.dict`）、ECDICT（CSV）三种格式；网页上传或服务器目录导入两种方式，后者适合 GB 级大文件。

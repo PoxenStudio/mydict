@@ -18,6 +18,7 @@ from app.core.security import (
 )
 from app.models.user import User
 from app.schemas.auth import TokenPairResponse
+from app.services.query_service import filter_existing_dictionary_ids
 from app.services.settings_service import get_bool_setting
 
 logger = logging.getLogger("mydict.auth")
@@ -57,3 +58,10 @@ def change_password(db: Session, user: User, old_password: str, new_password: st
         raise InvalidCredentialsError("原密码不正确")
     user.password_hash = hash_password(new_password)
     db.commit()
+
+
+def set_allowed_dictionaries(db: Session, user: User, dictionary_ids: list[int] | None) -> User:
+    user.allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
+    db.commit()
+    db.refresh(user)
+    return user

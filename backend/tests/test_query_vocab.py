@@ -309,6 +309,29 @@ async def test_web_dict_search_and_user_vocab(
     assert resp.status_code == 401
 
 
+async def test_zh_variants_all_matched_by_chinese_input(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """lang_from 存 zh-Hans/zh-Hant/裸 zh 的词典，中文输入应该都能匹配到，
+    不能因为细分了简繁标签就导致某个变体从自动路由里消失。"""
+    set_setting(db_session, "open_access", "true")
+    await _create_enabled_dictionary(
+        client, admin_headers, "简体字典", "zh-Hans", "zh", [{"word": "国", "translation": "简体"}]
+    )
+    await _create_enabled_dictionary(
+        client, admin_headers, "繁體字典", "zh-Hant", "zh", [{"word": "國", "translation": "繁體"}]
+    )
+    await _create_enabled_dictionary(
+        client, admin_headers, "旧数据字典", "zh", "zh", [{"word": "旧", "translation": "旧版数据"}]
+    )
+
+    for word in ("国", "國", "旧"):
+        resp = await client.get("/api/dict/search", params={"word": word})
+        assert resp.status_code == 200, resp.text
+        words = {r["word"] for r in resp.json()["results"]}
+        assert word in words, f"{word} 应该能查到，实际结果：{resp.json()}"
+
+
 async def test_public_settings_endpoint(
     client: AsyncClient, admin_headers: dict[str, str], db_session
 ) -> None:

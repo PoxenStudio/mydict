@@ -39,6 +39,12 @@ class ReorderRequest(BaseModel):
     ordered_ids: list[int] = Field(min_length=1)
 
 
+class AllowedDictionaryIdsRequest(BaseModel):
+    """Token/用户「可用词典」设置共用的请求体：dictionary_ids 为 None 表示不限制。"""
+
+    dictionary_ids: list[int] | None = None
+
+
 class TestQueryEntryOut(BaseModel):
     word: str
     phonetic: str | None
