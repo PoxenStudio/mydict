@@ -2,8 +2,11 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as tokenApi from '../../api/admin/tokens'
+import { listDictionaries } from '../../api/admin/dictionaries'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
+import DictionaryPickerDialog from '../../components/DictionaryPickerDialog.vue'
 import type { ApiTokenItem } from '../../types/token'
+import type { PublicDictionary } from '../../types/query'
 
 const tokens = ref<ApiTokenItem[]>([])
 const loading = ref(false)
@@ -52,6 +55,34 @@ async function showVocabCount(token: ApiTokenItem) {
   vocabCountValue.value = count
   vocabCountTokenName.value = token.name
   vocabCountVisible.value = true
+}
+
+// --- 可用词典 ---
+const dictPickerVisible = ref(false)
+const dictPickerTarget = ref<ApiTokenItem | null>(null)
+const availableDictionaries = ref<PublicDictionary[]>([])
+
+async function openDictPicker(token: ApiTokenItem) {
+  if (availableDictionaries.value.length === 0) {
+    const all = await listDictionaries()
+    availableDictionaries.value = all.filter((d) => d.status === 'enabled')
+  }
+  dictPickerTarget.value = token
+  dictPickerVisible.value = true
+}
+
+async function saveTokenAllowedDictionaries(ids: number[] | null) {
+  if (!dictPickerTarget.value) return
+  const updated = await tokenApi.setTokenAllowedDictionaries(dictPickerTarget.value.id, ids)
+  const index = tokens.value.findIndex((t) => t.id === updated.id)
+  if (index !== -1) tokens.value[index] = updated
+  ElMessage.success('已保存')
+}
+
+function allowedDictionariesLabel(token: ApiTokenItem) {
+  return token.allowed_dictionary_ids === null
+    ? '全部'
+    : `${token.allowed_dictionary_ids.length} 部`
 }
 
 // --- 新建 Token ---
@@ -122,6 +153,7 @@ function formatDate(value: string | null) {
         <span>名称</span>
         <span>Token</span>
         <span>每日上限</span>
+        <span>可用词典</span>
         <span>今日/累计</span>
         <span>最后调用</span>
         <span>状态</span>
@@ -131,6 +163,7 @@ function formatDate(value: string | null) {
         <span>{{ token.name }}</span>
         <span class="mono">{{ token.token_prefix }}</span>
         <span>{{ token.daily_limit ?? '系统默认' }}</span>
+        <span>{{ allowedDictionariesLabel(token) }}</span>
         <span>{{ token.today_count }} / {{ token.total_count }}</span>
         <span>{{ formatDate(token.last_used_at) }}</span>
         <span>
@@ -139,6 +172,7 @@ function formatDate(value: string | null) {
           </el-tag>
         </span>
         <span class="col-actions">
+          <el-button text @click="openDictPicker(token)">可用词典</el-button>
           <el-button text @click="showVocabCount(token)">收藏数</el-button>
           <el-button text @click="regenerate(token)">重新生成</el-button>
           <el-button
@@ -183,12 +217,19 @@ function formatDate(value: string | null) {
       <p>「{{ vocabCountTokenName }}」当前收藏 {{ vocabCountValue }} 条生词。</p>
       <p class="hint">仅统计数量，收藏内容不在后台展示，如需人工核查请直接查数据库或导出。</p>
     </el-dialog>
+
+    <DictionaryPickerDialog
+      v-model:visible="dictPickerVisible"
+      :dictionaries="availableDictionaries"
+      :current-ids="dictPickerTarget?.allowed_dictionary_ids ?? null"
+      @confirm="saveTokenAllowedDictionaries"
+    />
   </div>
 </template>
 
 <style scoped>
 .page {
-  max-width: 1080px;
+  max-width: 1220px;
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
@@ -222,7 +263,7 @@ function formatDate(value: string | null) {
 .token-list-header,
 .token-row {
   display: grid;
-  grid-template-columns: 1.4fr 1.2fr 1fr 1fr 1.2fr 0.8fr 1.6fr;
+  grid-template-columns: 1.4fr 1.2fr 1fr 0.9fr 1fr 1.2fr 0.8fr 1.8fr;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
