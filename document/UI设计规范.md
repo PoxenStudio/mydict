@@ -45,6 +45,7 @@
 | `--color-bg-surface-raised` | `#FFFFFF`（配合阴影） | `#232B31`（比 surface 更亮一级，模拟灯光） | 弹层/下拉/浮起元素表面 |
 | `--color-border` | `#E4E9E7` | `#2C363D` | 默认描边 |
 | `--color-border-hover` | `#C7D1CD` | `#3C4850` | 交互态描边 |
+| `--color-hover-tint` | `#EAFBF4`（即 `--color-brand-50`） | `color-mix(in srgb, 品牌色 500 18%, 当前表面色)` | 行/列表项/图标按钮的 hover 高亮底色；**不要**直接拿 `--color-brand-50` 做 hover 背景——那是固定浅色，配 `--color-text-primary` 这类深浅反转的文字在深色主题下会"亮底亮字"看不清 |
 | `--color-text-primary` | `#1A2420` | `#EAF1EE` | 正文 |
 | `--color-text-secondary` | `#5B6B65` | `#9DB0AA` | 次要文字 |
 | `--color-text-tertiary` | `#8B9A94` | `#71827C` | 占位符/禁用文字 |
@@ -115,14 +116,14 @@
 
 ### 7.3 按钮
 - 主按钮：`--color-brand-500` 填充，hover `--color-brand-600`，active `--color-brand-700`，`--radius-md`。
-- 次按钮：透明底 + `--color-border` 描边，hover 时背景转 `--color-brand-50`（深色主题对应更暗的品牌色底）。
+- 次按钮：透明底 + `--color-border` 描边，hover 时背景转 `--color-hover-tint`（浅色主题即 `--color-brand-50`，深色主题是掺了品牌色的暗底，见 2.2）。
 - 危险操作（禁用 Token、删除词典）统一用 `--color-danger` 的次按钮样式，且必须二次确认弹窗。
 
 ### 7.4 生词本 / 收藏按钮
 - 未收藏：描边星标图标 + 次按钮样式；已收藏：`--color-brand-500` 实心星标 + 轻微缩放动效（100ms），给用户明确的即时反馈。
 
 ### 7.5 管理后台数据表格
-- 表头使用 `--color-bg-base` 略深于表体的底色做区分，行 hover 用 `--color-brand-50`（深色主题用对应暗色）高亮，操作列按钮统一右对齐、用文字按钮（非图标堆砌）保持"简洁统一"。
+- 表头使用 `--color-bg-base` 略深于表体的底色做区分，行 hover 用 `--color-hover-tint` 高亮，操作列按钮统一左对齐（按钮较多换行时保持每行都从左边起排，不因换行产生参差不齐的右对齐观感）、用文字按钮（非图标堆砌）保持"简洁统一"。
 
 ### 7.6 空状态 / 加载态 / 错误态
 - 空状态：居中图形（线性风格图标，非写实插画）+ 一句引导文案 + 可选操作按钮（如生词本为空时引导去查询页）。

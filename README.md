@@ -42,6 +42,8 @@
 | 英汉 | [skywind3000/ECDICT](https://github.com/skywind3000/ECDICT)（CC-BY-4.0） | 直接是 ECDICT 格式 CSV，后台选择「ECDICT」格式即可导入 |
 | 汉英 | [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict) | 社区有多种 MDict/StarDict 格式转制版本，按对应格式导入 |
 | 汉语（单语） | [mapull/chinese-dictionary](https://github.com/mapull/chinese-dictionary)（MIT License） | 字/词/成语 JSON 语料，需先用仓库自带的 `scripts/chinese_dictionary_to_ecdict.py` 转换成 ECDICT 格式 CSV 再导入，用法见脚本内说明 |
+| 其它 | [FreeMdict Forum](https://forum.freemdict.com/) | 大多数词典的发布和更新都在此论坛进行，是首选渠道 |
+| 其它 | [MDX词典资源](https://mdx.mdict.org) | 一个MDX词典的镜像站点，可以找到不少现成的词典文件 |
 
 ## Docker 部署
 

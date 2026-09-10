@@ -282,7 +282,7 @@ function formatDate(value: string | null) {
 }
 
 .token-row:hover {
-  background: var(--color-brand-50);
+  background: var(--color-hover-tint);
 }
 
 .mono {
@@ -291,7 +291,15 @@ function formatDate(value: string | null) {
 }
 
 .col-actions {
-  text-align: right;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+}
+
+.col-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .empty {

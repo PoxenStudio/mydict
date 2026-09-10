@@ -146,7 +146,7 @@ function logout() {
 }
 
 .admin-sidebar a:hover {
-  background: var(--color-brand-50);
+  background: var(--color-hover-tint);
 }
 
 .admin-sidebar a.active {

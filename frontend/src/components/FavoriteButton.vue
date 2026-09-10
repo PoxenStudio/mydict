@@ -49,7 +49,7 @@ const emit = defineEmits<{ toggle: [] }>()
 }
 
 .favorite-btn:hover {
-  background: var(--color-brand-50);
+  background: var(--color-hover-tint);
 }
 
 .favorite-btn.favorited {

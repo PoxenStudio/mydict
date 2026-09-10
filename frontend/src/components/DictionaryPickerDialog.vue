@@ -47,8 +47,9 @@ function submit() {
 <style scoped>
 .mode-group {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  flex-direction: row;
+  justify-content: space-between;
+  width: 100%;
   margin-bottom: var(--space-3);
 }
 
