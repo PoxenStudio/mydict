@@ -15,6 +15,12 @@ const router = createRouter({
       meta: { requiresUser: true },
     },
     {
+      path: '/history',
+      name: 'history',
+      component: () => import('../views/HistoryView.vue'),
+      meta: { requiresUser: true },
+    },
+    {
       path: '/admin/setup',
       name: 'admin-setup',
       component: () => import('../views/admin/AdminSetupView.vue'),

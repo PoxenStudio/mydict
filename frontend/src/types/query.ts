@@ -17,3 +17,10 @@ export interface PublicDictionary {
   lang_from: string
   lang_to: string
 }
+
+export interface QueryHistoryEntry {
+  word: string
+  dictionary_id: number
+  dictionary_name: string
+  created_at: string
+}

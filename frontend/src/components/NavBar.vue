@@ -50,6 +50,7 @@ async function saveAllowedDictionaries(ids: number[] | null) {
     <nav class="nav-links">
       <router-link to="/" exact-active-class="active">查询</router-link>
       <router-link to="/vocab" active-class="active">生词本</router-link>
+      <router-link to="/history" active-class="active">历史记录</router-link>
     </nav>
 
     <div class="nav-actions">

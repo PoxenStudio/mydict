@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session
 from app.core import rate_limiter
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
-from app.core.deps import WebCaller, get_web_caller
+from app.core.deps import WebCaller, get_web_caller, require_user
 from app.core.exceptions import RateLimitedError
-from app.schemas.query import PublicDictionaryOut, QueryResponse
+from app.models.user import User
+from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, QueryResponse
 from app.services import query_log_service, query_service
 from app.services.settings_service import get_int_setting
 
@@ -60,3 +61,8 @@ def search(
         ip=caller.ip,
     )
     return QueryResponse(results=results)
+
+
+@router.get("/history", response_model=QueryHistoryResponse)
+def history(user: User = Depends(require_user), db: Session = Depends(get_db)) -> QueryHistoryResponse:
+    return QueryHistoryResponse(items=query_log_service.get_recent_history(db, user.id, 100))

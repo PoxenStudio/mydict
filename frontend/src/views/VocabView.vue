@@ -5,7 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { deleteVocab, listVocab } from '../api/vocab'
+import { deleteVocab, listVocab, listVocabLanguages } from '../api/vocab'
+import { langLabel } from '../utils/language'
 import type { VocabItem } from '../types/vocab'
 
 const router = useRouter()
@@ -16,10 +17,15 @@ const pageSize = 20
 const search = ref('')
 const loading = ref(true)
 
+// 生词本里出现过的来源语言，用于左上角的分类 tab；只有一种语言时不必展示切换。
+const languages = ref<string[]>([])
+// 空字符串代表「全部」
+const activeLang = ref('')
+
 async function load() {
   loading.value = true
   try {
-    const resp = await listVocab(search.value, page.value, pageSize)
+    const resp = await listVocab(search.value, page.value, pageSize, activeLang.value || undefined)
     items.value = resp.items
     total.value = resp.total
   } finally {
@@ -27,7 +33,25 @@ async function load() {
   }
 }
 
-onMounted(load)
+async function loadLanguages() {
+  try {
+    languages.value = await listVocabLanguages()
+  } catch {
+    // 分类加载失败不影响生词本本身，只是不显示 tab
+  }
+}
+
+onMounted(() => {
+  load()
+  loadLanguages()
+})
+
+function selectLang(lang: string) {
+  if (activeLang.value === lang) return
+  activeLang.value = lang
+  page.value = 1
+  load()
+}
 
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 watch(search, () => {
@@ -52,6 +76,7 @@ async function remove(item: VocabItem) {
   await deleteVocab(item.id)
   ElMessage.success('已删除')
   load()
+  loadLanguages()
 }
 </script>
 
@@ -64,11 +89,36 @@ async function remove(item: VocabItem) {
         <el-input v-model="search" placeholder="搜索生词" clearable style="width: 220px" />
       </div>
 
+      <div v-if="languages.length > 1" class="lang-tabs">
+        <button
+          type="button"
+          class="lang-tab"
+          :class="{ active: activeLang === '' }"
+          @click="selectLang('')"
+        >
+          全部
+        </button>
+        <button
+          v-for="lang in languages"
+          :key="lang"
+          type="button"
+          class="lang-tab"
+          :class="{ active: activeLang === lang }"
+          @click="selectLang(lang)"
+        >
+          {{ langLabel(lang) }}
+        </button>
+      </div>
+
       <SkeletonList v-if="loading" :rows="4" />
 
       <EmptyState
         v-else-if="items.length === 0"
-        title="生词本还是空的，去查询页收藏第一个生词吧"
+        :title="
+          activeLang
+            ? `「${langLabel(activeLang)}」下还没有生词`
+            : '生词本还是空的，去查询页收藏第一个生词吧'
+        "
         action-text="去查询"
         @action="router.push('/')"
       />
@@ -118,6 +168,35 @@ async function remove(item: VocabItem) {
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--space-5);
+}
+
+/* 平面 tab 切换：无圆角、靠底边框区分选中态，浅色/深色主题都只吃 Token，颜色自动跟随 */
+.lang-tabs {
+  display: flex;
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.lang-tab {
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.lang-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.lang-tab.active {
+  color: var(--color-brand-600);
+  border-bottom-color: var(--color-brand-500);
+  font-weight: var(--font-weight-medium);
 }
 
 .header h1 {

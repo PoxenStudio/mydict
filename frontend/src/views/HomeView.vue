@@ -1,45 +1,29 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
 import WordCard from '../components/WordCard.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { searchWord } from '../api/dict'
-import { addVocab, deleteVocab, listVocab } from '../api/vocab'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
+import { useFavorites } from '../composables/useFavorites'
 import type { QueryResultItem } from '../types/query'
 
 const router = useRouter()
 const authStore = useUserAuthStore()
 const settingsStore = useSettingsStore()
+const { favoriteLoading, loadFavorites, isFavorited, toggleFavorite } = useFavorites()
 
 const word = ref('')
 const submittedWord = ref('')
 const results = ref<QueryResultItem[]>([])
 const status = ref<'idle' | 'loading' | 'ok' | 'error'>('idle')
 
-// word(小写) -> 生词本条目 id，用于收藏态展示与取消收藏
-const favoriteMap = ref<Map<string, number>>(new Map())
-const favoriteLoading = ref<Set<string>>(new Set())
-
 const showLoginGate = computed(
   () => settingsStore.loaded && !settingsStore.openAccess && !authStore.isLoggedIn,
 )
-
-async function loadFavoritesForPreload() {
-  if (!authStore.isLoggedIn) return
-  try {
-    const resp = await listVocab(undefined, 1, 100)
-    const map = new Map<string, number>()
-    for (const item of resp.items) map.set(item.word.toLowerCase(), item.id)
-    favoriteMap.value = map
-  } catch {
-    // 生词本预加载失败不影响查询本身
-  }
-}
 
 onMounted(async () => {
   if (!settingsStore.loaded) await settingsStore.load().catch(() => undefined)
@@ -47,7 +31,7 @@ onMounted(async () => {
     router.replace('/admin/setup')
     return
   }
-  await loadFavoritesForPreload()
+  await loadFavorites()
 })
 
 async function runSearch() {
@@ -63,35 +47,6 @@ async function runSearch() {
     status.value = 'ok'
   } catch {
     status.value = 'error'
-  }
-}
-
-function isFavorited(w: string) {
-  return favoriteMap.value.has(w.toLowerCase())
-}
-
-async function toggleFavorite(result: QueryResultItem) {
-  if (!authStore.isLoggedIn) {
-    ElMessage.warning('登录后才能收藏生词')
-    router.push('/login')
-    return
-  }
-  const key = result.word.toLowerCase()
-  favoriteLoading.value.add(key)
-  try {
-    if (isFavorited(result.word)) {
-      const id = favoriteMap.value.get(key)!
-      await deleteVocab(id)
-      favoriteMap.value.delete(key)
-    } else {
-      const item = await addVocab(result.word, result.dictionary_id)
-      favoriteMap.value.set(key, item.id)
-    }
-    favoriteMap.value = new Map(favoriteMap.value)
-  } catch {
-    // 错误已由响应拦截器统一提示
-  } finally {
-    favoriteLoading.value.delete(key)
   }
 }
 </script>
@@ -141,7 +96,7 @@ async function toggleFavorite(result: QueryResultItem) {
           :result="r"
           :favorited="isFavorited(r.word)"
           :favorite-loading="favoriteLoading.has(r.word.toLowerCase())"
-          @toggle-favorite="toggleFavorite(r)"
+          @toggle-favorite="toggleFavorite(r.word, r.dictionary_id)"
         />
       </div>
     </main>

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -25,3 +27,14 @@ class PublicDictionaryOut(BaseModel):
     lang_to: str
 
     model_config = {"from_attributes": True}
+
+
+class QueryHistoryEntryOut(BaseModel):
+    word: str
+    dictionary_id: int
+    dictionary_name: str
+    created_at: datetime
+
+
+class QueryHistoryResponse(BaseModel):
+    items: list[QueryHistoryEntryOut]

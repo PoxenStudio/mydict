@@ -372,3 +372,83 @@ async def test_query_cache_invalidated_on_new_dictionary_import(
     results = resp.json()["results"]
     assert len(results) == 1
     assert results[0]["word"] == word
+
+
+async def test_query_history_only_keeps_successful_web_queries(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    dict_id = await _create_enabled_dictionary(
+        client,
+        admin_headers,
+        "EN-ZH-HIST",
+        "en",
+        "zh",
+        [{"word": "histword", "translation": "历史词"}],
+    )
+
+    resp = await client.get("/api/dict/history")
+    assert resp.status_code == 401
+
+    await client.post(
+        "/api/auth/register", json={"username": "histuser", "password": "histpass123"}
+    )
+    login_resp = await client.post(
+        "/api/auth/login", json={"username": "histuser", "password": "histpass123"}
+    )
+    user_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    await client.get("/api/dict/search", params={"word": "histword"}, headers=user_headers)
+    # 未命中的查询不该出现在历史里（没有 dictionary_id，收藏不了，看历史意义也不大）
+    await client.get("/api/dict/search", params={"word": "nosuchword"}, headers=user_headers)
+
+    resp = await client.get("/api/dict/history", headers=user_headers)
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["word"] == "histword"
+    assert items[0]["dictionary_id"] == dict_id
+    assert items[0]["dictionary_name"] == "EN-ZH-HIST"
+
+
+async def test_vocab_languages_and_lang_from_filter(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    en_dict = await _create_enabled_dictionary(
+        client, admin_headers, "VOCAB-EN", "en", "zh-Hans", [{"word": "enword", "translation": "e"}]
+    )
+    zh_dict = await _create_enabled_dictionary(
+        client, admin_headers, "VOCAB-ZH", "zh-Hans", "en", [{"word": "词条", "translation": "z"}]
+    )
+
+    await client.post(
+        "/api/auth/register", json={"username": "languser", "password": "langpass123"}
+    )
+    login_resp = await client.post(
+        "/api/auth/login", json={"username": "languser", "password": "langpass123"}
+    )
+    user_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    resp = await client.get("/api/vocab/languages", headers=user_headers)
+    assert resp.json() == []
+
+    resp = await client.post(
+        "/api/vocab", json={"word": "enword", "dictionary_id": en_dict}, headers=user_headers
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        "/api/vocab", json={"word": "词条", "dictionary_id": zh_dict}, headers=user_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get("/api/vocab/languages", headers=user_headers)
+    assert resp.json() == ["en", "zh-Hans"]
+
+    resp = await client.get("/api/vocab", params={"lang_from": "en"}, headers=user_headers)
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["word"] == "enword"
+
+    resp = await client.get("/api/vocab", headers=user_headers)
+    assert resp.json()["total"] == 2

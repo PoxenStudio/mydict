@@ -3,7 +3,7 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
-from app.models.dictionary import DictEntry
+from app.models.dictionary import DictEntry, Dictionary
 from app.models.vocab import TokenVocabItem, VocabItem
 from app.services.query_service import resolve_dictionaries
 from app.services.settings_service import get_setting
@@ -97,6 +97,7 @@ def list_vocab_items(
     search: str | None,
     page: int,
     page_size: int,
+    lang_from: str | None = None,
 ) -> tuple[list, int]:
     model_cls = _MODEL_BY_KIND[owner_kind]
     owner_field = _OWNER_FIELD_BY_KIND[owner_kind]
@@ -104,6 +105,10 @@ def list_vocab_items(
     query = db.query(model_cls).filter(getattr(model_cls, owner_field) == owner_id)
     if search:
         query = query.filter(model_cls.word.like(f"%{search.strip()}%"))
+    if lang_from:
+        query = query.join(Dictionary, model_cls.dictionary_id == Dictionary.id).filter(
+            Dictionary.lang_from == lang_from
+        )
     total = query.count()
     items = (
         query.order_by(model_cls.created_at.desc())
@@ -112,6 +117,20 @@ def list_vocab_items(
         .all()
     )
     return items, total
+
+
+def list_owner_languages(db: Session, owner_kind: OwnerKind, owner_id: int) -> list[str]:
+    """生词本里出现过的来源词典语言（去重），供前台按语言分 tab 展示可切换的类别。"""
+    model_cls = _MODEL_BY_KIND[owner_kind]
+    owner_field = _OWNER_FIELD_BY_KIND[owner_kind]
+    rows = (
+        db.query(Dictionary.lang_from)
+        .join(model_cls, model_cls.dictionary_id == Dictionary.id)
+        .filter(getattr(model_cls, owner_field) == owner_id)
+        .distinct()
+        .all()
+    )
+    return sorted({row[0] for row in rows})
 
 
 def delete_vocab_item(db: Session, owner_kind: OwnerKind, owner_id: int, item_id: int) -> None:
