@@ -16,6 +16,7 @@ class PublicSettingsOut(BaseModel):
     open_access: bool
     allow_registration: bool
     site_name: str
+    initialized: bool
 
 
 class SystemSettingsUpdateRequest(BaseModel):

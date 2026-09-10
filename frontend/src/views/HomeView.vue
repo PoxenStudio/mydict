@@ -43,6 +43,10 @@ async function loadFavoritesForPreload() {
 
 onMounted(async () => {
   if (!settingsStore.loaded) await settingsStore.load().catch(() => undefined)
+  if (settingsStore.loaded && !settingsStore.initialized) {
+    router.replace('/admin/setup')
+    return
+  }
   await loadFavoritesForPreload()
 })
 

@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.services import settings_service
+from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
 
 _BOOL_KEYS = {"open_access", "allow_registration"}
@@ -38,6 +39,7 @@ def get_public_settings(db: Session, defaults: Settings) -> dict:
             db, "allow_registration", defaults.allow_registration_default
         ),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
+        "initialized": is_initialized(db),
     }
 
 

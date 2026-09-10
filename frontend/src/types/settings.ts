@@ -2,6 +2,7 @@ export interface PublicSettings {
   open_access: boolean
   allow_registration: boolean
   site_name: string
+  initialized: boolean
 }
 
 export interface SystemSettings {

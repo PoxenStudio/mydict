@@ -11,6 +11,8 @@ export const useSettingsStore = defineStore('settings', {
     siteName: (state) => state.settings?.site_name ?? 'MyDict',
     openAccess: (state) => state.settings?.open_access ?? false,
     allowRegistration: (state) => state.settings?.allow_registration ?? true,
+    // 未加载完成前默认 true，避免请求返回前先闪现一次跳转
+    initialized: (state) => state.settings?.initialized ?? true,
   },
   actions: {
     async load() {
