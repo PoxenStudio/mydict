@@ -27,6 +27,18 @@ def hash_api_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def generate_api_token() -> str:
+    return "sk-" + secrets.token_urlsafe(32)
+
+
+def token_display_prefix(raw: str) -> str:
+    return raw[:9] + "****"
+
+
+def generate_temp_password() -> str:
+    return secrets.token_urlsafe(9)
+
+
 def _load_or_create_jwt_secret() -> str:
     settings = get_settings()
     if settings.jwt_secret:

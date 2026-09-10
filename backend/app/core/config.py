@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     token_default_daily_limit: int = 1000
     anonymous_ip_rate_limit_per_min: int = 60
     max_upload_size_mb: int = 512
+    enable_scheduler: bool = True
 
     data_root: str = "/data"
     config_storage_path: str = "/data/config"

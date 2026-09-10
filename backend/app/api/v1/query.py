@@ -15,7 +15,7 @@ from app.services.settings_service import get_int_setting
 router = APIRouter(prefix="/v1", tags=["v1-query"])
 
 
-def _enforce_rate_limit(db: Session, caller: ApiCaller, settings: Settings) -> None:
+def _enforce_rate_limit(db: Session, caller: ApiCaller, settings: Settings, word: str = "") -> None:
     if caller.token is not None:
         default_limit = get_int_setting(
             db, "token_default_daily_limit", settings.token_default_daily_limit
@@ -29,6 +29,9 @@ def _enforce_rate_limit(db: Session, caller: ApiCaller, settings: Settings) -> N
             db, "anonymous_ip_rate_limit_per_min", settings.anonymous_ip_rate_limit_per_min
         )
         if not rate_limiter.check_and_increment(caller.ip or "unknown", limit):
+            query_log_service.log_query(
+                db, source="api", word=word, status="rate_limited", duration_ms=0, ip=caller.ip
+            )
             raise RateLimitedError(
                 "匿名调用过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
             )
@@ -53,7 +56,7 @@ def query_word(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> QueryResponse:
-    _enforce_rate_limit(db, caller, settings)
+    _enforce_rate_limit(db, caller, settings, word)
 
     started = time.perf_counter()
     results = query_service.search_word(db, word, _parse_dict_ids(dict))
@@ -81,7 +84,7 @@ def suggest(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> SuggestResponse:
-    _enforce_rate_limit(db, caller, settings)
+    _enforce_rate_limit(db, caller, settings, prefix)
     words = query_service.suggest_prefix(db, prefix, _parse_dict_ids(dict), min(limit, 50))
     return SuggestResponse(words=words)
 

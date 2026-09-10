@@ -1,0 +1,19 @@
+from pydantic import BaseModel
+
+
+class SystemSettingsOut(BaseModel):
+    open_access: bool
+    allow_registration: bool
+    token_default_daily_limit: int
+    anonymous_ip_rate_limit_per_min: int
+    vocab_max_items_per_owner: int | None
+    site_name: str
+
+
+class SystemSettingsUpdateRequest(BaseModel):
+    open_access: bool | None = None
+    allow_registration: bool | None = None
+    token_default_daily_limit: int | None = None
+    anonymous_ip_rate_limit_per_min: int | None = None
+    vocab_max_items_per_owner: int | None = None
+    site_name: str | None = None

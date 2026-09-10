@@ -6,11 +6,22 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.models.dictionary import DictEntry
 from app.models.vocab import TokenVocabItem, VocabItem
 from app.services.query_service import resolve_dictionaries
+from app.services.settings_service import get_setting
 
 OwnerKind = Literal["token", "user"]
 
 _MODEL_BY_KIND = {"token": TokenVocabItem, "user": VocabItem}
 _OWNER_FIELD_BY_KIND = {"token": "token_id", "user": "user_id"}
+
+
+def _max_items_per_owner(db: Session) -> int | None:
+    raw = get_setting(db, "vocab_max_items_per_owner")
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _find_entry(db: Session, word: str, dictionary_id: int | None) -> tuple[DictEntry, int]:
@@ -56,6 +67,14 @@ def add_vocab_item(
     )
     if existing is not None:
         raise ConflictError("已收藏该单词")
+
+    max_items = _max_items_per_owner(db)
+    if max_items is not None:
+        current_count = (
+            db.query(model_cls).filter(getattr(model_cls, owner_field) == owner_id).count()
+        )
+        if current_count >= max_items:
+            raise ConflictError(f"生词本已达上限（{max_items} 条）")
 
     item = model_cls(
         **{owner_field: owner_id},

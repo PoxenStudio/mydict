@@ -10,6 +10,8 @@ os.environ["DATABASE_PATH"] = os.path.join(_tmp_dir, "db", "mydict.sqlite3")
 os.environ["CONFIG_STORAGE_PATH"] = os.path.join(_tmp_dir, "config")
 os.environ["DICTS_INBOX_PATH"] = os.path.join(_tmp_dir, "dicts")
 os.environ["DICTIONARY_STORAGE_PATH"] = os.path.join(_tmp_dir, "dictionaries")
+# 定时聚合任务在测试里关闭：避免后台线程并发写 query_stats_daily 与断言竞争。
+os.environ["ENABLE_SCHEDULER"] = "false"
 
 # 导入 app 会触发 ensure_data_dirs() + run_migrations()，
 # 建表与 system_settings 默认值播种均由 Alembic migration 完成，无需在测试里重复处理。

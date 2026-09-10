@@ -7,6 +7,10 @@ from starlette.responses import FileResponse
 
 from app.api.admin.auth import router as admin_auth_router
 from app.api.admin.dictionaries import router as admin_dictionaries_router
+from app.api.admin.settings import router as admin_settings_router
+from app.api.admin.stats import router as admin_stats_router
+from app.api.admin.tokens import router as admin_tokens_router
+from app.api.admin.users import router as admin_users_router
 from app.api.health import router as health_router
 from app.api.v1.query import router as v1_query_router
 from app.api.v1.vocab import router as v1_vocab_router
@@ -17,10 +21,13 @@ from app.core.config import get_settings
 from app.core.exceptions import AppError, RateLimitedError
 from app.core.migrate import run_migrations
 from app.services.resource_service import normalize_resource_path
+from app.tasks.scheduler import start_scheduler
 
 settings = get_settings()
 settings.ensure_data_dirs()
 run_migrations()
+if settings.enable_scheduler:
+    start_scheduler()
 
 app = FastAPI(title="MyDict")
 
@@ -39,6 +46,10 @@ app.include_router(health_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(web_auth_router, prefix="/api")
 app.include_router(admin_dictionaries_router, prefix="/api")
+app.include_router(admin_tokens_router, prefix="/api")
+app.include_router(admin_users_router, prefix="/api")
+app.include_router(admin_settings_router, prefix="/api")
+app.include_router(admin_stats_router, prefix="/api")
 app.include_router(v1_query_router, prefix="/api")
 app.include_router(v1_vocab_router, prefix="/api")
 app.include_router(web_dict_router, prefix="/api")

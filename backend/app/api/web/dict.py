@@ -28,6 +28,9 @@ def search(
             db, "anonymous_ip_rate_limit_per_min", settings.anonymous_ip_rate_limit_per_min
         )
         if not rate_limiter.check_and_increment(caller.ip or "unknown", limit):
+            query_log_service.log_query(
+                db, source="web", word=word, status="rate_limited", duration_ms=0, ip=caller.ip
+            )
             raise RateLimitedError(
                 "查询过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
             )
