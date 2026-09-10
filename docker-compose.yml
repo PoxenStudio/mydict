@@ -1,6 +1,6 @@
 services:
   mydict:
-    image: mydict:latest
+    image: poxenstudio/mydict:latest
     ports:
       - "8000:8000"
     env_file:

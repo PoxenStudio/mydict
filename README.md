@@ -49,10 +49,10 @@
 
 ```bash
 # 1. 构建镜像
-docker build -t mydict .
+docker build -t poxenstudio/mydict .
 
 # 2. 启动（数据全部持久化在宿主机 ./data 目录）
-docker run -d --name mydict -p 8000:8000 -v $(pwd)/data:/data mydict
+docker run -d --name mydict -p 8000:8000 -v $(pwd)/data:/data poxenstudio/mydict
 ```
 
 或使用 `docker compose up -d`（等价于上面两步，配置见 `docker-compose.yml`）。

@@ -6,6 +6,13 @@ RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
+LABEL Author="PoxenStudio(poxenstudio@gmail.com)" \
+      org.opencontainers.image.description="mydict: A web application for managing a dictionary and providing query APIs." \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.title="mydict" \
+      org.opencontainers.image.vendor="PoxenStudio" \
+      org.opencontainers.image.source="https://github.com/PoxenStudio/mydict"
+
 # ---- Stage 2: 后端运行时，装入前端构建产物 ----
 FROM python:3.12-slim
 WORKDIR /app
