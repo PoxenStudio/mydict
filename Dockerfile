@@ -1,5 +1,5 @@
 # ---- Stage 1: 编译前端 ----
-FROM node:20-alpine AS frontend-build
+FROM docker.1ms.run/node:20-alpine AS frontend-build
 WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
@@ -14,7 +14,7 @@ LABEL Author="PoxenStudio(poxenstudio@gmail.com)" \
       org.opencontainers.image.source="https://github.com/PoxenStudio/mydict"
 
 # ---- Stage 2: 后端运行时，装入前端构建产物 ----
-FROM python:3.12-slim
+FROM docker.1ms.run/python:3.12-slim
 WORKDIR /app
 ARG GIT_BRANCH=dev
 COPY backend/requirements.txt .

@@ -3,7 +3,7 @@ GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 # Docker tag 不允许出现 "/"，分支名里的斜杠（如 feature/xxx）换成 "-"
 IMAGE_TAG := $(subst /,-,$(GIT_BRANCH))
 IMAGE := $(IMAGE_NAME):$(IMAGE_TAG)
-BUILDER := mydictbuilder
+BUILDER := shukubuilder
 
 .PHONY: build setup-multiarch build-multiarch-local
 build:
