@@ -12,6 +12,7 @@ const form = reactive({
   allow_registration: true,
   token_default_daily_limit: 1000,
   anonymous_ip_rate_limit_per_min: 60,
+  user_ip_rate_limit_per_min: 120,
   vocab_max_items_per_owner: null as number | null,
   site_name: 'MyDict',
   search_hint_text: '小搜一下, 大进一步',
@@ -86,6 +87,13 @@ async function save() {
         <el-form-item label="匿名访问单 IP 每分钟请求上限">
           <el-input-number
             v-model="form.anonymous_ip_rate_limit_per_min"
+            :min="1"
+            style="width: 220px"
+          />
+        </el-form-item>
+        <el-form-item label="登录用户单 IP 每分钟请求上限">
+          <el-input-number
+            v-model="form.user_ip_rate_limit_per_min"
             :min="1"
             style="width: 220px"
           />

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     allow_registration_default: bool = True
     token_default_daily_limit: int = 1000
     anonymous_ip_rate_limit_per_min: int = 60
+    user_ip_rate_limit_per_min: int = 120
     max_upload_size_mb: int = 512
     enable_scheduler: bool = True
     version_file_path: str = "/version.txt"

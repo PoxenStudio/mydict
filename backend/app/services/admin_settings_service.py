@@ -6,7 +6,11 @@ from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
 
 _BOOL_KEYS = {"open_access", "allow_registration"}
-_INT_KEYS = {"token_default_daily_limit", "anonymous_ip_rate_limit_per_min"}
+_INT_KEYS = {
+    "token_default_daily_limit",
+    "anonymous_ip_rate_limit_per_min",
+    "user_ip_rate_limit_per_min",
+}
 _OPTIONAL_INT_KEYS = {"vocab_max_items_per_owner"}
 _STR_KEYS = {"site_name", "search_hint_text"}
 
@@ -26,6 +30,9 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         ),
         "anonymous_ip_rate_limit_per_min": settings_service.get_int_setting(
             db, "anonymous_ip_rate_limit_per_min", defaults.anonymous_ip_rate_limit_per_min
+        ),
+        "user_ip_rate_limit_per_min": settings_service.get_int_setting(
+            db, "user_ip_rate_limit_per_min", defaults.user_ip_rate_limit_per_min
         ),
         "vocab_max_items_per_owner": _get_optional_int(db, "vocab_max_items_per_owner"),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),

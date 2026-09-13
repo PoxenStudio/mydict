@@ -6,6 +6,7 @@ class SystemSettingsOut(BaseModel):
     allow_registration: bool
     token_default_daily_limit: int
     anonymous_ip_rate_limit_per_min: int
+    user_ip_rate_limit_per_min: int
     vocab_max_items_per_owner: int | None
     site_name: str
     search_hint_text: str
@@ -26,6 +27,7 @@ class SystemSettingsUpdateRequest(BaseModel):
     allow_registration: bool | None = None
     token_default_daily_limit: int | None = None
     anonymous_ip_rate_limit_per_min: int | None = None
+    user_ip_rate_limit_per_min: int | None = None
     vocab_max_items_per_owner: int | None = None
     site_name: str | None = None
     search_hint_text: str | None = Field(default=None, max_length=100)

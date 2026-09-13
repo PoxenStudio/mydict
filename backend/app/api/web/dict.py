@@ -32,18 +32,32 @@ def search(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> QueryResponse:
-    # 登录用户不做限流；访客与匿名 API 调用共用同一套按 IP 限流规则。
+    # 访客与匿名 API 调用共用同一套按 IP 限流规则；登录用户走单独的（通常更宽松的）按 IP 限流阈值。
+    # 计数 key 按登录态区分前缀，避免同一 IP 下匿名与登录用户互相挤占对方的配额。
+    ip = caller.ip or "unknown"
     if caller.user is None:
         limit = get_int_setting(
             db, "anonymous_ip_rate_limit_per_min", settings.anonymous_ip_rate_limit_per_min
         )
-        if not rate_limiter.check_and_increment(caller.ip or "unknown", limit):
-            query_log_service.log_query(
-                db, source="web", word=word, status="rate_limited", duration_ms=0, ip=caller.ip
-            )
-            raise RateLimitedError(
-                "查询过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
-            )
+        counter_key = f"anon:{ip}"
+    else:
+        limit = get_int_setting(
+            db, "user_ip_rate_limit_per_min", settings.user_ip_rate_limit_per_min
+        )
+        counter_key = f"user:{ip}"
+    if not rate_limiter.check_and_increment(counter_key, limit):
+        query_log_service.log_query(
+            db,
+            source="web",
+            word=word,
+            status="rate_limited",
+            duration_ms=0,
+            user_id=caller.user.id if caller.user else None,
+            ip=caller.ip,
+        )
+        raise RateLimitedError(
+            "查询过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
+        )
 
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
     started = time.perf_counter()

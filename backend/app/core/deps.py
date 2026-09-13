@@ -119,7 +119,7 @@ def get_web_caller(
             raise UnauthorizedError("用户不存在")
         if user.status != "active":
             raise ForbiddenError("账号已被禁用")
-        return WebCaller(user=user, ip=None)
+        return WebCaller(user=user, ip=request.client.host if request.client else "unknown")
     if not get_bool_setting(db, "open_access", settings.open_access_default):
         raise UnauthorizedError("需要登录，或由管理员开启「开放使用」")
     ip = request.client.host if request.client else "unknown"

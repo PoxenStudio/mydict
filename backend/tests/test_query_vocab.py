@@ -215,6 +215,47 @@ async def test_anonymous_ip_rate_limit(
     set_setting(db_session, "anonymous_ip_rate_limit_per_min", "60")
 
 
+async def test_logged_in_user_ip_rate_limit(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    rate_limiter.reset()  # 避免同一分钟内其它用例已对同一测试 IP 计数，干扰本用例的边界断言
+    set_setting(db_session, "open_access", "true")
+    set_setting(db_session, "user_ip_rate_limit_per_min", "1")
+    await _create_enabled_dictionary(
+        client,
+        admin_headers,
+        "EN-ZH-H",
+        "en",
+        "zh",
+        [{"word": "userlimited", "translation": "限流用户"}],
+    )
+
+    await client.post(
+        "/api/auth/register", json={"username": "ratelimituser", "password": "vocabpass123"}
+    )
+    login_resp = await client.post(
+        "/api/auth/login", json={"username": "ratelimituser", "password": "vocabpass123"}
+    )
+    user_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    resp1 = await client.get(
+        "/api/dict/search", params={"word": "userlimited"}, headers=user_headers
+    )
+    assert resp1.status_code == 200
+
+    resp2 = await client.get(
+        "/api/dict/search", params={"word": "userlimited"}, headers=user_headers
+    )
+    assert resp2.status_code == 429
+    assert "Retry-After" in resp2.headers
+
+    # 登录用户与匿名访客分开计数，同一 IP 下匿名调用不受登录用户配额影响。
+    resp3 = await client.get("/api/dict/search", params={"word": "userlimited"})
+    assert resp3.status_code == 200
+
+    set_setting(db_session, "user_ip_rate_limit_per_min", "120")
+
+
 async def test_token_vocab_lifecycle_and_snapshot_matches_query(
     client: AsyncClient, admin_headers: dict[str, str], db_session
 ) -> None:
