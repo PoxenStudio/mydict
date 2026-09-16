@@ -6,6 +6,7 @@ from httpx import AsyncClient
 
 from app.core import rate_limiter
 from app.core.security import hash_api_token
+from app.models.dictionary import DictEntry, Dictionary
 from app.models.token import ApiToken
 from app.services.settings_service import set_setting
 
@@ -93,6 +94,43 @@ async def test_query_requires_token_unless_open_access(
     assert len(results) == 1
     assert results[0]["word"] == "hello"
     assert "你好" in results[0]["definition"]
+
+
+async def test_query_full_style_controls_html_stripping(
+    client: AsyncClient, db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    dictionary = Dictionary(
+        name="HTML-DICT",
+        format="mdict",
+        lang_from="zh",
+        lang_to="zh",
+        file_path="unused",
+        status="enabled",
+    )
+    db_session.add(dictionary)
+    db_session.commit()
+    db_session.refresh(dictionary)
+    db_session.add(
+        DictEntry(
+            dictionary_id=dictionary.id,
+            word="豫章",
+            word_lower="豫章",
+            definition="<p><strong>豫章</strong></p><p>江西省的别称。</p>",
+        )
+    )
+    db_session.commit()
+
+    resp = await client.get("/api/v1/query", params={"word": "豫章"})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 1
+    assert results[0]["definition"] == "豫章\n江西省的别称。"
+
+    resp = await client.get("/api/v1/query", params={"word": "豫章", "full_style": "true"})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results[0]["definition"] == "<p><strong>豫章</strong></p><p>江西省的别称。</p>"
 
 
 async def test_query_with_token_and_disabled_token(

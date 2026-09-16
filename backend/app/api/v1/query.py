@@ -54,6 +54,7 @@ def query_word(
     dict: str | None = None,  # noqa: A002 - 与 API 契约中的查询参数名保持一致
     from_: str | None = Query(None, alias="from"),
     to: str | None = None,
+    full_style: bool = False,
     caller: ApiCaller = Depends(get_api_caller),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -64,6 +65,11 @@ def query_word(
     started = time.perf_counter()
     results = query_service.search_word(db, word, _parse_dict_ids(dict), from_, to, allowed_ids)
     duration_ms = int((time.perf_counter() - started) * 1000)
+
+    if not full_style:
+        results = [
+            {**r, "definition": query_service.html_to_plain_text(r["definition"])} for r in results
+        ]
 
     query_log_service.log_query(
         db,
