@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back, Document, Folder, HomeFilled } from '@element-plus/icons-vue'
 import * as dictApi from '../../api/admin/dictionaries'
+import * as tasksApi from '../../api/admin/tasks'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
 import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
 import type {
@@ -216,6 +217,23 @@ function removeUploadFile(index: number) {
   uploadFileList.value.splice(index, 1)
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+// 导入接口只做参数校验就立即返回 task_id，真正的解析入库在后端线程里跑；大词典
+// 耗时可能到几分钟，这里持续轮询任务状态直到成功/失败，spinner 才据此真实反映
+// 导入是否完成——而不是像过去那样等 axios 请求本身返回（大文件必然超过前端
+// 10 秒超时，导致"转了一下圈就没反应了"，其实后端还在继续跑）。
+async function waitForImportTask(taskId: number) {
+  for (;;) {
+    const task = await tasksApi.getTask(taskId)
+    if (task.status === 'success') return task
+    if (task.status === 'error') throw new Error(task.error ?? '导入失败')
+    await sleep(1000)
+  }
+}
+
 async function submitImport() {
   if (!importForm.name.trim()) {
     ElMessage.warning('请填写词典名称')
@@ -223,7 +241,7 @@ async function submitImport() {
   }
   importing.value = true
   try {
-    let created: DictionaryItem
+    let taskId: number
     if (importMode.value === 'upload') {
       if (uploadFileList.value.length === 0) {
         ElMessage.warning('请选择要上传的词典文件')
@@ -235,7 +253,7 @@ async function submitImport() {
       form.append('lang_from', importForm.lang_from)
       form.append('lang_to', importForm.lang_to)
       uploadFileList.value.forEach((file) => form.append('files', file))
-      created = await dictApi.uploadDictionary(form)
+      taskId = (await dictApi.uploadDictionary(form)).task_id
     } else {
       // 选择结果只是当前目录内的文件名，后端需要相对 /data/dicts 的完整路径才能定位到子目录
       const toFullPath = (name: string) =>
@@ -250,17 +268,26 @@ async function submitImport() {
         ElMessage.warning('请选择服务器目录下的词典文件')
         return
       }
-      created = await dictApi.importFromDictsDir({
-        name: importForm.name,
-        format: importForm.format,
-        lang_from: importForm.lang_from,
-        lang_to: importForm.lang_to,
-        files,
-      })
+      taskId = (
+        await dictApi.importFromDictsDir({
+          name: importForm.name,
+          format: importForm.format,
+          lang_from: importForm.lang_from,
+          lang_to: importForm.lang_to,
+          files,
+        })
+      ).task_id
     }
-    dictionaries.value.push(created)
-    ElMessage.success(`导入成功，共 ${created.word_count} 条词条`)
+    const task = await waitForImportTask(taskId)
+    await loadDictionaries()
+    ElMessage.success(`导入成功，共 ${task.result?.word_count ?? 0} 条词条`)
     importDialogVisible.value = false
+  } catch (err) {
+    // axios 请求本身失败（如校验不通过的 4xx）已经由响应拦截器统一弹出错误提示，
+    // 这里只处理轮询过程中任务状态变成 error 抛出的自定义 Error，避免重复提示
+    if (!(err as { isAxiosError?: boolean } | null)?.isAxiosError) {
+      ElMessage.error(err instanceof Error ? err.message : '导入失败')
+    }
   } finally {
     importing.value = false
   }

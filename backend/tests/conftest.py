@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 from collections.abc import AsyncIterator, Iterator
@@ -37,6 +38,48 @@ async def client() -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+async def wait_for_task(
+    client: AsyncClient, headers: dict[str, str], task_id: int, timeout: float = 5.0
+) -> dict:
+    """词典导入等接口不再同步跑完才返回，而是立即给出 task_id，真正的处理在后台线程里
+    跑；测试用例通过轮询 GET /admin/tasks/{task_id} 等到终态（success/error），避免每个
+    用例重复写轮询循环。"""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while True:
+        resp = await client.get(f"/api/admin/tasks/{task_id}", headers=headers)
+        body = resp.json()
+        if body["status"] != "running":
+            return body
+        if loop.time() > deadline:
+            raise AssertionError(f"任务 {task_id} 轮询超时：{body}")
+        await asyncio.sleep(0.02)
+
+
+async def import_dictionary(client: AsyncClient, headers: dict[str, str], **kwargs) -> dict:
+    """POST /admin/dictionaries（浏览器上传）并等导入任务跑完，返回完整的词典对象。
+    kwargs 透传给 client.post（如 data=..., files=...）。旧版接口是同步的，直接返回这个
+    词典对象，这里封装掉"POST 拿 task_id + 轮询"这层差异，让测试写法基本不用变。"""
+    resp = await client.post("/api/admin/dictionaries", headers=headers, **kwargs)
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    listing = await client.get("/api/admin/dictionaries", headers=headers)
+    return next(d for d in listing.json() if d["id"] == task["result"]["dictionary_id"])
+
+
+async def import_from_dicts_dir(client: AsyncClient, headers: dict[str, str], **kwargs) -> dict:
+    """同 import_dictionary，对应 POST /admin/dictionaries/import-from-dicts-dir。"""
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir", headers=headers, **kwargs
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    listing = await client.get("/api/admin/dictionaries", headers=headers)
+    return next(d for d in listing.json() if d["id"] == task["result"]["dictionary_id"])
 
 
 @pytest.fixture

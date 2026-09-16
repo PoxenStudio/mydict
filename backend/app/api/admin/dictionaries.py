@@ -5,7 +5,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
@@ -13,6 +12,7 @@ from app.core.deps import require_admin
 from app.core.exceptions import ValidationAppError
 from app.models.admin import Admin
 from app.schemas.dictionary import (
+    DictionaryImportTaskOut,
     DictionaryOut,
     DictionaryUpdateRequest,
     DictsDirListingOut,
@@ -71,21 +71,18 @@ def list_dictionaries(
     return dictionary_service.list_dictionaries(db)
 
 
-@router.post("", response_model=DictionaryOut)
+@router.post("", response_model=DictionaryImportTaskOut)
 async def upload_and_import(
     name: str = Form(...),
     format: str = Form(...),
     lang_from: str = Form(...),
     lang_to: str = Form(...),
     files: list[UploadFile] = File(...),
-    db: Session = Depends(get_db),
     admin: Admin = Depends(require_admin),
     settings: Settings = Depends(get_settings),
-) -> DictionaryOut:
+) -> DictionaryImportTaskOut:
     staged_paths = await _save_upload_files(files, settings)
-    return await run_in_threadpool(
-        dictionary_service.import_dictionary,
-        db,
+    task_id = dictionary_service.start_dictionary_import(
         name=name,
         format_=format,
         lang_from=lang_from,
@@ -95,6 +92,7 @@ async def upload_and_import(
         admin_id=admin.id,
         import_method="upload",
     )
+    return DictionaryImportTaskOut(task_id=task_id)
 
 
 @router.get("/dicts-dir-files", response_model=DictsDirListingOut)
@@ -108,16 +106,14 @@ def dicts_dir_files(
     return DictsDirListingOut(path=normalized, entries=entries)
 
 
-@router.post("/import-from-dicts-dir", response_model=DictionaryOut)
+@router.post("/import-from-dicts-dir", response_model=DictionaryImportTaskOut)
 def import_from_dicts_dir(
     body: ImportFromDictsDirRequest,
-    db: Session = Depends(get_db),
     admin: Admin = Depends(require_admin),
     settings: Settings = Depends(get_settings),
-) -> DictionaryOut:
+) -> DictionaryImportTaskOut:
     staged_paths = dictionary_service.resolve_dicts_dir_files(body.files, settings)
-    return dictionary_service.import_dictionary(
-        db,
+    task_id = dictionary_service.start_dictionary_import(
         name=body.name,
         format_=body.format,
         lang_from=body.lang_from,
@@ -127,6 +123,7 @@ def import_from_dicts_dir(
         admin_id=admin.id,
         import_method="dicts_dir",
     )
+    return DictionaryImportTaskOut(task_id=task_id)
 
 
 @router.put("/reorder", response_model=list[DictionaryOut])

@@ -35,6 +35,13 @@ class DictsDirListingOut(BaseModel):
     entries: list[DictsDirFileOut]
 
 
+class DictionaryImportTaskOut(BaseModel):
+    """导入接口不再同步等解析入库跑完才返回，立即给出 task_id，前端轮询
+    GET /admin/tasks/{task_id} 直到 status 变成 success/error 才算真正完成。"""
+
+    task_id: int
+
+
 class ImportFromDictsDirRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     format: str

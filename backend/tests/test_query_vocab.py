@@ -9,6 +9,7 @@ from app.core.security import hash_api_token
 from app.models.dictionary import DictEntry, Dictionary
 from app.models.token import ApiToken
 from app.services.settings_service import set_setting
+from tests.conftest import import_dictionary
 
 
 def _ecdict_csv_bytes(rows: list[dict[str, str]]) -> bytes:
@@ -43,14 +44,13 @@ async def _create_enabled_dictionary(
     lang_to: str,
     rows: list[dict[str, str]],
 ) -> int:
-    resp = await client.post(
-        "/api/admin/dictionaries",
-        headers=admin_headers,
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
         data={"name": name, "format": "ecdict", "lang_from": lang_from, "lang_to": lang_to},
         files={"files": (f"{name}.csv", _ecdict_csv_bytes(rows), "text/csv")},
     )
-    assert resp.status_code == 200, resp.text
-    dict_id = resp.json()["id"]
+    dict_id = dictionary["id"]
     resp = await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
     assert resp.status_code == 200
     return dict_id

@@ -12,7 +12,7 @@ export function listDictionaries() {
 }
 
 export function uploadDictionary(form: FormData) {
-  return request.post<never, DictionaryItem>('/admin/dictionaries', form, {
+  return request.post<never, { task_id: number }>('/admin/dictionaries', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
@@ -24,7 +24,10 @@ export function listDictsDirFiles(path = '') {
 }
 
 export function importFromDictsDir(payload: ImportFromDictsDirPayload) {
-  return request.post<never, DictionaryItem>('/admin/dictionaries/import-from-dicts-dir', payload)
+  return request.post<never, { task_id: number }>(
+    '/admin/dictionaries/import-from-dicts-dir',
+    payload,
+  )
 }
 
 export function updateDictionary(id: number, payload: DictionaryUpdatePayload) {

@@ -6,6 +6,7 @@ from httpx import AsyncClient
 
 from app.core.config import get_settings
 from app.services.settings_service import set_setting
+from tests.conftest import import_dictionary, import_from_dicts_dir, wait_for_task
 
 
 def _ecdict_csv_bytes() -> bytes:
@@ -75,14 +76,12 @@ async def test_upload_ecdict_and_manage_lifecycle(
     import os
 
     csv_bytes = _ecdict_csv_bytes()
-    resp = await client.post(
-        "/api/admin/dictionaries",
-        headers=admin_headers,
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
         data={"name": "Mini ECDICT", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
         files={"files": ("ecdict.csv", csv_bytes, "text/csv")},
     )
-    assert resp.status_code == 200, resp.text
-    dictionary = resp.json()
     assert dictionary["word_count"] == 2
     assert dictionary["status"] == "disabled"
     assert dictionary["import_method"] == "upload"
@@ -106,7 +105,8 @@ async def test_upload_ecdict_and_manage_lifecycle(
     assert resp.status_code == 200
     assert resp.json()["status"] == "enabled"
 
-    # 导入是同步跑完才返回的，响应回来时任务登记表应该已经清空
+    # import_dictionary 已经等到任务变成 success 才返回，此时任务不再是 running 状态，
+    # 不应出现在 running 列表里
     resp = await client.get("/api/admin/tasks/running", headers=admin_headers)
     assert resp.status_code == 200
     assert resp.json() == []
@@ -138,13 +138,13 @@ async def test_update_dictionary_name_and_lang(
     client: AsyncClient, admin_headers: dict[str, str], db_session
 ) -> None:
     set_setting(db_session, "open_access", "true")
-    resp = await client.post(
-        "/api/admin/dictionaries",
-        headers=admin_headers,
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
         data={"name": "Mini ECDICT", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
         files={"files": ("ecdict.csv", _ecdict_csv_bytes(), "text/csv")},
     )
-    dict_id = resp.json()["id"]
+    dict_id = dictionary["id"]
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
     # 改名+改语言方向后查询结果里的词典名要立刻是新的，不能因为查询结果有 5 分钟 TTL 缓存而看到旧名字
@@ -202,9 +202,9 @@ async def test_import_from_dicts_dir_leaves_source_files_in_place(
     names = {f["name"] for f in resp.json()["entries"]}
     assert {"greeting.ifo", "greeting.idx", "greeting.dict"} <= names
 
-    resp = await client.post(
-        "/api/admin/dictionaries/import-from-dicts-dir",
-        headers=admin_headers,
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
         json={
             "name": "Greeting StarDict",
             "format": "stardict",
@@ -213,8 +213,6 @@ async def test_import_from_dicts_dir_leaves_source_files_in_place(
             "files": ["greeting.ifo", "greeting.idx", "greeting.dict"],
         },
     )
-    assert resp.status_code == 200, resp.text
-    dictionary = resp.json()
     assert dictionary["word_count"] == 2
     assert dictionary["import_method"] == "dicts_dir"
 
@@ -267,9 +265,9 @@ async def test_import_from_dicts_dir_rejects_multiple_ecdict_files(
     assert by_name["dict_b.csv"]["imported"] is False
 
     # 单选一个应该能正常导入，导入后该文件在列表里标为 imported=true，另一个仍是 false
-    resp = await client.post(
-        "/api/admin/dictionaries/import-from-dicts-dir",
-        headers=admin_headers,
+    await import_from_dicts_dir(
+        client,
+        admin_headers,
         json={
             "name": "Dict A",
             "format": "ecdict",
@@ -278,7 +276,6 @@ async def test_import_from_dicts_dir_rejects_multiple_ecdict_files(
             "files": ["dict_a.csv"],
         },
     )
-    assert resp.status_code == 200, resp.text
 
     resp = await client.get("/api/admin/dictionaries/dicts-dir-files", headers=admin_headers)
     by_name = {f["name"]: f for f in resp.json()["entries"]}
@@ -335,9 +332,9 @@ async def test_dicts_dir_files_lists_and_imports_from_subdirectory(
     by_name = {e["name"]: e for e in body["entries"]}
     assert by_name["ecdict.csv"]["imported"] is False
 
-    resp = await client.post(
-        "/api/admin/dictionaries/import-from-dicts-dir",
-        headers=admin_headers,
+    await import_from_dicts_dir(
+        client,
+        admin_headers,
         json={
             "name": "CN ECDICT",
             "format": "ecdict",
@@ -346,7 +343,6 @@ async def test_dicts_dir_files_lists_and_imports_from_subdirectory(
             "files": ["cn/ecdict.csv"],
         },
     )
-    assert resp.status_code == 200, resp.text
 
     # 子目录里的文件标为已导入，根目录下的同名文件不受影响
     resp = await client.get(
@@ -375,13 +371,13 @@ async def test_delete_dictionary_does_not_block_on_vacuum(
 ) -> None:
     import time
 
-    resp = await client.post(
-        "/api/admin/dictionaries",
-        headers=admin_headers,
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
         data={"name": "Vacuum Timing", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
         files={"files": ("v.csv", _ecdict_csv_bytes(), "text/csv")},
     )
-    dict_id = resp.json()["id"]
+    dict_id = dictionary["id"]
 
     t0 = time.monotonic()
     resp = await client.delete(f"/api/admin/dictionaries/{dict_id}", headers=admin_headers)
@@ -414,13 +410,13 @@ async def test_upload_rejects_multiple_ecdict_files(
 async def test_reorder_dictionaries(client: AsyncClient, admin_headers: dict[str, str]) -> None:
     ids = []
     for i in range(3):
-        resp = await client.post(
-            "/api/admin/dictionaries",
-            headers=admin_headers,
+        dictionary = await import_dictionary(
+            client,
+            admin_headers,
             data={"name": f"D{i}", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
             files={"files": ("d.csv", _ecdict_csv_bytes(), "text/csv")},
         )
-        ids.append(resp.json()["id"])
+        ids.append(dictionary["id"])
 
     reversed_ids = list(reversed(ids))
     resp = await client.put(
@@ -455,7 +451,9 @@ async def test_upload_rejects_mismatched_file_extension(
 async def test_incomplete_stardict_upload_returns_clean_error(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
-    # 只上传 .ifo，缺少 .idx/.dict：应返回可读的 4xx，而不是未处理异常导致的 500
+    # 只上传 .ifo，缺少 .idx/.dict：文件名后缀本身合法，校验通不过要等解析阶段才发现，
+    # 这一步发生在后台任务里，所以请求本身照常拿到 task_id，需要轮询任务状态才能看到
+    # 可读的错误信息，而不是未处理异常导致的 500 或是被吞掉。
     resp = await client.post(
         "/api/admin/dictionaries",
         headers=admin_headers,
@@ -468,5 +466,7 @@ async def test_incomplete_stardict_upload_returns_clean_error(
             )
         },
     )
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "validation_error"
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "error"
+    assert task["error"]

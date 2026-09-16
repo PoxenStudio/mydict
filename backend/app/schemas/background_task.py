@@ -10,5 +10,7 @@ class BackgroundTaskOut(BaseModel):
     title: str
     status: str
     progress_data: dict[str, Any]
+    result: dict[str, Any] | None = None
+    error: str | None = None
     created_at: datetime
     updated_at: datetime

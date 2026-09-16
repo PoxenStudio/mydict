@@ -9,7 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
+from app.core.db import SessionLocal
+from app.core.exceptions import AppError, ConflictError, NotFoundError, ValidationAppError
 from app.core.query_cache import invalidate as invalidate_query_cache
 from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
@@ -153,8 +154,7 @@ def _validate_format(format_: str) -> None:
         raise ValidationAppError(f"不支持的词典格式：{format_}")
 
 
-def import_dictionary(
-    db: Session,
+def start_dictionary_import(
     *,
     name: str,
     format_: str,
@@ -164,8 +164,91 @@ def import_dictionary(
     settings: Settings,
     admin_id: int,
     import_method: str,
+) -> int:
+    """校验参数后把解析入库丢进后台线程，立即返回任务 id 供前端轮询。
+
+    格式/文件名校验很快，留在调用方所在的请求线程里同步做，坏输入能在提交的当次
+    请求就报错；真正耗时的解析、批量入库放到后台线程，避免大词典（几十万词条）
+    导入时占住请求几分钟——之前整个导入都同步跑在请求里，前端 axios 10 秒超时会
+    先一步掐断请求（虽然后端还在继续跑、最终会导入成功），界面上看起来像"导入
+    没反应"，词典其实要再等一段时间才能查到。
+    """
+    _validate_format(format_)
+    _validate_file_extensions(format_, staged_paths)
+
+    task = background_tasks.start("dictionary_import", name)
+    thread = threading.Thread(
+        target=_run_import_in_background,
+        args=(
+            task.id,
+            name,
+            format_,
+            lang_from,
+            lang_to,
+            staged_paths,
+            settings,
+            admin_id,
+            import_method,
+        ),
+        daemon=True,
+    )
+    thread.start()
+    return task.id
+
+
+def _run_import_in_background(
+    task_id: int,
+    name: str,
+    format_: str,
+    lang_from: str,
+    lang_to: str,
+    staged_paths: list[Path],
+    settings: Settings,
+    admin_id: int,
+    import_method: str,
+) -> None:
+    """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
+    db = SessionLocal()
+    try:
+        dictionary = import_dictionary(
+            db,
+            task_id=task_id,
+            name=name,
+            format_=format_,
+            lang_from=lang_from,
+            lang_to=lang_to,
+            staged_paths=staged_paths,
+            settings=settings,
+            admin_id=admin_id,
+            import_method=import_method,
+        )
+        background_tasks.succeed(
+            task_id, {"dictionary_id": dictionary.id, "word_count": dictionary.word_count}
+        )
+    except AppError as exc:
+        background_tasks.fail(task_id, exc.message)
+    except Exception:
+        logger.exception("词典导入后台任务失败：%s", name)
+        background_tasks.fail(task_id, "导入失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
+def import_dictionary(
+    db: Session,
+    *,
+    task_id: int,
+    name: str,
+    format_: str,
+    lang_from: str,
+    lang_to: str,
+    staged_paths: list[Path],
+    settings: Settings,
+    admin_id: int,
+    import_method: str,
 ) -> Dictionary:
-    """解析并导入词典。
+    """解析并导入词典。调用方需已完成格式/文件名校验并登记好 task_id（见
+    start_dictionary_import），这里只管解析入库、更新任务进度。
 
     import_method="upload"：staged_paths 是浏览器上传的暂存文件，成功后移动归档到该词典的
     source/ 目录，由本应用管理，删除词典时一并清理。
@@ -174,9 +257,6 @@ def import_dictionary(
 
     失败时清理已写入的 dict_entries/资源文件/词典记录，staged_paths 保留在原处（便于重试）。
     """
-    _validate_format(format_)
-    _validate_file_extensions(format_, staged_paths)
-
     dictionary = Dictionary(
         name=name,
         format=format_,
@@ -195,16 +275,13 @@ def import_dictionary(
     resource_dir = storage_root / "res"
     source_dir = storage_root / "source"
 
-    # 导入过程全程同步跑在这一次请求里（大文件可能耗时较久），这里登记一个后台任务，
-    # 让别的标签页/会话打开管理后台时也能看到"正在导入"的状态，见 background_task_service.py。
-    task = background_tasks.start("dictionary_import", name)
     try:
         parser = _PARSERS[format_]()
         word_count = _batch_insert(
             db,
             dict_id,
             parser.parse(staged_paths, dictionary_id=dict_id, resource_dir=resource_dir),
-            on_progress=lambda done: background_tasks.update_progress(task.id, {"done": done}),
+            on_progress=lambda done: background_tasks.update_progress(task_id, {"done": done}),
         )
 
         if import_method == "upload":
@@ -223,13 +300,11 @@ def import_dictionary(
         db.rollback()
         if storage_root.exists():
             shutil.rmtree(storage_root, ignore_errors=True)
-        # 解析器对文件内容/完整性的校验以 ValueError 表达，统一转成 4xx 而非 500，
-        # 让管理员看到具体原因（如缺少必要文件）；其余异常视为未预期的内部错误照常抛出。
+        # 解析器对文件内容/完整性的校验以 ValueError 表达，统一转成业务校验错误而非
+        # 未预期的内部错误，让管理员看到具体原因（如缺少必要文件）。
         if isinstance(exc, ValueError):
             raise ValidationAppError(str(exc)) from exc
         raise
-    finally:
-        background_tasks.finish(task.id)
 
     log_action(
         db,

@@ -5,6 +5,7 @@ from httpx import AsyncClient
 from app.models.audit import AuditLog
 from app.services.settings_service import set_setting
 from app.tasks.stats_aggregation import aggregate_date
+from tests.conftest import import_dictionary
 
 
 async def test_token_lifecycle(client: AsyncClient, admin_headers: dict[str, str]) -> None:
@@ -202,9 +203,9 @@ async def test_stats_overview_top_words_and_csv_export(
     import io
 
     set_setting(db_session, "open_access", "true")
-    resp = await client.post(
-        "/api/admin/dictionaries",
-        headers=admin_headers,
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
         data={"name": "STATS-DICT", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
         files={
             "files": (
@@ -217,7 +218,7 @@ async def test_stats_overview_top_words_and_csv_export(
             )
         },
     )
-    dict_id = resp.json()["id"]
+    dict_id = dictionary["id"]
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
     for _ in range(3):
@@ -266,9 +267,9 @@ async def test_stats_aggregation_populates_user_and_anonymous_rows(
     from app.models.query import QueryStatsDaily
 
     set_setting(db_session, "open_access", "true")
-    resp = await client.post(
-        "/api/admin/dictionaries",
-        headers=admin_headers,
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
         data={"name": "AGG-DICT", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
         files={
             "files": (
@@ -281,7 +282,7 @@ async def test_stats_aggregation_populates_user_and_anonymous_rows(
             )
         },
     )
-    dict_id = resp.json()["id"]
+    dict_id = dictionary["id"]
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
     await client.post("/api/auth/register", json={"username": "agguser", "password": "aggpass123"})
