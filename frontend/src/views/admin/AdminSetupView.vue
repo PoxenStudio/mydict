@@ -28,7 +28,7 @@ async function onSubmit() {
     await authStore.setup(form.username, form.password)
     // 首页曾在未初始化时缓存过 settings，这里强制刷新一次避免跳回去又被弹回 /admin/setup
     await settingsStore.load().catch(() => undefined)
-    router.push('/')
+    router.push('/admin')
   } catch {
     // 错误已由 request.ts 响应拦截器统一提示
   } finally {
