@@ -1,9 +1,8 @@
-from datetime import date
-
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
 from app.core.security import generate_api_token, hash_api_token, token_display_prefix
+from app.core.timeutil import today_str
 from app.models.query import QueryStatsDaily
 from app.models.token import ApiToken
 from app.models.vocab import TokenVocabItem
@@ -12,7 +11,8 @@ from app.services.query_service import filter_existing_dictionary_ids
 
 
 def _usage(db: Session, token_id: int) -> tuple[int, int]:
-    today = date.today().isoformat()
+    # 计数器以本地日期为键（写入侧见 rate_limit_service），这里读同一个出处，避免以后又漂移
+    today = today_str()
     today_row = (
         db.query(QueryStatsDaily)
         .filter(QueryStatsDaily.stat_date == today, QueryStatsDaily.token_id == token_id)
@@ -23,7 +23,7 @@ def _usage(db: Session, token_id: int) -> tuple[int, int]:
 
 
 def _usage_maps(db: Session) -> tuple[dict[int, int], dict[int, int]]:
-    today = date.today().isoformat()
+    today = today_str()
     today_rows = (
         db.query(QueryStatsDaily.token_id, QueryStatsDaily.query_count)
         .filter(QueryStatsDaily.stat_date == today, QueryStatsDaily.token_id.isnot(None))

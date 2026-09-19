@@ -12,6 +12,7 @@ from app.core.deps import require_admin
 from app.core.exceptions import ValidationAppError
 from app.models.admin import Admin
 from app.schemas.dictionary import (
+    BatchStatusRequest,
     DictionaryImportTaskOut,
     DictionaryOut,
     DictionaryUpdateRequest,
@@ -98,12 +99,20 @@ async def upload_and_import(
 @router.get("/dicts-dir-files", response_model=DictsDirListingOut)
 def dicts_dir_files(
     path: str = "",
+    recursive: bool = False,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
 ) -> DictsDirListingOut:
-    normalized, entries = dictionary_service.list_dicts_dir_files(db, settings, path)
-    return DictsDirListingOut(path=normalized, entries=entries)
+    normalized, entries, dictionaries, skipped = dictionary_service.list_dicts_dir_files(
+        db, settings, path, recursive
+    )
+    return DictsDirListingOut(
+        path=normalized,
+        entries=entries,
+        dictionaries=dictionaries,
+        skipped=skipped,
+    )
 
 
 @router.post("/import-from-dicts-dir", response_model=DictionaryImportTaskOut)
@@ -122,6 +131,7 @@ def import_from_dicts_dir(
         settings=settings,
         admin_id=admin.id,
         import_method="dicts_dir",
+        skip_resources=body.skip_resources,
     )
     return DictionaryImportTaskOut(task_id=task_id)
 
@@ -133,6 +143,17 @@ def reorder(
     admin: Admin = Depends(require_admin),
 ) -> list[DictionaryOut]:
     return dictionary_service.reorder_dictionaries(db, body.ordered_ids, admin.id)
+
+
+@router.put("/batch-status", response_model=list[DictionaryOut])
+def batch_status(
+    body: BatchStatusRequest,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> list[DictionaryOut]:
+    return dictionary_service.set_dictionaries_status(
+        db, body.dictionary_ids, body.status, admin.id
+    )
 
 
 @router.put("/{dictionary_id}", response_model=DictionaryOut)

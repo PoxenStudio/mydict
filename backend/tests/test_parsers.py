@@ -230,3 +230,176 @@ def test_mdict_parser_with_resources(tmp_path: Path) -> None:
     assert "yellow fruit" in by_word["banana"].definition
     assert "/dict-res/42/res/pic/apple.png" in by_word["apple"].definition
     assert (resource_dir / "pic" / "apple.png").read_bytes() == b"\x89PNG-fake-content"
+
+
+def _snapshot(root: Path) -> set[str]:
+    return {path.relative_to(root).as_posix() for path in root.rglob("*")}
+
+
+def test_stardict_sample_reads_only_prefix_and_writes_nothing(tmp_path: Path) -> None:
+    paths = _build_stardict(tmp_path)
+    before = _snapshot(tmp_path)
+
+    sampled = StarDictParser().sample(paths, limit=1)
+
+    assert [entry.word for entry in sampled] == ["apple"]
+    assert sampled[0].definition == "n. 苹果"
+    # 采样是只读的：不该落盘任何东西（.syn 别名条目也不在采样范围内）
+    assert _snapshot(tmp_path) == before
+
+
+def test_ecdict_sample_reads_at_most_limit_rows(tmp_path: Path) -> None:
+    import csv
+
+    csv_path = tmp_path / "ecdict.csv"
+    fieldnames = ["word", "definition", "translation"]
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(
+            [
+                {"word": "apple", "definition": "a fruit", "translation": "苹果"},
+                {"word": "banana", "definition": "a fruit", "translation": "香蕉"},
+                {"word": "cherry", "definition": "a fruit", "translation": "樱桃"},
+            ]
+        )
+
+    sampled = EcdictParser().sample([csv_path], limit=2)
+
+    assert [entry.word for entry in sampled] == ["apple", "banana"]
+    assert sampled[0].definition == "a fruit\n\n苹果"
+
+
+def test_mdict_parse_without_resource_dir_skips_extraction(tmp_path: Path) -> None:
+    """resource_dir=None 表示「只要释义、不要发音/图片」。
+
+    此时既不解包 .mdd，也不改写释义里的资源引用——改成 /dict-res/... 只会指向不存在的
+    文件，保留原始相对引用更诚实。
+    """
+    from mdict_utils import writer
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    txt_path = src_dir / "words.txt"
+    txt_path.write_text(
+        'apple\n<p>a fruit <img src="pic/apple.png"></p>\n</>\n'
+        "banana\n<p>yellow fruit</p>\n</>\n",
+        encoding="utf-8",
+    )
+
+    res_dir = tmp_path / "mdd_src"
+    (res_dir / "pic").mkdir(parents=True)
+    (res_dir / "pic" / "apple.png").write_bytes(b"\x89PNG-fake-content")
+
+    mdx_path = tmp_path / "test.mdx"
+    writer.pack(
+        str(mdx_path),
+        writer.pack_mdx_txt(str(txt_path), encoding="utf-8"),
+        title="Test",
+        description="",
+        encoding="utf-8",
+    )
+    mdd_path = tmp_path / "test.mdd"
+    writer.pack(
+        str(mdd_path),
+        writer.pack_mdd_file(str(res_dir)),
+        title="Test",
+        description="",
+        is_mdd=True,
+    )
+
+    before = _snapshot(tmp_path)
+    results = list(MDictParser().parse([mdx_path, mdd_path], dictionary_id=42, resource_dir=None))
+
+    by_word = {entry.word: entry for entry in results}
+    assert "yellow fruit" in by_word["banana"].definition
+    assert 'src="pic/apple.png"' in by_word["apple"].definition
+    assert "/dict-res/" not in by_word["apple"].definition
+    # 与解析前逐文件对比：没有解包出任何资源
+    assert _snapshot(tmp_path) == before
+
+
+def test_mdict_lzo_error_becomes_readable_validation_error(tmp_path: Path, monkeypatch) -> None:
+    """缺 LZO 支持时要给出可读原因，而不是裸抛 RuntimeError。
+
+    裸抛会被后台任务的兜底分支变成「服务器内部错误，请查看后端日志」，管理员看不出是格式问题
+    （真实遇到过：MDict 引擎版本 1.2 的老词典用 LZO 压缩块，而 mdict-utils 的可选依赖
+    python-lzo 没装）。
+    """
+
+    class LzoMDX:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise RuntimeError("LZO compression is not supported")
+
+    monkeypatch.setattr("app.parsers.mdict.MDX", LzoMDX)
+    parser = MDictParser()
+    try:
+        list(parser.parse([tmp_path / "legacy.mdx"], dictionary_id=1, resource_dir=None))
+    except ValueError as exc:
+        assert "legacy.mdx" in str(exc)
+        assert "LZO" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for LZO-compressed dictionary")
+
+    # 其它 RuntimeError 不能被一起吞掉，否则会把真实故障误报成「格式不支持」
+    class BrokenMDX:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise RuntimeError("something else broke")
+
+    monkeypatch.setattr("app.parsers.mdict.MDX", BrokenMDX)
+    try:
+        list(parser.parse([tmp_path / "broken.mdx"], dictionary_id=1, resource_dir=None))
+    except ValueError:
+        raise AssertionError("只应转译 LZO 这一种情况，其它 RuntimeError 需原样抛出") from None
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected RuntimeError to propagate")
+
+
+def test_mdict_sample_does_not_extract_mdd_resources(tmp_path: Path) -> None:
+    """采样的回归保护：绝不能走 parse()。
+
+    parse() 会把 .mdd 里的图片/音频全量落盘，采样只是为了判断语言，不该有这个副作用，
+    释义也应保持原始 HTML 而非被改写成 /dict-res/... 绝对路径。
+    """
+    from mdict_utils import writer
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    txt_path = src_dir / "words.txt"
+    txt_path.write_text(
+        'apple\n<p>a fruit <img src="pic/apple.png"></p>\n</>\n'
+        "banana\n<p>yellow fruit</p>\n</>\n",
+        encoding="utf-8",
+    )
+
+    res_dir = tmp_path / "mdd_src"
+    (res_dir / "pic").mkdir(parents=True)
+    (res_dir / "pic" / "apple.png").write_bytes(b"\x89PNG-fake-content")
+
+    mdx_path = tmp_path / "test.mdx"
+    writer.pack(
+        str(mdx_path),
+        writer.pack_mdx_txt(str(txt_path), encoding="utf-8"),
+        title="Test",
+        description="",
+        encoding="utf-8",
+    )
+    mdd_path = tmp_path / "test.mdd"
+    writer.pack(
+        str(mdd_path),
+        writer.pack_mdd_file(str(res_dir)),
+        title="Test",
+        description="",
+        is_mdd=True,
+    )
+
+    before = _snapshot(tmp_path)
+    sampled = MDictParser().sample([mdx_path, mdd_path], limit=10)
+
+    assert {entry.word for entry in sampled} == {"apple", "banana"}
+    assert _snapshot(tmp_path) == before
+    apple = next(entry for entry in sampled if entry.word == "apple")
+    assert 'src="pic/apple.png"' in apple.definition
+    assert "/dict-res/" not in apple.definition
