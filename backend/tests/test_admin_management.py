@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from httpx import AsyncClient
 
 from app.models.audit import AuditLog
+from app.models.query import QueryLog, QueryStatsDaily
 from app.services.settings_service import set_setting
 from app.tasks.stats_aggregation import aggregate_date
 from tests.conftest import import_dictionary
@@ -264,8 +265,6 @@ async def test_stats_overview_top_words_and_csv_export(
 async def test_stats_aggregation_populates_user_and_anonymous_rows(
     client: AsyncClient, admin_headers: dict[str, str], db_session
 ) -> None:
-    from app.models.query import QueryStatsDaily
-
     set_setting(db_session, "open_access", "true")
     dictionary = await import_dictionary(
         client,
@@ -319,6 +318,103 @@ async def test_stats_aggregation_populates_user_and_anonymous_rows(
     )
     assert anon_row is not None
     assert anon_row.query_count >= 1
+
+
+def _local_moment_as_naive_utc(day_offset: int, hour: int, minute: int) -> datetime:
+    """构造「本地某天的某时刻」对应的 naive UTC 瞬时。
+
+    query_logs.created_at 存的就是 naive UTC，所以测试要自己把「本地时刻」换算过去才能精确控制
+    一条日志落在哪一天。
+    """
+    local_zone = datetime.now().astimezone().tzinfo
+    local_midnight = datetime.now(local_zone).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) + timedelta(days=day_offset)
+    return (
+        (local_midnight + timedelta(hours=hour, minutes=minute))
+        .astimezone(timezone.utc)
+        .replace(tzinfo=None)
+    )
+
+
+def _local_day(day_offset: int = 0) -> str:
+    local_zone = datetime.now().astimezone().tzinfo
+    return (datetime.now(local_zone) + timedelta(days=day_offset)).date().isoformat()
+
+
+async def test_stats_overview_counts_local_day_boundary(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """统计里的「今天」必须按部署本地时区划分，不能拿本地日期去比 UTC 日。
+
+    这里刻意用「本地今天 00:30」构造样本——它的 UTC 日属于**前一天**，因此只按 UTC 日比较的实现
+    必然漏掉它。这样构造与测试运行时刻无关，不会出现「只在凌晨跑才失败」的假回归测试。
+    """
+    resp = await client.get("/api/admin/stats/overview", headers=admin_headers)
+    assert resp.status_code == 200
+    baseline = resp.json()["today_query_count"]
+
+    # 本地今天 00:30：UTC 日 = 本地昨天，旧实现按 func.date(created_at) 比会漏掉
+    db_session.add(
+        QueryLog(
+            source="api",
+            word="boundary-inside",
+            status="ok",
+            created_at=_local_moment_as_naive_utc(0, 0, 30),
+        )
+    )
+    db_session.commit()
+    resp = await client.get("/api/admin/stats/overview", headers=admin_headers)
+    assert resp.json()["today_query_count"] == baseline + 1, "本地当天 00:30 的查询必须计入「今天」"
+
+    # 本地今天零点前 1 分钟：属于昨天，不能计入（守住半开区间）
+    db_session.add(
+        QueryLog(
+            source="api",
+            word="boundary-before",
+            status="ok",
+            created_at=_local_moment_as_naive_utc(0, 0, 0) - timedelta(minutes=1),
+        )
+    )
+    db_session.commit()
+    resp = await client.get("/api/admin/stats/overview", headers=admin_headers)
+    assert (
+        resp.json()["today_query_count"] == baseline + 1
+    ), "本地零点前 1 分钟的查询不能计入「今天」"
+
+
+def test_stats_aggregation_counts_local_day_boundary(db_session) -> None:
+    """聚合任务要按「本地日」分组，否则行的标签（本地日期）与内容（UTC 日）会错位一个时区偏移。
+
+    这里取一个**过去的本地日**（3 天前）来隔离：其他用例只会写「今天」的聚合行，用过去的日子
+    可以确定这个断言不受它们影响。
+    """
+    target_day = _local_day(-3)
+    db_session.add(
+        QueryLog(
+            source="web",
+            word="agg-boundary",
+            status="ok",
+            # 该本地日的 00:30，其 UTC 日属于前一天
+            created_at=_local_moment_as_naive_utc(-3, 0, 30),
+        )
+    )
+    db_session.commit()
+
+    aggregate_date(target_day)
+
+    db_session.expire_all()
+    anon_row = (
+        db_session.query(QueryStatsDaily)
+        .filter(
+            QueryStatsDaily.stat_date == target_day,
+            QueryStatsDaily.token_id.is_(None),
+            QueryStatsDaily.user_id.is_(None),
+        )
+        .first()
+    )
+    assert anon_row is not None, "聚合任务应为该本地日写入匿名维度行"
+    assert anon_row.query_count >= 1, "落在该本地日 00:30 的查询必须被聚合进这一天"
 
 
 def _fresh_session():

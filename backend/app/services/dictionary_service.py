@@ -1,7 +1,9 @@
 import json
 import logging
+import re
 import shutil
 import threading
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,14 +18,22 @@ from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
 from app.parsers.mdict import MDictParser
-from app.parsers.stardict import StarDictParser
+from app.parsers.stardict import StarDictParser, parse_ifo
 from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
 from app.services.background_task_service import background_tasks
+from app.services.language_detect import detect_language
 
 logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
+
+# 语言识别采样条数：几百条词头/释义已足够判断文字种类，再多只是浪费解析时间。
+_SAMPLE_LIMIT = 200
+
+# 识别不出语言时的兜底方向，与前端导入弹窗的默认值保持一致。
+_FALLBACK_LANG_FROM = "en"
+_FALLBACK_LANG_TO = "zh-Hans"
 
 _PARSERS: dict[str, type[DictionaryParser]] = {
     "mdict": MDictParser,
@@ -87,14 +97,209 @@ def _resolve_dicts_subdir(inbox: Path, subpath: str) -> Path:
     return target
 
 
+# 文件名后缀 → 词典格式，用于把 /data/dicts 下散落的文件自动归组成词典单元。
+_FORMAT_BY_EXT: dict[str, str] = {
+    "mdx": "mdict",
+    "mdd": "mdict",
+    "ifo": "stardict",
+    "idx": "stardict",
+    "dict": "stardict",
+    "syn": "stardict",
+    "idx.gz": "stardict",
+    "dict.dz": "stardict",
+    "csv": "ecdict",
+}
+
+# 构成一部可导入词典所必需的文件，外层列表是「与」、内层元组是「或」，对齐各
+# Parser 的实际要求（.mdd/.syn 是可选资源，不计入）。缺任一项即不可导入。
+_REQUIRED_EXTENSIONS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "mdict": (("mdx",),),
+    "stardict": (("ifo",), ("idx", "idx.gz"), ("dict", "dict.dz")),
+    "ecdict": (("csv",),),
+}
+
+# 双后缀必须先于单后缀匹配，否则 x.dict.dz 会被截成 .dz 这个不存在的后缀。
+_DOUBLE_EXTENSIONS = ("dict.dz", "idx.gz")
+
+# 一部词典里真正的「入口文件」：名称与主干以它为准，同组的资源文件不能反客为主。
+_ENTRY_EXTENSIONS = {"mdx", "ifo", "csv"}
+
+# MDict 的资源文件超过单个文件上限时会拆卷，形如 X.mdd / X.1.mdd / X.2.mdd（也见过到 .6）。
+# 这些卷号必须归到 X.mdx 那部词典，否则既会多出一堆「缺少 .mdx」的假分组，导入 X 时也会
+# 漏掉这些资源。但 X.1 也可能是词典名的一部分（如「三省堂スーパー大辞林3.0」），所以只在
+# 能对上同目录某个 .mdx 主干时才剥卷号，不做无条件剥离。
+_VOLUME_SUFFIX_RE = re.compile(r"\.\d+$")
+
+# 递归扫描的最大深度（相对扫描起点）。用户一般按「一个文件夹一部词典」整理，深度 1 就够；
+# 留到 4 是为了容忍再套一两层（如 EPWING 的 <词典>/DATA/HONMON 结构）。
+_MAX_SCAN_DEPTH = 4
+
+
+def _split_dict_filename(filename: str) -> tuple[str, str, str] | None:
+    """把文件名拆成 (格式, 分组键, 规范后缀)；后缀不属于任何词典格式时返回 None。
+
+    分组键带上格式前缀（如 "stardict:foo"）：同一目录下的 foo.mdx 与 foo.ifo 分属
+    两种格式、是两部不同的词典，不能因为主干相同就并成一组。键统一小写以实现大小写
+    不敏感，展示用的主干另由调用方按原始文件名截取。
+    """
+    lowered = filename.lower()
+    for ext in _DOUBLE_EXTENSIONS:
+        if lowered.endswith("." + ext):
+            stem = filename[: -(len(ext) + 1)]
+            format_ = _FORMAT_BY_EXT[ext]
+            return (format_, f"{format_}:{stem.lower()}", ext) if stem else None
+    ext = lowered.rsplit(".", 1)[-1] if "." in lowered else ""
+    format_ = _FORMAT_BY_EXT.get(ext)
+    if format_ is None:
+        return None
+    stem = filename[: -(len(ext) + 1)]
+    return (format_, f"{format_}:{stem.lower()}", ext) if stem else None
+
+
+def _missing_requirements(format_: str, exts: set[str]) -> list[str]:
+    """列出该分组还缺哪些必需文件，用来解释为什么不能导入。"""
+    return [
+        " 或 ".join(f".{ext}" for ext in alternatives)
+        for alternatives in _REQUIRED_EXTENSIONS[format_]
+        if not any(ext in exts for ext in alternatives)
+    ]
+
+
+def _sanitize_dict_name(raw: str, fallback: str) -> str:
+    name = " ".join(raw.split())
+    # 长度与 ImportFromDictsDirRequest.name 的 max_length 对齐，避免建议值反而提交不上去。
+    return (name or fallback)[:255]
+
+
+def _suggest_dict_name(format_: str, stem: str, paths: list[Path]) -> str:
+    """给出建议的词典名称：StarDict 的 .ifo 里有 bookname 字段，其余用文件名主干。"""
+    if format_ == "stardict":
+        ifo = next((p for p in paths if p.name.lower().endswith(".ifo")), None)
+        if ifo is not None:
+            try:
+                return _sanitize_dict_name(parse_ifo(ifo).get("bookname") or stem, stem)
+            except OSError:
+                pass
+    return _sanitize_dict_name(stem, stem)
+
+
+def _build_dict_groups(
+    files: list[Path], inbox: Path, imported_relpaths: set[str]
+) -> tuple[list[dict], list[str]]:
+    """把同一目录下的文件按 (格式, 主干) 归组成待导入的词典单元，并列出被忽略的文件。
+
+    多卷资源（X.mdd / X.1.mdd / …）并入 X.mdx 那一组，但仅在同目录确实存在 X.mdx 时；
+    对不上主干的孤立 .mdd 仍单独成组并标为缺件，让管理员看得见。
+    """
+    mdx_stems = {
+        path.name[: -len(".mdx")].lower() for path in files if path.name.lower().endswith(".mdx")
+    }
+
+    grouped: dict[str, dict] = {}
+    skipped: list[str] = []
+    for path in sorted(files, key=lambda p: p.name.lower()):
+        split = _split_dict_filename(path.name)
+        if split is None:
+            skipped.append(path.relative_to(inbox).as_posix())
+            continue
+        format_, key, ext = split
+        if format_ == "mdict" and ext == "mdd":
+            stem = path.name[: -(len(ext) + 1)]
+            base = _VOLUME_SUFFIX_RE.sub("", stem)
+            if base != stem and base.lower() in mdx_stems:
+                key = f"mdict:{base.lower()}"
+        group = grouped.setdefault(
+            key, {"format": format_, "stem": None, "paths": [], "exts": set()}
+        )
+        group["paths"].append(path)
+        group["exts"].add(ext)
+        # 主干取入口文件（.mdx/.ifo/.csv）的文件名，多卷里的「X.1」不能反客为主当成词典名
+        if group["stem"] is None or ext in _ENTRY_EXTENSIONS:
+            group["stem"] = path.name[: -(len(ext) + 1)]
+
+    dictionaries: list[dict] = []
+    for key, group in grouped.items():
+        group_files: list[Path] = sorted(group["paths"], key=lambda p: p.name.lower())
+        files_out = []
+        for path in group_files:
+            relpath = path.relative_to(inbox).as_posix()
+            files_out.append(
+                {
+                    "name": path.name,
+                    "relpath": relpath,
+                    "size": path.stat().st_size,
+                    "imported": relpath in imported_relpaths,
+                }
+            )
+        missing = _missing_requirements(group["format"], group["exts"])
+        dictionaries.append(
+            {
+                "key": key,
+                "name": _suggest_dict_name(group["format"], group["stem"], group_files),
+                "format": group["format"],
+                "files": files_out,
+                "total_size": sum(f["size"] for f in files_out),
+                "importable": not missing,
+                "reason": f"缺少 {'、'.join(missing)} 文件" if missing else None,
+                # 组级「已导入」要求组内文件全部被消费过，避免只导过一半就整组跳过。
+                "imported": all(f["imported"] for f in files_out),
+            }
+        )
+    dictionaries.sort(key=lambda d: d["name"].lower())
+    return dictionaries, sorted(skipped)
+
+
+def _iter_scan_dirs(root: Path, max_depth: int) -> Iterator[Path]:
+    """深度受限地遍历 root 及其子目录；跳过以 . 开头的目录（.git 之类）。"""
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    while stack:
+        current, depth = stack.pop()
+        yield current
+        if depth >= max_depth:
+            continue
+        for child in sorted(current.iterdir(), key=lambda p: p.name.lower()):
+            if child.is_dir() and not child.name.startswith("."):
+                stack.append((child, depth + 1))
+
+
+def _build_dict_groups_recursive(
+    root: Path, inbox: Path, imported_relpaths: set[str]
+) -> tuple[list[dict], list[str]]:
+    """逐层扫描 root 下的所有目录，把每一层的文件各自归组。
+
+    每个目录单独归组（而不是把整棵子树混在一起），因为同一部词典的配套文件总是在同一个
+    文件夹里；混在一起反而会让不同目录下的同名文件互相干扰。
+    """
+    dictionaries: list[dict] = []
+    skipped: list[str] = []
+    for current in _iter_scan_dirs(root, _MAX_SCAN_DEPTH):
+        files = sorted((p for p in current.iterdir() if p.is_file()), key=lambda p: p.name.lower())
+        if not files:
+            continue
+        groups, ignored = _build_dict_groups(files, inbox, imported_relpaths)
+        # 「一个文件夹一部词典」是很常见的整理方式，这种时候目录名往往比文件名主干可读得多
+        # （如「[英] 韦氏大学词典」vs「[英-英]语音版图文版Merriam-Websters…」）。只在扫描
+        # 起点之外的目录、且该目录里恰好只有一部可导入词典时才采用目录名——扫描起点是容器
+        # 而不是某部词典的文件夹，一个目录放多部词典时目录名也无法区分它们。
+        importable = [group for group in groups if group["importable"]]
+        if current != root and len(importable) == 1:
+            importable[0]["name"] = _sanitize_dict_name(current.name, importable[0]["name"])
+        for group in groups:
+            group["dir"] = current.relative_to(inbox).as_posix() if current != inbox else ""
+            dictionaries.append(group)
+        skipped.extend(ignored)
+    dictionaries.sort(key=lambda d: (d["dir"], d["name"].lower()))
+    return dictionaries, sorted(skipped)
+
+
 def list_dicts_dir_files(
-    db: Session, settings: Settings, subpath: str = ""
-) -> tuple[str, list[dict]]:
+    db: Session, settings: Settings, subpath: str = "", recursive: bool = False
+) -> tuple[str, list[dict], list[dict], list[str]]:
     inbox = Path(settings.dicts_inbox_path).resolve()
     target = _resolve_dicts_subdir(inbox, subpath)
     normalized = "" if target == inbox else target.relative_to(inbox).as_posix()
     if not target.is_dir():
-        return normalized, []
+        return normalized, [], [], []
 
     imported_relpaths = _imported_dicts_dir_relpaths(db, inbox)
     dirs: list[Path] = []
@@ -129,7 +334,13 @@ def list_dicts_dir_files(
                 "is_dir": False,
             }
         )
-    return normalized, entries
+    if recursive:
+        dictionaries, skipped = _build_dict_groups_recursive(target, inbox, imported_relpaths)
+    else:
+        dictionaries, skipped = _build_dict_groups(files, inbox, imported_relpaths)
+        for group in dictionaries:
+            group["dir"] = normalized
+    return normalized, entries, dictionaries, skipped
 
 
 def resolve_dicts_dir_files(filenames: list[str], settings: Settings) -> list[Path]:
@@ -158,12 +369,13 @@ def start_dictionary_import(
     *,
     name: str,
     format_: str,
-    lang_from: str,
-    lang_to: str,
+    lang_from: str | None,
+    lang_to: str | None,
     staged_paths: list[Path],
     settings: Settings,
     admin_id: int,
     import_method: str,
+    skip_resources: bool = False,
 ) -> int:
     """校验参数后把解析入库丢进后台线程，立即返回任务 id 供前端轮询。
 
@@ -172,6 +384,9 @@ def start_dictionary_import(
     导入时占住请求几分钟——之前整个导入都同步跑在请求里，前端 axios 10 秒超时会
     先一步掐断请求（虽然后端还在继续跑、最终会导入成功），界面上看起来像"导入
     没反应"，词典其实要再等一段时间才能查到。
+
+    lang_from/lang_to 传 None 表示导入时自动识别语言方向；识别需要采样词条，同样
+    是耗时操作，所以和解析一起放在后台线程里做，不拖慢这次请求的返回。
     """
     _validate_format(format_)
     _validate_file_extensions(format_, staged_paths)
@@ -189,6 +404,7 @@ def start_dictionary_import(
             settings,
             admin_id,
             import_method,
+            skip_resources,
         ),
         daemon=True,
     )
@@ -200,12 +416,13 @@ def _run_import_in_background(
     task_id: int,
     name: str,
     format_: str,
-    lang_from: str,
-    lang_to: str,
+    lang_from: str | None,
+    lang_to: str | None,
     staged_paths: list[Path],
     settings: Settings,
     admin_id: int,
     import_method: str,
+    skip_resources: bool,
 ) -> None:
     """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
     db = SessionLocal()
@@ -221,9 +438,16 @@ def _run_import_in_background(
             settings=settings,
             admin_id=admin_id,
             import_method=import_method,
+            skip_resources=skip_resources,
         )
         background_tasks.succeed(
-            task_id, {"dictionary_id": dictionary.id, "word_count": dictionary.word_count}
+            task_id,
+            {
+                "dictionary_id": dictionary.id,
+                "word_count": dictionary.word_count,
+                "lang_from": dictionary.lang_from,
+                "lang_to": dictionary.lang_to,
+            },
         )
     except AppError as exc:
         background_tasks.fail(task_id, exc.message)
@@ -234,21 +458,51 @@ def _run_import_in_background(
         db.close()
 
 
+def _resolve_languages(
+    parser: DictionaryParser,
+    staged_paths: list[Path],
+    lang_from: str | None,
+    lang_to: str | None,
+) -> tuple[str, str]:
+    """把为 None 的一侧用采样识别出的语言补齐；识别不出时回落到默认方向。
+
+    dictionaries.lang_from/lang_to 是 NOT NULL，所以这里必须落到具体值。
+    """
+    if lang_from is not None and lang_to is not None:
+        return lang_from, lang_to
+    try:
+        detected_from, detected_to = detect_language(parser.sample(staged_paths, _SAMPLE_LIMIT))
+    except Exception:
+        # 识别只是为了省掉一次手填，采样失败（文件损坏、格式异常等）不该连累整次导入，
+        # 回落默认方向让管理员导入后再改即可。
+        logger.warning("语言方向自动识别失败，回落到默认值", exc_info=True)
+        detected_from = detected_to = None
+    return (
+        lang_from or detected_from or _FALLBACK_LANG_FROM,
+        lang_to or detected_to or _FALLBACK_LANG_TO,
+    )
+
+
 def import_dictionary(
     db: Session,
     *,
     task_id: int,
     name: str,
     format_: str,
-    lang_from: str,
-    lang_to: str,
+    lang_from: str | None,
+    lang_to: str | None,
     staged_paths: list[Path],
     settings: Settings,
     admin_id: int,
     import_method: str,
+    skip_resources: bool = False,
 ) -> Dictionary:
     """解析并导入词典。调用方需已完成格式/文件名校验并登记好 task_id（见
     start_dictionary_import），这里只管解析入库、更新任务进度。
+
+    lang_from/lang_to 为 None 时按采样结果自动识别。
+    skip_resources=True 时只导入释义，不解包 .mdd 里的图片/发音（大词典的 .mdd 常有
+    几个 GB，解包一份等于再占一份磁盘），释义里的资源引用也保持原样不改写。
 
     import_method="upload"：staged_paths 是浏览器上传的暂存文件，成功后移动归档到该词典的
     source/ 目录，由本应用管理，删除词典时一并清理。
@@ -257,6 +511,9 @@ def import_dictionary(
 
     失败时清理已写入的 dict_entries/资源文件/词典记录，staged_paths 保留在原处（便于重试）。
     """
+    parser = _PARSERS[format_]()
+    lang_from, lang_to = _resolve_languages(parser, staged_paths, lang_from, lang_to)
+
     dictionary = Dictionary(
         name=name,
         format=format_,
@@ -272,11 +529,11 @@ def import_dictionary(
 
     dict_id = dictionary.id
     storage_root = Path(settings.dictionary_storage_path) / str(dict_id)
-    resource_dir = storage_root / "res"
+    # 不要资源时连 res/ 目录都不建，磁盘上不留痕（storage_root 为空时会被下面的清理逻辑删掉）
+    resource_dir = None if skip_resources else storage_root / "res"
     source_dir = storage_root / "source"
 
     try:
-        parser = _PARSERS[format_]()
         word_count = _batch_insert(
             db,
             dict_id,
@@ -312,7 +569,14 @@ def import_dictionary(
         actor_id=admin_id,
         action="dictionary.import",
         target=str(dict_id),
-        detail={"name": name, "format": format_, "word_count": dictionary.word_count},
+        detail={
+            "name": name,
+            "format": format_,
+            "word_count": dictionary.word_count,
+            "lang_from": dictionary.lang_from,
+            "lang_to": dictionary.lang_to,
+            "skip_resources": skip_resources,
+        },
     )
     invalidate_query_cache()
     db.refresh(dictionary)
@@ -370,6 +634,30 @@ def set_dictionary_status(
     invalidate_query_cache()
     db.refresh(dictionary)
     return dictionary
+
+
+def set_dictionaries_status(
+    db: Session, dictionary_ids: list[int], status: str, admin_id: int
+) -> list[Dictionary]:
+    """批量启用/停用。
+
+    逐个复用 set_dictionary_status，这样审计日志（每部词典一条）与查询缓存失效的行为和单部操作
+    完全一致，事后能追溯到是哪一次批量操作改了哪几部。重复 ID 去重；只要有一个 ID 不存在就整批
+    拒绝，避免留下"改了一半"的中间状态。
+    """
+    # 与 dictionaries.status 的 CHECK 约束一致；先校验一次，避免整批跑到一半才被数据库拒绝
+    if status not in ("enabled", "disabled"):
+        raise ValidationAppError(f"不支持的状态：{status}")
+
+    unique_ids = list(dict.fromkeys(dictionary_ids))
+    existing = {
+        row.id for row in db.query(Dictionary.id).filter(Dictionary.id.in_(unique_ids)).all()
+    }
+    missing = [dict_id for dict_id in unique_ids if dict_id not in existing]
+    if missing:
+        raise ConflictError(f"包含不存在的词典 ID：{missing}")
+
+    return [set_dictionary_status(db, dict_id, status, admin_id) for dict_id in unique_ids]
 
 
 def update_dictionary_metadata(

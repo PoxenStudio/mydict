@@ -1,6 +1,7 @@
 import request from '../request'
 import type {
   DictionaryItem,
+  DictionaryStatus,
   DictionaryUpdatePayload,
   DictsDirListing,
   ImportFromDictsDirPayload,
@@ -17,9 +18,12 @@ export function uploadDictionary(form: FormData) {
   })
 }
 
-export function listDictsDirFiles(path = '') {
+export function listDictsDirFiles(path = '', recursive = false) {
+  const params: Record<string, string | boolean> = {}
+  if (path) params.path = path
+  if (recursive) params.recursive = true
   return request.get<never, DictsDirListing>('/admin/dictionaries/dicts-dir-files', {
-    params: path ? { path } : undefined,
+    params: Object.keys(params).length ? params : undefined,
   })
 }
 
@@ -40,6 +44,13 @@ export function enableDictionary(id: number) {
 
 export function disableDictionary(id: number) {
   return request.put<never, DictionaryItem>(`/admin/dictionaries/${id}/disable`)
+}
+
+export function setBatchStatus(dictionaryIds: number[], status: DictionaryStatus) {
+  return request.put<never, DictionaryItem[]>('/admin/dictionaries/batch-status', {
+    dictionary_ids: dictionaryIds,
+    status,
+  })
 }
 
 export function deleteDictionary(id: number) {

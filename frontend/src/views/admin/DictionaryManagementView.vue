@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Back, Document, Folder, HomeFilled } from '@element-plus/icons-vue'
+import { Back, Folder, HomeFilled } from '@element-plus/icons-vue'
 import * as dictApi from '../../api/admin/dictionaries'
 import * as tasksApi from '../../api/admin/tasks'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
 import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
+import type { BackgroundTask } from '../../types/backgroundTask'
 import type {
   DictionaryFormat,
   DictionaryItem,
+  DictionaryStatus,
   DictsDirFile,
+  DictsDirGroup,
   TestQueryEntry,
 } from '../../types/dictionary'
 
@@ -20,6 +23,8 @@ async function loadDictionaries() {
   loading.value = true
   try {
     dictionaries.value = await dictApi.listDictionaries()
+    // 列表是重新拉的，之前的勾选可能已经失效，统一清空
+    selectedIds.value = []
   } finally {
     loading.value = false
   }
@@ -35,6 +40,44 @@ async function toggleStatus(item: DictionaryItem) {
       : await dictApi.enableDictionary(item.id)
   const index = dictionaries.value.findIndex((d) => d.id === item.id)
   if (index !== -1) dictionaries.value[index] = updated
+}
+
+// --- 批量启用/停用 ---
+const selectedIds = ref<number[]>([])
+const statusBatchRunning = ref(false)
+
+const allSelected = computed(
+  () => dictionaries.value.length > 0 && selectedIds.value.length === dictionaries.value.length,
+)
+const someSelected = computed(
+  () => selectedIds.value.length > 0 && selectedIds.value.length < dictionaries.value.length,
+)
+
+function toggleSelect(id: number) {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter((item) => item !== id)
+    : [...selectedIds.value, id]
+}
+
+function toggleSelectAll(checked: string | number | boolean) {
+  selectedIds.value = checked ? dictionaries.value.map((item) => item.id) : []
+}
+
+async function batchSetStatus(status: DictionaryStatus) {
+  if (selectedIds.value.length === 0) return
+  const ids = [...selectedIds.value]
+  statusBatchRunning.value = true
+  try {
+    const updated = await dictApi.setBatchStatus(ids, status)
+    for (const item of updated) {
+      const index = dictionaries.value.findIndex((d) => d.id === item.id)
+      if (index !== -1) dictionaries.value[index] = item
+    }
+    selectedIds.value = []
+    ElMessage.success(`已${status === 'enabled' ? '启用' : '停用'} ${updated.length} 部词典`)
+  } finally {
+    statusBatchRunning.value = false
+  }
 }
 
 // --- 编辑名称/语言方向 ---
@@ -122,6 +165,8 @@ async function onDrop(targetIndex: number) {
 }
 
 // --- 导入弹窗 ---
+type GroupImportStatus = 'pending' | 'imported' | 'importing' | 'success' | 'error' | 'blocked'
+
 const importDialogVisible = ref(false)
 const importMode = ref<'upload' | 'dicts-dir'>('upload')
 const importing = ref(false)
@@ -132,30 +177,47 @@ const importForm = reactive({
   lang_to: 'zh-Hans',
 })
 const uploadFileList = ref<File[]>([])
-const dictsDirEntries = ref<DictsDirFile[]>([])
-const dictsDirPath = ref('')
-const selectedDictsDirFiles = ref<string[]>([])
-const dictsDirSingleFile = ref('')
 // ECDICT 一个 CSV 就是一部完整词典，选多个会被后端拒绝（EcdictParser 只认第一个），
 // 界面上直接限制成单选，避免选完提交才报错。
 const isSingleFileFormat = computed(() => importForm.format === 'ecdict')
+
+// 「从服务器目录导入」不再逐个勾选文件、手填名称与格式：服务端按 (格式, 主干) 把目录里
+// 的文件归组成词典单元，名称与格式自动给出（可改），语言方向则在导入时自动识别。
+const dictsDirPath = ref('')
+// 用户的词典常常是「一个文件夹一部」，所以默认只扫当前层；勾上后连子目录一起扫，
+// 一次就能把整库列出来（这正是「批量导入文件夹」要的效果）。
+const dictsDirRecursive = ref(false)
+// 只导入释义、不解包 .mdd 里的图片/发音。大词典的 .mdd 常有几个 GB，解包一份等于
+// 再占一份磁盘，勾上后占用能降一个数量级，代价是没有发音和插图。
+const skipResources = ref(false)
+const dictsDirDirectories = ref<DictsDirFile[]>([])
+const dictsDirDictionaries = ref<DictsDirGroup[]>([])
+const dictsDirSkipped = ref<string[]>([])
+const selectedGroupKeys = ref<string[]>([])
+const groupNames = reactive<Record<string, string>>({})
+const groupStatus = reactive<Record<string, GroupImportStatus>>({})
+const groupError = reactive<Record<string, string>>({})
+const groupLangs = reactive<Record<string, string>>({})
+const groupWordCounts = reactive<Record<string, number>>({})
+const batchRunning = ref(false)
+// 点「停止导入剩余」后置位：在途那一部照旧跑完（后端没有取消能力），只是不再调度后面的。
+const batchCancelled = ref(false)
+const batchSummary = ref('')
+
+const FORMAT_LABELS: Record<DictionaryFormat, string> = {
+  mdict: 'MDict',
+  stardict: 'StarDict',
+  ecdict: 'ECDICT',
+}
 
 // 切换格式后旧的文件选择大概率不再适用（后缀都对不上），统一清空避免残留无效状态
 watch(
   () => importForm.format,
   () => {
+    if (importMode.value !== 'upload') return
     uploadFileList.value = []
-    selectedDictsDirFiles.value = []
-    dictsDirSingleFile.value = ''
   },
 )
-
-// 目录里的选择只在当前目录有效，切到别的目录后沿用旧选择容易造成误解（选中的文件已经
-// 看不见了），统一清空
-watch(dictsDirPath, () => {
-  selectedDictsDirFiles.value = []
-  dictsDirSingleFile.value = ''
-})
 
 function openImportDialog() {
   importForm.name = ''
@@ -163,42 +225,57 @@ function openImportDialog() {
   importForm.lang_from = 'en'
   importForm.lang_to = 'zh-Hans'
   uploadFileList.value = []
-  selectedDictsDirFiles.value = []
-  dictsDirSingleFile.value = ''
   importMode.value = 'upload'
+  batchSummary.value = ''
   importDialogVisible.value = true
 }
 
-async function loadDictsDirEntries(path: string) {
-  const listing = await dictApi.listDictsDirFiles(path)
+async function loadDictsDirScan(path: string) {
+  const listing = await dictApi.listDictsDirFiles(path, dictsDirRecursive.value)
   dictsDirPath.value = listing.path
-  dictsDirEntries.value = listing.entries
+  // 递归扫描时列表已经覆盖了整棵子树，目录行只在非递归下用于下钻
+  dictsDirDirectories.value = listing.entries.filter((entry) => entry.is_dir)
+  dictsDirDictionaries.value = listing.dictionaries
+  dictsDirSkipped.value = listing.skipped
+  batchSummary.value = ''
+  for (const group of listing.dictionaries) {
+    groupNames[group.key] = group.name
+    // 重新扫描的结果是权威的：整组文件都已被导入过就标「已导入」，否则回到待导入
+    groupStatus[group.key] = group.imported ? 'imported' : group.importable ? 'pending' : 'blocked'
+    delete groupError[group.key]
+    delete groupLangs[group.key]
+    delete groupWordCounts[group.key]
+  }
+  // 缺件和已导入的默认不勾选；已导入的仍可手动勾上重新导入成另一部词典
+  selectedGroupKeys.value = listing.dictionaries
+    .filter((group) => group.importable && !group.imported)
+    .map((group) => group.key)
 }
 
-async function switchToDictsDirTab() {
-  importMode.value = 'dicts-dir'
-  await loadDictsDirEntries('')
+function toggleRecursive() {
+  loadDictsDirScan(dictsDirPath.value)
 }
 
 function openDictsDirEntry(entry: DictsDirFile) {
   if (!entry.is_dir) return
-  loadDictsDirEntries(dictsDirPath.value ? `${dictsDirPath.value}/${entry.name}` : entry.name)
+  loadDictsDirScan(dictsDirPath.value ? `${dictsDirPath.value}/${entry.name}` : entry.name)
 }
 
 function goToDictsDirRoot() {
-  if (dictsDirPath.value) loadDictsDirEntries('')
+  if (dictsDirPath.value) loadDictsDirScan('')
 }
 
 function goToDictsDirParent() {
   if (!dictsDirPath.value) return
   const parts = dictsDirPath.value.split('/')
   parts.pop()
-  loadDictsDirEntries(parts.join('/'))
+  loadDictsDirScan(parts.join('/'))
 }
 
 function handleTabChange(name: string | number) {
   if (name === 'dicts-dir') {
-    switchToDictsDirTab()
+    importMode.value = 'dicts-dir'
+    loadDictsDirScan('')
   } else {
     importMode.value = 'upload'
   }
@@ -215,6 +292,77 @@ function handleFileChange(uploadFile: { raw?: File }) {
 
 function removeUploadFile(index: number) {
   uploadFileList.value.splice(index, 1)
+}
+
+function toggleAllGroups(checked: string | number | boolean) {
+  selectedGroupKeys.value = checked
+    ? dictsDirDictionaries.value.filter((group) => group.importable).map((group) => group.key)
+    : []
+}
+
+const allGroupsSelected = computed(() => {
+  const keys = dictsDirDictionaries.value.filter((group) => group.importable)
+  return keys.length > 0 && keys.every((group) => selectedGroupKeys.value.includes(group.key))
+})
+
+const someGroupsSelected = computed(
+  () => selectedGroupKeys.value.length > 0 && !allGroupsSelected.value,
+)
+
+// 一部词典单文件就可能几个 GB（解析时还会把 .mdd 资源全量展开到磁盘），勾选时先把总量
+// 摆出来，免得一次全选把磁盘写满。
+const selectedTotalSize = computed(() =>
+  dictsDirDictionaries.value
+    .filter((group) => selectedGroupKeys.value.includes(group.key))
+    .reduce((sum, group) => sum + group.total_size, 0),
+)
+
+// 本次批量里已成功导入的那些词典的源文件。只用来告知「这些文件已不再被查词读取」，
+// 程序不会删除任何文件——删不删、什么时候删由用户自己决定（见 README）。
+const importedSources = computed(() => {
+  const done = dictsDirDictionaries.value.filter((group) => groupStatus[group.key] === 'success')
+  return {
+    files: done.flatMap((group) => group.files.map((file) => file.relpath)),
+    size: done.reduce((sum, group) => sum + group.total_size, 0),
+  }
+})
+
+function groupStatusLabel(group: DictsDirGroup) {
+  switch (groupStatus[group.key]) {
+    case 'blocked':
+      return group.reason ?? '文件不完整'
+    case 'imported':
+      return '已导入'
+    case 'importing':
+      return '导入中…'
+    case 'success':
+      return '成功'
+    case 'error':
+      return groupError[group.key] ?? '失败'
+    default:
+      return '待导入'
+  }
+}
+
+function groupStatusTagType(group: DictsDirGroup) {
+  switch (groupStatus[group.key]) {
+    case 'success':
+      return 'success'
+    case 'error':
+      return 'danger'
+    case 'importing':
+    case 'blocked':
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 function sleep(ms: number) {
@@ -234,53 +382,120 @@ async function waitForImportTask(taskId: number) {
   }
 }
 
-async function submitImport() {
+// result 在类型上是 Record<string, unknown>，这里逐字段收窄，避免到处断言
+function resultNumber(task: BackgroundTask, key: string): number | null {
+  const value = task.result?.[key]
+  return typeof value === 'number' ? value : null
+}
+
+function resultString(task: BackgroundTask, key: string): string | null {
+  const value = task.result?.[key]
+  return typeof value === 'string' ? value : null
+}
+
+function errorMessage(err: unknown): string {
+  const serverMessage = (err as { response?: { data?: { message?: string } } })?.response?.data
+    ?.message
+  if (serverMessage) return serverMessage
+  return err instanceof Error ? err.message : '导入失败'
+}
+
+async function submitUploadImport(): Promise<number> {
   if (!importForm.name.trim()) {
     ElMessage.warning('请填写词典名称')
+    throw new Error('请填写词典名称')
+  }
+  if (uploadFileList.value.length === 0) {
+    ElMessage.warning('请选择要上传的词典文件')
+    throw new Error('请选择要上传的词典文件')
+  }
+  const form = new FormData()
+  form.append('name', importForm.name)
+  form.append('format', importForm.format)
+  form.append('lang_from', importForm.lang_from)
+  form.append('lang_to', importForm.lang_to)
+  uploadFileList.value.forEach((file) => form.append('files', file))
+  return (await dictApi.uploadDictionary(form)).task_id
+}
+
+// 逐部串行导入：一步只跑一部，既避免并发争抢 SQLite 的写锁，也让每一部都有独立的
+// 成功/失败状态（某一部坏了不影响其余）。中途关掉弹窗时在途那部会跑完，剩下的不再调度。
+async function submitBatchImport() {
+  const selected = dictsDirDictionaries.value.filter((group) =>
+    selectedGroupKeys.value.includes(group.key),
+  )
+  if (selected.length === 0) {
+    ElMessage.warning('请选择要导入的词典')
+    return
+  }
+
+  importing.value = true
+  batchRunning.value = true
+  batchCancelled.value = false
+  batchSummary.value = ''
+  let succeeded = 0
+  let failed = 0
+  try {
+    for (const group of selected) {
+      if (batchCancelled.value) break
+      const name = (groupNames[group.key] ?? '').trim()
+      if (!name) {
+        groupStatus[group.key] = 'error'
+        groupError[group.key] = '请填写词典名称'
+        failed += 1
+        continue
+      }
+      groupStatus[group.key] = 'importing'
+      delete groupError[group.key]
+      try {
+        // 不传语言方向：由服务端按词头/释义的文字种类自动识别
+        const { task_id: taskId } = await dictApi.importFromDictsDir({
+          name,
+          format: group.format,
+          skip_resources: skipResources.value,
+          files: group.files.map((file) => file.relpath),
+        })
+        const task = await waitForImportTask(taskId)
+        groupStatus[group.key] = 'success'
+        const from = resultString(task, 'lang_from')
+        const to = resultString(task, 'lang_to')
+        groupLangs[group.key] = from && to ? `${langLabel(from)} → ${langLabel(to)}` : ''
+        groupWordCounts[group.key] = resultNumber(task, 'word_count') ?? 0
+        succeeded += 1
+        // 就地标记已导入，不重新扫描：重新扫描会把这一行立刻刷成「已导入」，
+        // 刚识别出来的语言方向就看不到了，管理员也就无从判断识别得对不对。
+        const index = dictsDirDictionaries.value.findIndex((item) => item.key === group.key)
+        if (index !== -1) {
+          dictsDirDictionaries.value[index] = { ...group, imported: true }
+        }
+        selectedGroupKeys.value = selectedGroupKeys.value.filter((key) => key !== group.key)
+      } catch (err) {
+        groupStatus[group.key] = 'error'
+        groupError[group.key] = errorMessage(err)
+        failed += 1
+      }
+    }
+    await loadDictionaries()
+    batchSummary.value = `本次导入：成功 ${succeeded} 部，失败 ${failed} 部`
+    if (failed === 0) {
+      ElMessage.success(`批量导入完成，共导入 ${succeeded} 部词典`)
+    }
+  } finally {
+    importing.value = false
+    batchRunning.value = false
+  }
+}
+
+async function submitImport() {
+  if (importMode.value === 'dicts-dir') {
+    await submitBatchImport()
     return
   }
   importing.value = true
   try {
-    let taskId: number
-    if (importMode.value === 'upload') {
-      if (uploadFileList.value.length === 0) {
-        ElMessage.warning('请选择要上传的词典文件')
-        return
-      }
-      const form = new FormData()
-      form.append('name', importForm.name)
-      form.append('format', importForm.format)
-      form.append('lang_from', importForm.lang_from)
-      form.append('lang_to', importForm.lang_to)
-      uploadFileList.value.forEach((file) => form.append('files', file))
-      taskId = (await dictApi.uploadDictionary(form)).task_id
-    } else {
-      // 选择结果只是当前目录内的文件名，后端需要相对 /data/dicts 的完整路径才能定位到子目录
-      const toFullPath = (name: string) =>
-        dictsDirPath.value ? `${dictsDirPath.value}/${name}` : name
-      const names = isSingleFileFormat.value
-        ? dictsDirSingleFile.value
-          ? [dictsDirSingleFile.value]
-          : []
-        : selectedDictsDirFiles.value
-      const files = names.map(toFullPath)
-      if (files.length === 0) {
-        ElMessage.warning('请选择服务器目录下的词典文件')
-        return
-      }
-      taskId = (
-        await dictApi.importFromDictsDir({
-          name: importForm.name,
-          format: importForm.format,
-          lang_from: importForm.lang_from,
-          lang_to: importForm.lang_to,
-          files,
-        })
-      ).task_id
-    }
-    const task = await waitForImportTask(taskId)
+    const task = await waitForImportTask(await submitUploadImport())
     await loadDictionaries()
-    ElMessage.success(`导入成功，共 ${task.result?.word_count ?? 0} 条词条`)
+    ElMessage.success(`导入成功，共 ${resultNumber(task, 'word_count') ?? 0} 条词条`)
     importDialogVisible.value = false
   } catch (err) {
     // axios 请求本身失败（如校验不通过的 4xx）已经由响应拦截器统一弹出错误提示，
@@ -331,8 +546,29 @@ function definitionHtml(definition: string) {
       <el-button type="primary" @click="openImportDialog">导入词典</el-button>
     </div>
 
+    <div v-if="selectedIds.length" class="batch-bar">
+      <span class="batch-count">已选 {{ selectedIds.length }} 部</span>
+      <el-button size="small" :loading="statusBatchRunning" @click="batchSetStatus('enabled')">
+        批量启用
+      </el-button>
+      <el-button size="small" :loading="statusBatchRunning" @click="batchSetStatus('disabled')">
+        批量停用
+      </el-button>
+      <el-button text size="small" :disabled="statusBatchRunning" @click="selectedIds = []">
+        取消选择
+      </el-button>
+    </div>
+
     <div v-loading="loading" class="dict-list">
       <div class="dict-list-header">
+        <span class="col-select">
+          <el-checkbox
+            :model-value="allSelected"
+            :indeterminate="someSelected"
+            aria-label="全选词典"
+            @change="toggleSelectAll"
+          />
+        </span>
         <span class="col-drag"></span>
         <span class="col-name">名称</span>
         <span class="col-format">格式</span>
@@ -346,20 +582,34 @@ function definitionHtml(definition: string) {
         v-for="(item, index) in dictionaries"
         :key="item.id"
         class="dict-row"
+        :class="{ selected: selectedIds.includes(item.id) }"
         draggable="true"
         @dragstart="onDragStart(index)"
         @dragover.prevent
         @drop="onDrop(index)"
       >
+        <span class="col-select" @click.stop>
+          <el-checkbox
+            :model-value="selectedIds.includes(item.id)"
+            :aria-label="`选择 ${item.name}`"
+            @change="toggleSelect(item.id)"
+          />
+        </span>
         <span class="col-drag" title="拖拽调整顺序">⠿</span>
         <span class="col-name">{{ item.name }}</span>
         <span class="col-format"
           ><el-tag size="small">{{ item.format }}</el-tag></span
         >
-        <span class="col-lang">{{ langLabel(item.lang_from) }} → {{ langLabel(item.lang_to) }}</span>
+        <span class="col-lang"
+          >{{ langLabel(item.lang_from) }} → {{ langLabel(item.lang_to) }}</span
+        >
         <span class="col-count">{{ item.word_count }}</span>
         <span class="col-status">
-          <el-switch :model-value="item.status === 'enabled'" @change="toggleStatus(item)" />
+          <el-switch
+            :model-value="item.status === 'enabled'"
+            :loading="statusBatchRunning"
+            @change="toggleStatus(item)"
+          />
         </span>
         <span class="col-actions">
           <el-button text @click="openEdit(item)">编辑</el-button>
@@ -407,49 +657,60 @@ function definitionHtml(definition: string) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="importDialogVisible" title="导入词典" width="560px">
+    <el-dialog
+      v-model="importDialogVisible"
+      title="导入词典"
+      width="560px"
+      :close-on-click-modal="!batchRunning"
+      :close-on-press-escape="!batchRunning"
+      :show-close="!batchRunning"
+    >
       <el-tabs :model-value="importMode" @tab-change="handleTabChange">
         <el-tab-pane label="上传文件" name="upload" />
         <el-tab-pane label="从服务器目录导入" name="dicts-dir" />
       </el-tabs>
 
       <el-form label-position="top">
-        <el-form-item label="词典名称">
-          <el-input v-model="importForm.name" placeholder="如：牛津高阶英汉双解词典" />
-        </el-form-item>
-        <el-form-item label="格式">
-          <el-select v-model="importForm.format" style="width: 100%">
-            <el-option label="MDict" value="mdict" />
-            <el-option label="StarDict" value="stardict" />
-            <el-option label="ECDICT" value="ecdict" />
-          </el-select>
-        </el-form-item>
-        <div class="lang-row">
-          <el-form-item label="源语言">
-            <el-select v-model="importForm.lang_from" style="width: 100%">
-              <el-option
-                v-for="opt in LANGUAGE_OPTIONS"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="目标语言">
-            <el-select v-model="importForm.lang_to" style="width: 100%">
-              <el-option
-                v-for="opt in LANGUAGE_OPTIONS"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
-            </el-select>
-          </el-form-item>
-        </div>
-
         <template v-if="importMode === 'upload'">
+          <el-form-item label="词典名称">
+            <el-input v-model="importForm.name" placeholder="如：牛津高阶英汉双解词典" />
+          </el-form-item>
+          <el-form-item label="格式">
+            <el-select v-model="importForm.format" style="width: 100%">
+              <el-option label="MDict" value="mdict" />
+              <el-option label="StarDict" value="stardict" />
+              <el-option label="ECDICT" value="ecdict" />
+            </el-select>
+          </el-form-item>
+          <div class="lang-row">
+            <el-form-item label="源语言">
+              <el-select v-model="importForm.lang_from" style="width: 100%">
+                <el-option
+                  v-for="opt in LANGUAGE_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="目标语言">
+              <el-select v-model="importForm.lang_to" style="width: 100%">
+                <el-option
+                  v-for="opt in LANGUAGE_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+            </el-form-item>
+          </div>
+
           <el-form-item
-            :label="isSingleFileFormat ? '词典文件（ECDICT 只能选 1 个 CSV）' : '词典文件（可多选，如 .mdx + .mdd）'"
+            :label="
+              isSingleFileFormat
+                ? '词典文件（ECDICT 只能选 1 个 CSV）'
+                : '词典文件（可多选，如 .mdx + .mdd）'
+            "
           >
             <el-upload
               :auto-upload="false"
@@ -467,14 +728,9 @@ function definitionHtml(definition: string) {
             </ul>
           </el-form-item>
         </template>
+
         <template v-else>
-          <el-form-item
-            :label="
-              isSingleFileFormat
-                ? '选择服务器 /data/dicts 目录下的文件（ECDICT 只能选 1 个）'
-                : '选择服务器 /data/dicts 目录下的文件'
-            "
-          >
+          <el-form-item label="服务器 /data/dicts 目录">
             <div class="dicts-dir-browser">
               <div class="dicts-dir-path">
                 <el-icon
@@ -493,43 +749,152 @@ function definitionHtml(definition: string) {
                 >
                   <Back />
                 </el-icon>
-                <span class="path-text">/data/dicts{{ dictsDirPath ? '/' + dictsDirPath : '' }}</span>
+                <span class="path-text"
+                  >/data/dicts{{ dictsDirPath ? '/' + dictsDirPath : '' }}</span
+                >
               </div>
+              <div class="dir-options">
+                <el-checkbox
+                  v-model="dictsDirRecursive"
+                  :disabled="batchRunning"
+                  @change="toggleRecursive"
+                  >包含子目录</el-checkbox
+                >
+                <el-checkbox v-model="skipResources" :disabled="batchRunning"
+                  >不导入发音/图片（省空间）</el-checkbox
+                >
+              </div>
+              <p class="hint">
+                已自动识别词典，格式与名称都已填好（名称可改）。语言方向在导入时按词头/释义的文字种类自动识别，导入后可在词典列表里编辑修正。
+              </p>
               <div class="dicts-dir-scroll">
-                <el-radio-group v-if="isSingleFileFormat" v-model="dictsDirSingleFile" class="dicts-dir-options">
-                  <template v-for="f in dictsDirEntries" :key="f.name">
-                    <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
-                      <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
-                    </div>
-                    <el-radio v-else :value="f.name" :disabled="f.imported">
-                      <el-icon class="file-icon"><Document /></el-icon>{{ f.name
-                      }}<span v-if="f.imported" class="hint"> （已导入）</span>
-                    </el-radio>
-                  </template>
-                </el-radio-group>
-                <el-checkbox-group v-else v-model="selectedDictsDirFiles" class="dicts-dir-options">
-                  <template v-for="f in dictsDirEntries" :key="f.name">
-                    <div v-if="f.is_dir" class="dir-row" @click="openDictsDirEntry(f)">
-                      <el-icon class="dir-icon"><Folder /></el-icon>{{ f.name }}
-                    </div>
-                    <el-checkbox v-else :value="f.name" :label="f.name" :disabled="f.imported">
-                      <el-icon class="file-icon"><Document /></el-icon>{{ f.name
-                      }}<span v-if="f.imported" class="hint"> （已导入）</span>
-                    </el-checkbox>
-                  </template>
+                <template v-if="!dictsDirRecursive">
+                  <div
+                    v-for="dir in dictsDirDirectories"
+                    :key="dir.name"
+                    class="dir-row"
+                    @click="openDictsDirEntry(dir)"
+                  >
+                    <el-icon class="dir-icon"><Folder /></el-icon>{{ dir.name }}
+                  </div>
+                </template>
+
+                <div v-if="dictsDirDictionaries.length" class="group-toolbar">
+                  <el-checkbox
+                    :model-value="allGroupsSelected"
+                    :indeterminate="someGroupsSelected"
+                    :disabled="batchRunning"
+                    @change="toggleAllGroups"
+                    >全选</el-checkbox
+                  >
+                  <span class="hint"
+                    >识别到 {{ dictsDirDictionaries.length }} 部，已选
+                    {{ selectedGroupKeys.length }} 部 · {{ formatSize(selectedTotalSize)
+                    }}<template v-if="skipResources"
+                      >（源文件体积；勾了不导入发音/图片，实际占用远小于此）</template
+                    ></span
+                  >
+                </div>
+
+                <el-checkbox-group v-model="selectedGroupKeys" class="dicts-dir-options">
+                  <div v-for="group in dictsDirDictionaries" :key="group.key" class="group-row">
+                    <el-checkbox
+                      :value="group.key"
+                      :disabled="!group.importable || batchRunning"
+                      :title="group.reason ?? ''"
+                      :aria-label="`选择 ${groupNames[group.key] || group.name}`"
+                    />
+                    <el-input
+                      v-model="groupNames[group.key]"
+                      size="small"
+                      class="group-name"
+                      :disabled="!group.importable || batchRunning"
+                      placeholder="词典名称"
+                    />
+                    <el-tag size="small">{{ FORMAT_LABELS[group.format] }}</el-tag>
+                    <el-popover placement="top" trigger="hover" :width="360">
+                      <template #reference>
+                        <span class="hint group-files"
+                          >{{ group.files.length }} 个文件 ·
+                          {{ formatSize(group.total_size) }}</span
+                        >
+                      </template>
+                      <ul class="group-file-list">
+                        <li v-for="file in group.files" :key="file.relpath">
+                          {{ file.relpath
+                          }}<span v-if="file.imported" class="hint"> （已导入）</span>
+                        </li>
+                      </ul>
+                    </el-popover>
+                    <el-tag size="small" class="group-status" :type="groupStatusTagType(group)">{{
+                      groupStatusLabel(group)
+                    }}</el-tag>
+                    <span v-if="groupLangs[group.key]" class="hint group-result">
+                      {{ groupLangs[group.key] }} · {{ groupWordCounts[group.key] }} 条
+                    </span>
+                    <el-popover
+                      v-if="dictsDirRecursive"
+                      placement="top"
+                      trigger="hover"
+                      :width="360"
+                    >
+                      <template #reference>
+                        <span class="hint group-dir">{{ group.dir || '/data/dicts' }}</span>
+                      </template>
+                      <span>{{ group.dir || '/data/dicts' }}</span>
+                    </el-popover>
+                  </div>
                 </el-checkbox-group>
-                <p v-if="dictsDirEntries.length === 0" class="hint">
-                  当前目录下暂无文件，请先将词典文件放入该目录。
+
+                <p v-if="dictsDirDictionaries.length === 0" class="hint">
+                  {{
+                    dictsDirRecursive
+                      ? '该目录及其子目录下都没有识别到词典文件。'
+                      : '当前目录下未识别到词典文件，请先将词典文件放入该目录（可进入子目录继续查看）。'
+                  }}
                 </p>
+                <el-popover
+                  v-if="dictsDirSkipped.length"
+                  placement="top"
+                  trigger="hover"
+                  :width="420"
+                >
+                  <template #reference>
+                    <p class="hint skipped-hint">
+                      已忽略 {{ dictsDirSkipped.length }} 个与词典无关的文件
+                    </p>
+                  </template>
+                  <ul class="group-file-list">
+                    <li v-for="name in dictsDirSkipped" :key="name">{{ name }}</li>
+                  </ul>
+                </el-popover>
               </div>
+              <p v-if="batchSummary" class="hint batch-summary">{{ batchSummary }}</p>
+              <p v-if="importedSources.files.length" class="hint source-note">
+                本次导入的词典已写入数据库，其中 {{ importedSources.files.length }} 个源文件（{{
+                  formatSize(importedSources.size)
+                }}）已不再被查词读取
+                <el-popover placement="top" trigger="hover" :width="460">
+                  <template #reference>
+                    <span class="source-paths">查看列表</span>
+                  </template>
+                  <ul class="group-file-list">
+                    <li v-for="path in importedSources.files" :key="path">{{ path }}</li>
+                  </ul>
+                </el-popover>
+                ；确认另有备份后可自行删除以释放空间（本程序不会自动删除任何文件）。
+              </p>
             </div>
           </el-form-item>
         </template>
       </el-form>
 
       <template #footer>
-        <el-button @click="importDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="importing" @click="submitImport">开始导入</el-button>
+        <el-button v-if="batchRunning" @click="batchCancelled = true">停止导入剩余</el-button>
+        <el-button :disabled="batchRunning" @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importing" @click="submitImport">
+          {{ importMode === 'dicts-dir' ? '批量导入' : '开始导入' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -592,10 +957,27 @@ function definitionHtml(definition: string) {
   overflow: hidden;
 }
 
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevation-1);
+  font-size: var(--text-sm);
+}
+
+.batch-count {
+  margin-right: var(--space-2);
+  color: var(--color-text-secondary);
+}
+
 .dict-list-header,
 .dict-row {
   display: grid;
-  grid-template-columns: 32px 2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
+  grid-template-columns: 32px 32px 2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -615,6 +997,16 @@ function definitionHtml(definition: string) {
 
 .dict-row:hover {
   background: var(--color-hover-tint);
+}
+
+.dict-row.selected {
+  background: var(--color-hover-tint);
+}
+
+.col-select {
+  display: flex;
+  align-items: center;
+  cursor: default;
 }
 
 .col-drag {
@@ -699,7 +1091,8 @@ function definitionHtml(definition: string) {
 }
 
 .dicts-dir-scroll {
-  max-height: 240px;
+  /* 分组后每行是「勾选框 + 名称输入框 + 标签」的词典单元，比原来的单行文件名高不少 */
+  max-height: 320px;
   overflow-y: auto;
 }
 
@@ -708,6 +1101,88 @@ function definitionHtml(definition: string) {
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-2);
+}
+
+.group-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  /* 同 .dir-row：el-checkbox-group 把 font-size/line-height 重置成 0，普通 div 不在
+     它逐个恢复的范围内，不显式设回来文字与图标会一起塌缩。 */
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.group-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.group-name {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+
+.group-files,
+.group-status,
+.group-result,
+.group-dir {
+  flex-shrink: 0;
+}
+
+.group-dir {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.dir-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.source-note {
+  margin-top: var(--space-2);
+}
+
+.source-paths {
+  color: var(--color-brand-600);
+  cursor: default;
+  text-decoration: underline;
+}
+
+.skipped-hint {
+  cursor: default;
+}
+
+.group-files {
+  cursor: default;
+}
+
+.group-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.batch-summary {
+  margin-top: var(--space-2);
 }
 
 .dir-row {
@@ -731,12 +1206,6 @@ function definitionHtml(definition: string) {
 .dir-icon {
   margin-right: var(--space-1);
   color: var(--color-text-secondary);
-  vertical-align: -0.15em;
-}
-
-.file-icon {
-  margin-right: var(--space-1);
-  color: var(--color-text-tertiary);
   vertical-align: -0.15em;
 }
 

@@ -47,7 +47,7 @@ class EcdictParser(DictionaryParser):
         file_paths: list[Path],
         *,
         dictionary_id: int,
-        resource_dir: Path,
+        resource_dir: Path | None,
     ) -> Iterator[ParsedEntry]:
         csv_path = file_paths[0]
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -68,3 +68,19 @@ class EcdictParser(DictionaryParser):
                     phonetic=(row.get("phonetic") or "").strip() or None,
                     extra=_build_extra(row),
                 )
+
+    def sample(self, file_paths: list[Path], limit: int) -> list[ParsedEntry]:
+        """只读前 limit 行；采样不需要 phonetic/extra，省掉 _build_extra 的 JSON 解析。"""
+        sampled: list[ParsedEntry] = []
+        with file_paths[0].open("r", encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                word = (row.get("word") or "").strip()
+                if not word:
+                    continue
+                definition_en = (row.get("definition") or "").strip()
+                translation_zh = (row.get("translation") or "").strip()
+                combined = "\n\n".join(part for part in (definition_en, translation_zh) if part)
+                sampled.append(ParsedEntry(word=word, definition=combined))
+                if len(sampled) >= limit:
+                    break
+        return sampled
