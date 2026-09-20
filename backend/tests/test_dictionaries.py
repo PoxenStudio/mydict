@@ -1,6 +1,8 @@
 import csv
 import io
+import os
 import struct
+from pathlib import Path
 
 from httpx import AsyncClient
 
@@ -470,3 +472,757 @@ async def test_incomplete_stardict_upload_returns_clean_error(
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
     assert task["status"] == "error"
     assert task["error"]
+
+
+# --- 从服务器目录导入：自动归组与语言自动识别 ---
+# 目录扫描的用例统一写进各自的 scan-<name> 子目录：整个测试会话共用同一个 /data/dicts，
+# 只有各用各的子目录才能对归组结果做精确断言，不受其它用例留下的文件干扰。
+
+
+def _write_scratch(name: str, files: dict[str, bytes]) -> str:
+    """把文件写进 scan-<name> 子目录，返回相对 /data/dicts 的路径。"""
+    inbox = get_settings().dicts_inbox_path
+    rel = f"scan-{name}"
+    for filename, content in files.items():
+        target = os.path.join(inbox, rel, filename)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(content)
+    return rel
+
+
+def _groups_of(body: dict) -> dict[str, dict]:
+    return {g["key"]: g for g in body["dictionaries"]}
+
+
+def _ecdict_csv_bytes_many(count: int = 20) -> bytes:
+    """足量行数的英汉 ECDICT 样本，用于验证语言方向的自动识别。"""
+    fieldnames = [
+        "word",
+        "phonetic",
+        "definition",
+        "translation",
+        "pos",
+        "collins",
+        "oxford",
+        "tag",
+        "bnc",
+        "frq",
+        "exchange",
+        "detail",
+        "audio",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames)
+    writer.writeheader()
+    for i in range(count):
+        writer.writerow(
+            {k: "" for k in fieldnames}
+            | {"word": f"apple{i:03d}", "translation": "苹果，一种落叶乔木的果实"}
+        )
+    return buf.getvalue().encode("utf-8")
+
+
+async def test_dicts_dir_scan_groups_stardict_and_uses_bookname(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch("basic", _build_stardict_bytes())
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    group = _groups_of(resp.json())["stardict:greeting"]
+
+    assert group["format"] == "stardict"
+    # 名称优先取 .ifo 的 bookname，省掉手填
+    assert group["name"] == "Greeting"
+    assert group["importable"] is True
+    assert group["reason"] is None
+    assert group["imported"] is False
+    assert [f["relpath"] for f in group["files"]] == [
+        f"{rel}/greeting.dict",
+        f"{rel}/greeting.idx",
+        f"{rel}/greeting.ifo",
+    ]
+    assert group["total_size"] == sum(f["size"] for f in group["files"])
+
+
+async def test_dicts_dir_scan_keeps_same_stem_formats_apart(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """同主干的 .mdx 与 .ifo 是两部不同格式的词典，不能因为主干相同并成一组。"""
+    rel = _write_scratch(
+        "merge",
+        {
+            "foo.mdx": b"m" * 10,
+            "foo.mdd": b"m" * 10,
+            "foo.ifo": b"StarDict's dict ifo file\nbookname=Foo StarDict\n",
+            "foo.idx": b"i" * 10,
+            "foo.dict": b"d" * 10,
+        },
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    groups = _groups_of(resp.json())
+
+    assert set(groups) == {"mdict:foo", "stardict:foo"}
+    assert groups["mdict:foo"]["format"] == "mdict"
+    assert groups["stardict:foo"]["format"] == "stardict"
+    assert groups["stardict:foo"]["name"] == "Foo StarDict"
+
+
+async def test_dicts_dir_scan_handles_double_suffix_and_case(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """x.idx.gz / x.dict.dz 是双后缀，且文件名大小写不应影响归组。"""
+    rel = _write_scratch(
+        "suffix",
+        {
+            "X.IFO": b"StarDict's dict ifo file\nbookname=Upper Case\n",
+            "X.IDX.GZ": b"",
+            "X.DICT.DZ": b"",
+        },
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    groups = _groups_of(resp.json())
+
+    assert list(groups) == ["stardict:x"]
+    assert groups["stardict:x"]["importable"] is True
+    assert groups["stardict:x"]["name"] == "Upper Case"
+
+
+async def test_dicts_dir_scan_marks_incomplete_groups_unimportable(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch(
+        "incomplete",
+        {"solo.mdd": b"m" * 10, "only.ifo": b"StarDict's dict ifo file\nbookname=Only\n"},
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    groups = _groups_of(resp.json())
+
+    # 残缺文件仍然列出来（让人看到），但明确标成不可导入并说明缺什么
+    assert groups["mdict:solo"]["importable"] is False
+    assert ".mdx" in groups["mdict:solo"]["reason"]
+    assert [f["name"] for f in groups["mdict:solo"]["files"]] == ["solo.mdd"]
+
+    assert groups["stardict:only"]["importable"] is False
+    assert ".idx" in groups["stardict:only"]["reason"]
+
+
+async def test_dicts_dir_scan_skips_unrelated_files(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch(
+        "skipped",
+        {"readme.txt": b"hello", "cover.png": b"\x89PNG", "solo.csv": b"word,translation\n"},
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    body = resp.json()
+
+    # 忽略的文件按相对 /data/dicts 的路径给出，递归扫描时不同目录下的同名文件才区分得开
+    assert body["skipped"] == [f"{rel}/cover.png", f"{rel}/readme.txt"]
+    assert list(_groups_of(body)) == ["ecdict:solo"]
+
+
+async def test_dicts_dir_scan_separates_multiple_ecdict_csvs(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """ECDICT 一个 CSV 就是一部完整词典，多个 CSV 必须各自成组而不是被并在一起。"""
+    rel = _write_scratch(
+        "csvs",
+        {"dict_a.csv": b"word,translation\napple,fruit\n", "dict_b.csv": b"word,translation\n"},
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    groups = _groups_of(resp.json())
+
+    assert set(groups) == {"ecdict:dict_a", "ecdict:dict_b"}
+    for key, expected in (("ecdict:dict_a", "dict_a"), ("ecdict:dict_b", "dict_b")):
+        assert groups[key]["name"] == expected
+        assert len(groups[key]["files"]) == 1
+        assert groups[key]["importable"] is True
+
+
+async def test_dicts_dir_scan_marks_imported_after_import(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch("imported", _build_stardict_bytes())
+    stardict_files = _build_stardict_bytes()
+
+    await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Scan Imported",
+            "format": "stardict",
+            "lang_from": "en",
+            "lang_to": "zh",
+            "files": [f"{rel}/{name}" for name in stardict_files],
+        },
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    group = _groups_of(resp.json())["stardict:greeting"]
+
+    assert group["imported"] is True
+    assert all(f["imported"] is True for f in group["files"])
+
+
+async def test_dicts_dir_scan_is_non_recursive(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch("nested", {"inner/ecdict.csv": _ecdict_csv_bytes_many(2)})
+
+    # 只扫当前层：看得到 inner 目录，但看不到它里面的 CSV
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    body = resp.json()
+    assert body["dictionaries"] == []
+    assert {e["name"]: e for e in body["entries"]}["inner"]["is_dir"] is True
+
+    # 进到子目录才归组，且 relpath 带上子目录前缀
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": f"{rel}/inner"},
+        headers=admin_headers,
+    )
+    groups = _groups_of(resp.json())
+    assert list(groups) == ["ecdict:ecdict"]
+    assert groups["ecdict:ecdict"]["files"][0]["relpath"] == f"{rel}/inner/ecdict.csv"
+
+
+async def test_dicts_dir_files_requires_admin(client: AsyncClient) -> None:
+    resp = await client.get("/api/admin/dictionaries/dicts-dir-files")
+    assert resp.status_code == 401
+
+
+async def test_dicts_dir_scan_merges_multi_volume_mdd(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """MDict 超限时会拆卷成 X.mdd / X.1.mdd / X.2.mdd。
+
+    这些卷必须并进 X.mdx 那一组：否则既会多出一堆「缺少 .mdx」的假分组，导入时也会漏掉
+    这些资源（真实词典库里 7 部词典的多卷资源都踩过这个坑）。
+    """
+    rel = _write_scratch(
+        "volume",
+        {
+            "big.mdx": b"x" * 10,
+            "big.mdd": b"r" * 10,
+            "big.1.mdd": b"r" * 20,
+            "big.2.mdd": b"r" * 30,
+        },
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    body = resp.json()
+    groups = _groups_of(body)
+
+    assert list(groups) == ["mdict:big"]
+    assert groups["mdict:big"]["importable"] is True
+    # 名称与主干取 .mdx 的，不能被排序在前面的「big.1」占了
+    assert groups["mdict:big"]["name"] == "big"
+    assert [f["name"] for f in groups["mdict:big"]["files"]] == [
+        "big.1.mdd",
+        "big.2.mdd",
+        "big.mdd",
+        "big.mdx",
+    ]
+    assert groups["mdict:big"]["total_size"] == 70
+    assert body["skipped"] == []
+
+
+async def test_dicts_dir_scan_keeps_orphan_mdd_separate(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """没有同名 .mdx 的 .1.mdd 不能被当成谁的卷吞掉，仍要单独列出并标缺件。"""
+    rel = _write_scratch("orphan", {"lonely.1.mdd": b"r" * 10, "lonely.mdx": b"x" * 10})
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    groups = _groups_of(resp.json())
+
+    # lonely.1.mdd 能对上 lonely.mdx，属于正常并卷
+    assert list(groups) == ["mdict:lonely"]
+    assert groups["mdict:lonely"]["importable"] is True
+
+    # 换成对不上的主干就该自成一组的缺件项
+    rel2 = _write_scratch("orphan2", {"stray.1.mdd": b"r" * 10, "other.mdx": b"x" * 10})
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel2}, headers=admin_headers
+    )
+    groups2 = _groups_of(resp.json())
+    assert set(groups2) == {"mdict:stray.1", "mdict:other"}
+    assert groups2["mdict:stray.1"]["importable"] is False
+    assert "缺少 .mdx" in groups2["mdict:stray.1"]["reason"]
+
+
+async def test_dicts_dir_scan_recursive_finds_nested_dictionaries(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """递归扫描要把各子目录里的词典都列出来——用户的词典就是一文件夹一部。"""
+    stardict = _build_stardict_bytes()
+    rel = _write_scratch(
+        "recursive",
+        {"alpha/" + name: content for name, content in stardict.items()}
+        | {"beta/nested.csv": _ecdict_csv_bytes_many(2)},
+    )
+
+    # 不递归时根目录下没有文件，应该是空的
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    assert resp.json()["dictionaries"] == []
+
+    # 递归后两部都出现，并带上各自所在目录
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+    groups = _groups_of(resp.json())
+    assert set(groups) == {"stardict:greeting", "ecdict:nested"}
+    assert groups["stardict:greeting"]["dir"] == f"{rel}/alpha"
+    assert groups["ecdict:nested"]["dir"] == f"{rel}/beta"
+    assert all(g["importable"] for g in groups.values())
+
+
+async def test_dicts_dir_scan_recursive_uses_directory_name(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """一个文件夹只有一部词典时用目录名当名称：目录名通常比文件名主干可读得多。"""
+    rel = _write_scratch(
+        "dirname",
+        {"[英] 韦氏大学词典/[英-英]语音版图文版UglyFileName.mdx": b"x" * 10},
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+    groups = _groups_of(resp.json())
+
+    assert list(groups) == ["mdict:[英-英]语音版图文版uglyfilename"]
+    assert groups[list(groups)[0]]["name"] == "[英] 韦氏大学词典"
+
+
+async def test_dicts_dir_scan_recursive_falls_back_when_dir_has_multiple(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """同一目录里放了两部词典时目录名无法区分它们，退回用文件名主干。"""
+    rel = _write_scratch(
+        "multi",
+        {"two/first.mdx": b"x" * 10, "two/second.mdx": b"x" * 10},
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+    names = sorted(g["name"] for g in resp.json()["dictionaries"])
+
+    assert names == ["first", "second"]
+
+
+async def test_dicts_dir_scan_recursive_skips_hidden_dirs(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch("hidden", {".git/objects.mdx": b"x" * 10, "ok.mdx": b"x" * 10})
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+    groups = _groups_of(resp.json())
+
+    assert list(groups) == ["mdict:ok"]
+
+
+async def test_dicts_dir_scan_recursive_respects_depth_limit(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """深度有上限，避免误选到一棵巨大的目录树时把整棵树都走一遍。"""
+    rel = _write_scratch(
+        "depth",
+        {
+            "d1/d2/d3/d4/shallow.mdx": b"x" * 10,
+            "d1/d2/d3/d4/d5/too-deep.mdx": b"x" * 10,
+        },
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+    groups = _groups_of(resp.json())
+
+    assert list(groups) == ["mdict:shallow"]
+
+
+async def test_dicts_dir_scan_recursive_marks_imported(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """递归扫描里已导入的组同样要标出来，重复跑批量时才会默认跳过。"""
+    stardict_files = _build_stardict_bytes()
+    rel = _write_scratch(
+        "rec-imported", {"sub/" + name: content for name, content in stardict_files.items()}
+    )
+
+    await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Recursive Imported",
+            "format": "stardict",
+            "lang_from": "en",
+            "lang_to": "zh",
+            "files": [f"{rel}/sub/{name}" for name in _build_stardict_bytes()],
+        },
+    )
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+    group = _groups_of(resp.json())["stardict:greeting"]
+
+    assert group["imported"] is True
+    assert all(f["imported"] is True for f in group["files"])
+
+
+async def test_import_from_dicts_dir_detects_language_when_omitted(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """不带 lang_from/lang_to 时由服务端自动识别，并把结果透出到任务结果里。"""
+    rel = _write_scratch("lang", {"auto.csv": _ecdict_csv_bytes_many()})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={"name": "Auto Lang", "format": "ecdict", "files": [f"{rel}/auto.csv"]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+
+    # 词头是英文、释义是中文 → en → zh-Hans
+    assert task["result"]["lang_from"] == "en"
+    assert task["result"]["lang_to"] == "zh-Hans"
+
+    listing = await client.get("/api/admin/dictionaries", headers=admin_headers)
+    dictionary = next(d for d in listing.json() if d["id"] == task["result"]["dictionary_id"])
+    assert dictionary["lang_from"] == "en"
+    assert dictionary["lang_to"] == "zh-Hans"
+
+
+async def test_import_from_dicts_dir_keeps_explicit_language(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """显式传了语言方向就以传入值为准，识别不覆盖。"""
+    rel = _write_scratch("lang-explicit", {"explicit.csv": _ecdict_csv_bytes_many()})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "Explicit Lang",
+            "format": "ecdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hant",
+            "files": [f"{rel}/explicit.csv"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert task["result"]["lang_from"] == "en"
+    assert task["result"]["lang_to"] == "zh-Hant"
+
+
+async def test_batch_import_imports_every_detected_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """走一遍前端批量导入的实际路径：扫描目录 → 逐部串行导入 → 再扫描确认全部入库。"""
+    files: dict[str, bytes] = dict(_build_stardict_bytes())
+    files["dict_a.csv"] = _ecdict_csv_bytes_many(2)
+    files["dict_b.csv"] = _ecdict_csv_bytes_many(2)
+    rel = _write_scratch("batch", files)
+
+    listing = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    groups = [g for g in listing.json()["dictionaries"] if g["importable"]]
+    assert len(groups) == 3
+
+    for group in groups:
+        resp = await client.post(
+            "/api/admin/dictionaries/import-from-dicts-dir",
+            headers=admin_headers,
+            json={
+                "name": group["name"],
+                "format": group["format"],
+                "files": [f["relpath"] for f in group["files"]],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+        assert task["status"] == "success", task
+
+    listing = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files", params={"path": rel}, headers=admin_headers
+    )
+    assert len(listing.json()["dictionaries"]) == 3
+    assert all(g["imported"] for g in listing.json()["dictionaries"])
+
+
+def _build_mdict_with_resource_bytes(tmp_path: Path) -> dict[str, bytes]:
+    """生成一个带 .mdd 资源的迷你 MDict，用于验证「不导入发音/图片」。"""
+    from mdict_utils import writer
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "words.txt").write_text(
+        'apple\n<p>a fruit <img src="pic/apple.png"></p>\n</>\n', encoding="utf-8"
+    )
+    res = tmp_path / "mdd_src"
+    (res / "pic").mkdir(parents=True)
+    (res / "pic" / "apple.png").write_bytes(b"\x89PNG-fake-content")
+
+    mdx = tmp_path / "mini.mdx"
+    writer.pack(
+        str(mdx),
+        writer.pack_mdx_txt(str(src / "words.txt"), encoding="utf-8"),
+        title="Mini",
+        description="",
+        encoding="utf-8",
+    )
+    mdd = tmp_path / "mini.mdd"
+    writer.pack(str(mdd), writer.pack_mdd_file(str(res)), title="Mini", description="", is_mdd=True)
+    return {"mini.mdx": mdx.read_bytes(), "mini.mdd": mdd.read_bytes()}
+
+
+async def test_import_from_dicts_dir_can_skip_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """勾「不导入发音/图片」时只写释义，不在磁盘上再解包一份 .mdd。
+
+    大词典的 .mdd 常有几个 GB，解包一份等于再占一份磁盘；语义上也要保证引用不被改写
+    （改了只会指向不存在的文件）。
+    """
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    storage = Path(settings.dictionary_storage_path)
+
+    rel = _write_scratch("skip-res", files)
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "Skip Resources",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "skip_resources": True,
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    skipped_id = task["result"]["dictionary_id"]
+
+    # 磁盘上没有解包出来的资源
+    assert not (storage / str(skipped_id) / "res").exists()
+    # 源文件仍在原处：本应用不会删用户放在 /data/dicts 的文件
+    assert (Path(settings.dicts_inbox_path) / rel / "mini.mdx").exists()
+
+    # 释义照常入库，且引用保持原样未被改写成 /dict-res/
+    resp = await client.get(
+        f"/api/admin/dictionaries/{skipped_id}/test-query",
+        params={"word": "apple"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 200
+    definition = resp.json()[0]["definition"]
+    assert "a fruit" in definition
+    assert 'src="pic/apple.png"' in definition
+    assert "/dict-res/" not in definition
+
+    # 对照组：不带该字段时资源照常解包
+    rel_kept = _write_scratch("with-res", files)
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "With Resources",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel_kept}/{name}" for name in files],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    kept_id = task["result"]["dictionary_id"]
+
+    resource = storage / str(kept_id) / "res" / "pic" / "apple.png"
+    assert resource.read_bytes() == b"\x89PNG-fake-content"
+
+
+async def _import_three_dictionaries(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> list[int]:
+    """批量启停的用例都要先有几部词典；导入后默认是 disabled。"""
+    ids: list[int] = []
+    for index in range(3):
+        dictionary = await import_dictionary(
+            client,
+            admin_headers,
+            data={
+                "name": f"Batch Status {index}",
+                "format": "ecdict",
+                "lang_from": "en",
+                "lang_to": "zh",
+            },
+            files={"files": ("batch.csv", _ecdict_csv_bytes(), "text/csv")},
+        )
+        assert dictionary["status"] == "disabled"
+        ids.append(dictionary["id"])
+    return ids
+
+
+async def _statuses(client: AsyncClient, admin_headers: dict[str, str]) -> dict[int, str]:
+    listing = await client.get("/api/admin/dictionaries", headers=admin_headers)
+    return {d["id"]: d["status"] for d in listing.json()}
+
+
+async def test_batch_enable_and_disable_dictionaries(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """一键批量启用/停用：一次请求改多部词典的状态，未选中的不受影响。"""
+    ids = await _import_three_dictionaries(client, admin_headers)
+
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        headers=admin_headers,
+        json={"dictionary_ids": ids[:2], "status": "enabled"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert {d["id"]: d["status"] for d in resp.json()} == {
+        ids[0]: "enabled",
+        ids[1]: "enabled",
+    }
+
+    statuses = await _statuses(client, admin_headers)
+    assert statuses[ids[0]] == "enabled"
+    assert statuses[ids[1]] == "enabled"
+    # 没勾选的第三部不受影响
+    assert statuses[ids[2]] == "disabled"
+
+    # 再一键全部停用
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        headers=admin_headers,
+        json={"dictionary_ids": ids, "status": "disabled"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 3
+    assert all(d["status"] == "disabled" for d in resp.json())
+    statuses = await _statuses(client, admin_headers)
+    assert all(statuses[dict_id] == "disabled" for dict_id in ids)
+
+
+async def test_batch_status_dedupes_repeated_ids(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    ids = await _import_three_dictionaries(client, admin_headers)
+
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        headers=admin_headers,
+        json={"dictionary_ids": [ids[0], ids[0], ids[0]], "status": "enabled"},
+    )
+    assert resp.status_code == 200, resp.text
+    # 同一个 ID 传三次只处理一次，不会重复写审计日志
+    assert [d["id"] for d in resp.json()] == [ids[0]]
+    assert (await _statuses(client, admin_headers))[ids[0]] == "enabled"
+
+
+async def test_batch_status_rejects_unknown_status(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """status 只认 enabled/disabled，且校验要在动手改之前完成，不留半改状态。"""
+    ids = await _import_three_dictionaries(client, admin_headers)
+
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        headers=admin_headers,
+        json={"dictionary_ids": ids, "status": "archived"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "validation_error"
+    statuses = await _statuses(client, admin_headers)
+    assert all(statuses[dict_id] == "disabled" for dict_id in ids)
+
+
+async def test_batch_status_rejects_unknown_dictionary_id(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """只要有一个 ID 不存在就整批拒绝，避免留下"改了一半"的中间状态。"""
+    ids = await _import_three_dictionaries(client, admin_headers)
+
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        headers=admin_headers,
+        json={"dictionary_ids": [ids[0], 99_999_999], "status": "enabled"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "conflict"
+    # 已存在的那部也不能被改动
+    assert (await _statuses(client, admin_headers))[ids[0]] == "disabled"
+
+
+async def test_batch_status_rejects_empty_list(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        headers=admin_headers,
+        json={"dictionary_ids": [], "status": "enabled"},
+    )
+    assert resp.status_code == 422
+
+
+async def test_batch_status_requires_admin(client: AsyncClient) -> None:
+    resp = await client.put(
+        "/api/admin/dictionaries/batch-status",
+        json={"dictionary_ids": [1], "status": "enabled"},
+    )
+    assert resp.status_code == 401

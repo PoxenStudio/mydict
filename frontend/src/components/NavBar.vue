@@ -73,6 +73,7 @@ async function saveAllowedDictionaries(ids: number[] | null) {
       <template v-else>
         <router-link to="/login" class="link-btn">登录</router-link>
         <router-link to="/register" class="link-btn">注册</router-link>
+        <router-link to="/admin" class="link-btn">后台</router-link>
       </template>
     </div>
 

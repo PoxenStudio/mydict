@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     user_ip_rate_limit_per_min: int = 120
     max_upload_size_mb: int = 512
     enable_scheduler: bool = True
+    # 留空 = 跟随容器/宿主机本地时区（docker-compose 里已设 TZ=Asia/Shanghai）。按「天」统计与
+    # 按日限流的重置边界都按这个时区划分，显式写死（如 Asia/Shanghai）可让行为不受宿主机 TZ 影响。
+    timezone: str = ""
     version_file_path: str = "/version.txt"
 
     config_storage_path: str = "/data/config"

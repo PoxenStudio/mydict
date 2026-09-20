@@ -53,5 +53,15 @@ async function onSubmit() {
         完成初始化
       </el-button>
     </el-form>
+    <p class="switch-link"><router-link to="/">返回首页</router-link></p>
   </AuthCard>
 </template>
+
+<style scoped>
+.switch-link {
+  margin: var(--space-4) 0 0;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+</style>

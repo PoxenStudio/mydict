@@ -4,22 +4,20 @@
 再异步回写更简单可靠——写一次即是持久化，重启后读到的就是最新值，无需预加载。
 """
 
-from datetime import date, datetime, timedelta, timezone
-
 from sqlalchemy.orm import Session
 
+from app.core.timeutil import seconds_to_local_midnight, today_str
 from app.models.query import QueryStatsDaily
 from app.models.token import ApiToken
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return today_str()
 
 
 def seconds_to_tomorrow() -> int:
-    now = datetime.now(timezone.utc)
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return int((tomorrow - now).total_seconds())
+    """到计数器重置（下一个本地零点）的秒数，供 429 响应里的 Retry-After 使用。"""
+    return seconds_to_local_midnight()
 
 
 def check_and_increment_token_daily(db: Session, token: ApiToken, default_daily_limit: int) -> bool:
