@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back, Folder, HomeFilled } from '@element-plus/icons-vue'
 import * as dictApi from '../../api/admin/dictionaries'
@@ -13,6 +13,7 @@ import type {
   DictionaryStatus,
   DictsDirFile,
   DictsDirGroup,
+  DictsDirListing,
   TestQueryEntry,
 } from '../../types/dictionary'
 
@@ -226,8 +227,27 @@ function openImportDialog() {
   importDialogVisible.value = true
 }
 
-async function loadDictsDirScan(path: string) {
-  const listing = await dictApi.listDictsDirFiles(path, dictsDirRecursive.value)
+const scanning = ref(false)
+// 快速连续触发扫描时只采用最后一次请求的结果
+let scanSeq = 0
+
+// 失败时保留当前列表，返回 false（错误已由响应拦截器提示）
+async function loadDictsDirScan(path: string): Promise<boolean> {
+  const seq = ++scanSeq
+  scanning.value = true
+  try {
+    const listing = await dictApi.listDictsDirFiles(path, dictsDirRecursive.value)
+    if (seq !== scanSeq) return true
+    applyDictsDirListing(listing)
+    return true
+  } catch {
+    return false
+  } finally {
+    if (seq === scanSeq) scanning.value = false
+  }
+}
+
+function applyDictsDirListing(listing: DictsDirListing) {
   dictsDirPath.value = listing.path
   // 递归时列表已覆盖整棵子树，目录行只在非递归下用于下钻
   dictsDirDirectories.value = listing.entries.filter((entry) => entry.is_dir)
@@ -248,8 +268,10 @@ async function loadDictsDirScan(path: string) {
     .map((group) => group.key)
 }
 
-function toggleRecursive() {
-  loadDictsDirScan(dictsDirPath.value)
+async function toggleRecursive() {
+  if (!(await loadDictsDirScan(dictsDirPath.value))) {
+    dictsDirRecursive.value = !dictsDirRecursive.value
+  }
 }
 
 function openDictsDirEntry(entry: DictsDirFile) {
@@ -364,13 +386,36 @@ function sleep(ms: number) {
 }
 
 // 导入接口立即返回 task_id，解析入库在后端线程跑，这里轮询任务状态直到成功/失败
+const POLL_INTERVAL_MS = 1000
+const POLL_TIMEOUT_MS = 60 * 60 * 1000
+const POLL_MAX_CONSECUTIVE_FAILURES = 3
+
+class PollAbortedError extends Error {}
+
+let unmounted = false
+onBeforeUnmount(() => {
+  unmounted = true
+})
+
 async function waitForImportTask(taskId: number) {
-  for (;;) {
-    const task = await tasksApi.getTask(taskId)
-    if (task.status === 'success') return task
-    if (task.status === 'error') throw new Error(task.error ?? '导入失败')
-    await sleep(1000)
+  const deadline = Date.now() + POLL_TIMEOUT_MS
+  let failures = 0
+  while (!unmounted) {
+    try {
+      const task = await tasksApi.getTask(taskId)
+      failures = 0
+      if (task.status === 'success') return task
+      if (task.status === 'error') throw new Error(task.error ?? '导入失败')
+    } catch (err) {
+      // 任务自身失败直接抛出；偶发的轮询请求失败容忍几次，任务在后端仍在跑
+      if (!(err as { isAxiosError?: boolean } | null)?.isAxiosError) throw err
+      failures += 1
+      if (failures >= POLL_MAX_CONSECUTIVE_FAILURES) throw err
+    }
+    if (Date.now() > deadline) throw new Error('等待导入超时，请稍后在词典列表确认是否已完成')
+    await sleep(POLL_INTERVAL_MS)
   }
+  throw new PollAbortedError()
 }
 
 // result 是 Record<string, unknown>，逐字段收窄
@@ -459,11 +504,13 @@ async function submitBatchImport() {
         }
         selectedGroupKeys.value = selectedGroupKeys.value.filter((key) => key !== group.key)
       } catch (err) {
+        if (err instanceof PollAbortedError) break
         groupStatus[group.key] = 'error'
         groupError[group.key] = errorMessage(err)
         failed += 1
       }
     }
+    if (unmounted) return
     await loadDictionaries()
     batchSummary.value = `本次导入：成功 ${succeeded} 部，失败 ${failed} 部`
     if (failed === 0) {
@@ -488,7 +535,10 @@ async function submitImport() {
     importDialogVisible.value = false
   } catch (err) {
     // axios 错误已由响应拦截器提示，这里只处理任务失败抛出的 Error
-    if (!(err as { isAxiosError?: boolean } | null)?.isAxiosError) {
+    if (
+      !(err instanceof PollAbortedError) &&
+      !(err as { isAxiosError?: boolean } | null)?.isAxiosError
+    ) {
       ElMessage.error(err instanceof Error ? err.message : '导入失败')
     }
   } finally {
@@ -880,7 +930,12 @@ function definitionHtml(definition: string) {
       <template #footer>
         <el-button v-if="batchRunning" @click="batchCancelled = true">停止导入剩余</el-button>
         <el-button :disabled="batchRunning" @click="importDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="importing" @click="submitImport">
+        <el-button
+          type="primary"
+          :loading="importing"
+          :disabled="importMode === 'dicts-dir' && scanning"
+          @click="submitImport"
+        >
           {{ importMode === 'dicts-dir' ? '批量导入' : '开始导入' }}
         </el-button>
       </template>
