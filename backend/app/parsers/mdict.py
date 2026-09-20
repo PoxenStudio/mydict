@@ -26,6 +26,15 @@ def _open_mdict(factory, path: Path):
 
 
 class MDictParser(DictionaryParser):
+    def __init__(self) -> None:
+        # 采样与解析共用同一个实例：大 MDX 打开时要加载整份词头索引，只打开一次
+        self._mdx_cache: dict[Path, object] = {}
+
+    def _open_mdx(self, path: Path):
+        if path not in self._mdx_cache:
+            self._mdx_cache[path] = _open_mdict(MDX, path)
+        return self._mdx_cache[path]
+
     def parse(
         self,
         file_paths: list[Path],
@@ -50,7 +59,7 @@ class MDictParser(DictionaryParser):
                     write_resource(resource_dir, relative_path, content)
 
         for mdx_path in mdx_paths:
-            mdx = _open_mdict(MDX, mdx_path)
+            mdx = self._open_mdx(mdx_path)
             for key, value in mdx.items():
                 word = key.decode("utf-8", errors="replace")
                 html = value.decode("utf-8", errors="replace")
@@ -71,7 +80,7 @@ class MDictParser(DictionaryParser):
 
         sampled: list[ParsedEntry] = []
         for mdx_path in mdx_paths:
-            mdx = _open_mdict(MDX, mdx_path)
+            mdx = self._open_mdx(mdx_path)
             for key, value in mdx.items():
                 sampled.append(
                     ParsedEntry(

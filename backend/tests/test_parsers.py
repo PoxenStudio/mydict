@@ -403,3 +403,33 @@ def test_mdict_sample_does_not_extract_mdd_resources(tmp_path: Path) -> None:
     apple = next(entry for entry in sampled if entry.word == "apple")
     assert 'src="pic/apple.png"' in apple.definition
     assert "/dict-res/" not in apple.definition
+
+
+def test_mdict_sample_then_parse_opens_mdx_once(tmp_path: Path, monkeypatch) -> None:
+    from mdict_utils import writer
+
+    from app.parsers import mdict as mdict_module
+
+    txt_path = tmp_path / "words.txt"
+    txt_path.write_text("apple\n<p>a fruit</p>\n</>\n", encoding="utf-8")
+    mdx_path = tmp_path / "test.mdx"
+    writer.pack(
+        str(mdx_path),
+        writer.pack_mdx_txt(str(txt_path), encoding="utf-8"),
+        title="Test",
+        description="",
+        encoding="utf-8",
+    )
+
+    opened: list[str] = []
+    original = mdict_module.MDX
+    monkeypatch.setattr(
+        mdict_module, "MDX", lambda path: opened.append(path) or original(path)
+    )
+
+    parser = MDictParser()
+    parser.sample([mdx_path], limit=10)
+    entries = list(parser.parse([mdx_path], dictionary_id=1, resource_dir=None))
+
+    assert [e.word for e in entries] == ["apple"]
+    assert len(opened) == 1
