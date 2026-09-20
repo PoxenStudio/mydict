@@ -23,7 +23,7 @@ async function loadDictionaries() {
   loading.value = true
   try {
     dictionaries.value = await dictApi.listDictionaries()
-    // 列表是重新拉的，之前的勾选可能已经失效，统一清空
+    // 列表重新拉取后旧的勾选可能失效，清空
     selectedIds.value = []
   } finally {
     loading.value = false
@@ -177,18 +177,14 @@ const importForm = reactive({
   lang_to: 'zh-Hans',
 })
 const uploadFileList = ref<File[]>([])
-// ECDICT 一个 CSV 就是一部完整词典，选多个会被后端拒绝（EcdictParser 只认第一个），
-// 界面上直接限制成单选，避免选完提交才报错。
+// ECDICT 一个 CSV 就是一部词典，后端拒绝多选，界面直接限制为单选
 const isSingleFileFormat = computed(() => importForm.format === 'ecdict')
 
-// 「从服务器目录导入」不再逐个勾选文件、手填名称与格式：服务端按 (格式, 主干) 把目录里
-// 的文件归组成词典单元，名称与格式自动给出（可改），语言方向则在导入时自动识别。
+// 服务端把目录文件按 (格式, 主干) 归组成词典单元，名称与格式自动给出，语言方向导入时自动识别
 const dictsDirPath = ref('')
-// 用户的词典常常是「一个文件夹一部」，所以默认只扫当前层；勾上后连子目录一起扫，
-// 一次就能把整库列出来（这正是「批量导入文件夹」要的效果）。
+// 默认只扫当前层；勾上后连子目录一起扫
 const dictsDirRecursive = ref(false)
-// 只导入释义、不解包 .mdd 里的图片/发音。大词典的 .mdd 常有几个 GB，解包一份等于
-// 再占一份磁盘，勾上后占用能降一个数量级，代价是没有发音和插图。
+// 只导入释义、不解包 .mdd（省磁盘，代价是没有发音和插图）
 const skipResources = ref(false)
 const dictsDirDirectories = ref<DictsDirFile[]>([])
 const dictsDirDictionaries = ref<DictsDirGroup[]>([])
@@ -200,7 +196,7 @@ const groupError = reactive<Record<string, string>>({})
 const groupLangs = reactive<Record<string, string>>({})
 const groupWordCounts = reactive<Record<string, number>>({})
 const batchRunning = ref(false)
-// 点「停止导入剩余」后置位：在途那一部照旧跑完（后端没有取消能力），只是不再调度后面的。
+// 点「停止导入剩余」后置位：在途那部跑完，不再调度后面的
 const batchCancelled = ref(false)
 const batchSummary = ref('')
 
@@ -210,7 +206,7 @@ const FORMAT_LABELS: Record<DictionaryFormat, string> = {
   ecdict: 'ECDICT',
 }
 
-// 切换格式后旧的文件选择大概率不再适用（后缀都对不上），统一清空避免残留无效状态
+// 切换格式后旧的文件选择不再适用，清空
 watch(
   () => importForm.format,
   () => {
@@ -233,14 +229,14 @@ function openImportDialog() {
 async function loadDictsDirScan(path: string) {
   const listing = await dictApi.listDictsDirFiles(path, dictsDirRecursive.value)
   dictsDirPath.value = listing.path
-  // 递归扫描时列表已经覆盖了整棵子树，目录行只在非递归下用于下钻
+  // 递归时列表已覆盖整棵子树，目录行只在非递归下用于下钻
   dictsDirDirectories.value = listing.entries.filter((entry) => entry.is_dir)
   dictsDirDictionaries.value = listing.dictionaries
   dictsDirSkipped.value = listing.skipped
   batchSummary.value = ''
   for (const group of listing.dictionaries) {
     groupNames[group.key] = group.name
-    // 重新扫描的结果是权威的：整组文件都已被导入过就标「已导入」，否则回到待导入
+    // 以重新扫描的结果为准
     groupStatus[group.key] = group.imported ? 'imported' : group.importable ? 'pending' : 'blocked'
     delete groupError[group.key]
     delete groupLangs[group.key]
@@ -309,16 +305,14 @@ const someGroupsSelected = computed(
   () => selectedGroupKeys.value.length > 0 && !allGroupsSelected.value,
 )
 
-// 一部词典单文件就可能几个 GB（解析时还会把 .mdd 资源全量展开到磁盘），勾选时先把总量
-// 摆出来，免得一次全选把磁盘写满。
+// 勾选时展示总量，避免一次全选把磁盘写满
 const selectedTotalSize = computed(() =>
   dictsDirDictionaries.value
     .filter((group) => selectedGroupKeys.value.includes(group.key))
     .reduce((sum, group) => sum + group.total_size, 0),
 )
 
-// 本次批量里已成功导入的那些词典的源文件。只用来告知「这些文件已不再被查词读取」，
-// 程序不会删除任何文件——删不删、什么时候删由用户自己决定（见 README）。
+// 本次已成功导入的源文件，仅用于提示，程序不会删除任何文件
 const importedSources = computed(() => {
   const done = dictsDirDictionaries.value.filter((group) => groupStatus[group.key] === 'success')
   return {
@@ -369,10 +363,7 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
-// 导入接口只做参数校验就立即返回 task_id，真正的解析入库在后端线程里跑；大词典
-// 耗时可能到几分钟，这里持续轮询任务状态直到成功/失败，spinner 才据此真实反映
-// 导入是否完成——而不是像过去那样等 axios 请求本身返回（大文件必然超过前端
-// 10 秒超时，导致"转了一下圈就没反应了"，其实后端还在继续跑）。
+// 导入接口立即返回 task_id，解析入库在后端线程跑，这里轮询任务状态直到成功/失败
 async function waitForImportTask(taskId: number) {
   for (;;) {
     const task = await tasksApi.getTask(taskId)
@@ -382,7 +373,7 @@ async function waitForImportTask(taskId: number) {
   }
 }
 
-// result 在类型上是 Record<string, unknown>，这里逐字段收窄，避免到处断言
+// result 是 Record<string, unknown>，逐字段收窄
 function resultNumber(task: BackgroundTask, key: string): number | null {
   const value = task.result?.[key]
   return typeof value === 'number' ? value : null
@@ -418,8 +409,7 @@ async function submitUploadImport(): Promise<number> {
   return (await dictApi.uploadDictionary(form)).task_id
 }
 
-// 逐部串行导入：一步只跑一部，既避免并发争抢 SQLite 的写锁，也让每一部都有独立的
-// 成功/失败状态（某一部坏了不影响其余）。中途关掉弹窗时在途那部会跑完，剩下的不再调度。
+// 逐部串行导入：避免争抢 SQLite 写锁，且每部有独立的成功/失败状态
 async function submitBatchImport() {
   const selected = dictsDirDictionaries.value.filter((group) =>
     selectedGroupKeys.value.includes(group.key),
@@ -462,8 +452,7 @@ async function submitBatchImport() {
         groupLangs[group.key] = from && to ? `${langLabel(from)} → ${langLabel(to)}` : ''
         groupWordCounts[group.key] = resultNumber(task, 'word_count') ?? 0
         succeeded += 1
-        // 就地标记已导入，不重新扫描：重新扫描会把这一行立刻刷成「已导入」，
-        // 刚识别出来的语言方向就看不到了，管理员也就无从判断识别得对不对。
+        // 就地标记已导入而不重新扫描，否则刚识别出的语言方向会被刷掉
         const index = dictsDirDictionaries.value.findIndex((item) => item.key === group.key)
         if (index !== -1) {
           dictsDirDictionaries.value[index] = { ...group, imported: true }
@@ -498,8 +487,7 @@ async function submitImport() {
     ElMessage.success(`导入成功，共 ${resultNumber(task, 'word_count') ?? 0} 条词条`)
     importDialogVisible.value = false
   } catch (err) {
-    // axios 请求本身失败（如校验不通过的 4xx）已经由响应拦截器统一弹出错误提示，
-    // 这里只处理轮询过程中任务状态变成 error 抛出的自定义 Error，避免重复提示
+    // axios 错误已由响应拦截器提示，这里只处理任务失败抛出的 Error
     if (!(err as { isAxiosError?: boolean } | null)?.isAxiosError) {
       ElMessage.error(err instanceof Error ? err.message : '导入失败')
     }
@@ -977,9 +965,9 @@ function definitionHtml(definition: string) {
 .dict-list-header,
 .dict-row {
   display: grid;
-  grid-template-columns: var(--size-control-md) var(
-      --size-control-md
-    ) 2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
+  grid-template-columns:
+    var(--size-control-md) var(--size-control-md)
+    2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -1093,7 +1081,6 @@ function definitionHtml(definition: string) {
 }
 
 .dicts-dir-scroll {
-  /* 分组后每行是「勾选框 + 名称输入框 + 标签」的词典单元，比原来的单行文件名高不少 */
   max-height: var(--size-scroll-sm);
   overflow-y: auto;
 }
@@ -1110,8 +1097,7 @@ function definitionHtml(definition: string) {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) 0;
-  /* 同 .dir-row：el-checkbox-group 把 font-size/line-height 重置成 0，普通 div 不在
-     它逐个恢复的范围内，不显式设回来文字与图标会一起塌缩。 */
+  /* 同 .dir-row：需显式恢复 el-checkbox-group 重置的 font-size/line-height */
   font-size: var(--text-base);
   line-height: 1;
 }
@@ -1127,7 +1113,7 @@ function definitionHtml(definition: string) {
 }
 
 .group-name {
-  /* 名称输入框在一行里的弹性宽度：够放下常见词典名，窄了才换行 */
+  /* 一次性尺寸：名称输入框的弹性宽度，窄了才换行 */
   flex: 1 1 160px;
   min-width: 120px;
 }
@@ -1140,7 +1126,7 @@ function definitionHtml(definition: string) {
 }
 
 .group-dir {
-  /* 目录列只是辅助信息，超出省略，完整路径在 popover 里看 */
+  /* 一次性尺寸：目录列超出省略，完整路径见 popover */
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1193,10 +1179,7 @@ function definitionHtml(definition: string) {
   display: flex;
   align-items: center;
   height: var(--size-control-md);
-  /* el-radio-group/el-checkbox-group 自身把 font-size/line-height 重置成 0（配合
-     el-radio/el-checkbox 各自重新设回来，用来消除 inline-flex 子项之间的空白间隙），这里的
-     目录行是普通 div、不在这套重置范围内，会原样继承 0，导致图标（尺寸按 1em 算）和文字一起
-     塌缩成 0，必须显式设回来。 */
+  /* el-checkbox-group 把 font-size/line-height 重置成 0，普通 div 需显式恢复，否则图标与文字塌缩 */
   font-size: var(--text-base);
   line-height: 1;
   color: var(--color-text-primary);
