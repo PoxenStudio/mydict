@@ -421,3 +421,16 @@ def _fresh_session():
     from app.core.db import SessionLocal
 
     return SessionLocal()
+
+
+async def test_stats_invalid_date_returns_empty(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    for path, params in (
+        ("/api/admin/stats", {"dimension": "date", "start_date": "abc"}),
+        ("/api/admin/stats", {"dimension": "source", "end_date": "2026-13-40"}),
+        ("/api/admin/stats/top-words", {"start_date": "bad"}),
+    ):
+        response = await client.get(path, params=params, headers=admin_headers)
+        assert response.status_code == 200
+        assert response.json() == []

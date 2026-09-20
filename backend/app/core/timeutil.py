@@ -28,25 +28,41 @@ def now_local() -> datetime:
     return datetime.now(local_zone())
 
 
+def today() -> date:
+    return now_local().date()
+
+
+def day(offset_days: int = 0) -> date:
+    """相对今天偏移若干天的本地日期。"""
+    return today() + timedelta(days=offset_days)
+
+
 def today_str() -> str:
-    """当前本地日期（ISO 字符串），替代散落各处的 `date.today().isoformat()`。"""
-    return now_local().date().isoformat()
+    return today().isoformat()
 
 
 def day_str(offset_days: int = 0) -> str:
-    """相对今天偏移若干天的本地日期。"""
-    return (now_local().date() + timedelta(days=offset_days)).isoformat()
+    return day(offset_days).isoformat()
 
 
-def day_bounds_utc(day: str) -> tuple[datetime, datetime]:
-    """本地日 `day` 对应的 `[起, 止)` UTC 区间，返回 **naive UTC** datetime。
+def parse_day(value: str | None) -> date | None:
+    """解析 ISO 日期字符串；空值或格式非法返回 None。"""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def day_bounds_utc(target: date) -> tuple[datetime, datetime]:
+    """本地日 `target` 对应的 `[起, 止)` UTC 区间，返回 **naive UTC** datetime。
 
     返回 naive 值是有意的：数据库列本身就是 naive 的，而 SQLAlchemy 在 SQLite 上会把 bind 参数的
     tzinfo 直接丢掉，传 aware 值反而会让偏移量算错。所以这里先换算成 UTC 再去掉 tzinfo。
 
     区间取半开（止于次日零点、不含），相邻两天既不重复计数也不会在微秒边界漏记录。
     """
-    target = date.fromisoformat(day)
     zone = local_zone()
     start = datetime.combine(target, time.min, tzinfo=zone)
     end = datetime.combine(target + timedelta(days=1), time.min, tzinfo=zone)
@@ -56,7 +72,7 @@ def day_bounds_utc(day: str) -> tuple[datetime, datetime]:
     )
 
 
-def range_bounds_utc(start_day: str, end_day: str) -> tuple[datetime, datetime]:
+def range_bounds_utc(start_day: date, end_day: date) -> tuple[datetime, datetime]:
     """本地日闭区间 `[start_day, end_day]` 对应的 `[起, 止)` UTC 区间。"""
     start, _ = day_bounds_utc(start_day)
     _, end = day_bounds_utc(end_day)

@@ -5,6 +5,8 @@ services/rate_limit_service.py），这里跳过 token_id 非空的日志，避�
 与实时计数打架；只处理匿名调用（token_id 和 user_id 均为空）与登录用户调用。
 """
 
+from datetime import date
+
 from app.core.db import SessionLocal
 from app.core.timeutil import day_bounds_utc
 from app.models.query import QueryLog, QueryStatsDaily
@@ -40,7 +42,7 @@ def aggregate_date(target_date: str) -> None:
     try:
         # 按「本地日」的 UTC 区间取日志，与写进 stat_date 的本地日期标签口径一致——之前用
         # func.date(created_at) 是按 UTC 日分组，与本地日标签错开一个时区偏移。
-        day_start, day_end = day_bounds_utc(target_date)
+        day_start, day_end = day_bounds_utc(date.fromisoformat(target_date))
         logs = (
             db.query(QueryLog)
             .filter(

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from app.core import timeutil
 from app.core.config import get_settings
@@ -6,7 +6,7 @@ from app.core.config import get_settings
 
 def test_day_bounds_utc_returns_naive_utc_and_spans_exactly_one_local_day() -> None:
     """边界必须是 naive UTC：数据库列是 naive 的，SQLAlchemy 在 SQLite 上会丢掉 tzinfo。"""
-    start, end = timeutil.day_bounds_utc("2026-03-05")
+    start, end = timeutil.day_bounds_utc(date(2026, 3, 5))
 
     assert start.tzinfo is None
     assert end.tzinfo is None
@@ -15,14 +15,14 @@ def test_day_bounds_utc_returns_naive_utc_and_spans_exactly_one_local_day() -> N
 
 def test_consecutive_days_are_contiguous() -> None:
     """半开区间：前一天的止 == 后一天的起，相邻两天既不重叠也不留缝。"""
-    _, first_end = timeutil.day_bounds_utc("2026-03-05")
-    second_start, _ = timeutil.day_bounds_utc("2026-03-06")
+    _, first_end = timeutil.day_bounds_utc(date(2026, 3, 5))
+    second_start, _ = timeutil.day_bounds_utc(date(2026, 3, 6))
 
     assert first_end == second_start
 
 
 def test_range_bounds_utc_covers_inclusive_day_range() -> None:
-    start, end = timeutil.range_bounds_utc("2026-03-01", "2026-03-03")
+    start, end = timeutil.range_bounds_utc(date(2026, 3, 1), date(2026, 3, 3))
 
     # 含首含尾共三天
     assert end - start == timedelta(days=3)
@@ -33,10 +33,10 @@ def test_explicit_timezone_decouples_bounds_from_system_timezone(monkeypatch) ->
     settings = get_settings()
 
     monkeypatch.setattr(settings, "timezone", "Asia/Shanghai")
-    start_shanghai, _ = timeutil.day_bounds_utc("2026-03-05")
+    start_shanghai, _ = timeutil.day_bounds_utc(date(2026, 3, 5))
 
     monkeypatch.setattr(settings, "timezone", "UTC")
-    start_utc, _ = timeutil.day_bounds_utc("2026-03-05")
+    start_utc, _ = timeutil.day_bounds_utc(date(2026, 3, 5))
 
     # 同一个本地日，UTC 下的起点比 Asia/Shanghai 下的起点晚 8 小时
     assert start_utc - start_shanghai == timedelta(hours=8)
