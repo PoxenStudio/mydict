@@ -228,7 +228,7 @@ def _build_dict_groups(
                 {
                     "name": path.name,
                     "relpath": relpath,
-                    "size": path.stat().st_size,
+                    "size": _file_size(path),
                     "imported": relpath in imported_relpaths,
                 }
             )
@@ -250,16 +250,40 @@ def _build_dict_groups(
     return dictionaries, sorted(skipped)
 
 
+def _safe_iterdir(path: Path) -> list[Path]:
+    """列目录；无权限或目录中途消失时记 warning 并当作空目录，不让一个坏目录拖垮整次扫描。"""
+    try:
+        return list(path.iterdir())
+    except OSError:
+        logger.warning("无法读取目录 %s，已跳过", path, exc_info=True)
+        return []
+
+
+def _mtime(path: Path) -> datetime:
+    try:
+        timestamp = path.stat().st_mtime
+    except OSError:
+        timestamp = 0
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
 def _iter_scan_dirs(root: Path, max_depth: int) -> Iterator[Path]:
-    """深度受限地遍历 root 及其子目录；跳过以 . 开头的目录（.git 之类）。"""
+    """深度受限地遍历 root 及其子目录；跳过以 . 开头的目录与符号链接目录（避免环与越出词典目录）。"""
     stack: list[tuple[Path, int]] = [(root, 0)]
     while stack:
         current, depth = stack.pop()
         yield current
         if depth >= max_depth:
             continue
-        for child in sorted(current.iterdir(), key=lambda p: p.name.lower()):
-            if child.is_dir() and not child.name.startswith("."):
+        for child in sorted(_safe_iterdir(current), key=lambda p: p.name.lower()):
+            if child.is_dir() and not child.is_symlink() and not child.name.startswith("."):
                 stack.append((child, depth + 1))
 
 
@@ -274,7 +298,9 @@ def _build_dict_groups_recursive(
     dictionaries: list[dict] = []
     skipped: list[str] = []
     for current in _iter_scan_dirs(root, _MAX_SCAN_DEPTH):
-        files = sorted((p for p in current.iterdir() if p.is_file()), key=lambda p: p.name.lower())
+        files = sorted(
+            (p for p in _safe_iterdir(current) if p.is_file()), key=lambda p: p.name.lower()
+        )
         if not files:
             continue
         groups, ignored = _build_dict_groups(files, inbox, imported_relpaths)
@@ -305,7 +331,7 @@ def list_dicts_dir_files(
     imported_relpaths = _imported_dicts_dir_relpaths(db, inbox)
     dirs: list[Path] = []
     files: list[Path] = []
-    for path in target.iterdir():
+    for path in _safe_iterdir(target):
         if path.is_dir():
             dirs.append(path)
         elif path.is_file():
@@ -313,24 +339,22 @@ def list_dicts_dir_files(
 
     entries: list[dict] = []
     for path in sorted(dirs, key=lambda p: p.name.lower()):
-        stat = path.stat()
         entries.append(
             {
                 "name": path.name,
                 "size": 0,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                "modified_at": _mtime(path),
                 "imported": False,
                 "is_dir": True,
             }
         )
     for path in sorted(files, key=lambda p: p.name.lower()):
-        stat = path.stat()
         relpath = path.relative_to(inbox).as_posix()
         entries.append(
             {
                 "name": path.name,
-                "size": stat.st_size,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                "size": _file_size(path),
+                "modified_at": _mtime(path),
                 "imported": relpath in imported_relpaths,
                 "is_dir": False,
             }

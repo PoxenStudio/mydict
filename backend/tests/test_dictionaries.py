@@ -862,6 +862,44 @@ async def test_dicts_dir_scan_recursive_skips_hidden_dirs(
     assert list(groups) == ["mdict:ok"]
 
 
+async def test_dicts_dir_scan_recursive_skips_symlinked_dirs(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch("symlink", {"real/ok.mdx": b"x" * 10})
+    base = Path(get_settings().dicts_inbox_path) / rel
+    os.symlink(base, base / "real" / "loop", target_is_directory=True)
+
+    resp = await client.get(
+        "/api/admin/dictionaries/dicts-dir-files",
+        params={"path": rel, "recursive": True},
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    assert [g["relpath"] for d in resp.json()["dictionaries"] for g in d["files"]] == [
+        f"{rel}/real/ok.mdx"
+    ]
+
+
+async def test_dicts_dir_scan_skips_unreadable_dir(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    rel = _write_scratch("unreadable", {"ok.mdx": b"x" * 10, "locked/hidden.mdx": b"x" * 10})
+    locked = Path(get_settings().dicts_inbox_path) / rel / "locked"
+    locked.chmod(0)
+    try:
+        resp = await client.get(
+            "/api/admin/dictionaries/dicts-dir-files",
+            params={"path": rel, "recursive": True},
+            headers=admin_headers,
+        )
+    finally:
+        locked.chmod(0o755)
+
+    assert resp.status_code == 200
+    assert list(_groups_of(resp.json())) == ["mdict:ok"]
+
+
 async def test_dicts_dir_scan_recursive_respects_depth_limit(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
