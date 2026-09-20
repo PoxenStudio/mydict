@@ -1,0 +1,10 @@
+:root {
+  --size-content-md: 960px;
+  --size-dialog-sm: 420px;
+  --size-dialog-md: 560px;
+  --size-popover-md: 360px;
+  --size-popover-lg: 460px;
+  --size-scroll-sm: 320px;
+  --size-scroll-md: 360px;
+  --size-control-md: 32px;
+}

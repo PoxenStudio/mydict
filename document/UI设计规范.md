@@ -97,9 +97,25 @@
 
 组件内边距、元素间距一律取上述 Token，禁止出现如 `13px`、`19px` 这类随意数值。
 
+### 5.1 尺寸（Size）
+
+页面容器、弹窗、浮层、滚动区与控件高度取下列 Token，不在组件里写死像素：
+
+| Token | 取值 | 用途 |
+| --- | --- | --- |
+| `--size-content-md` | 960px | 管理后台列表页内容区最大宽度 |
+| `--size-dialog-sm` | 420px | 表单较短的弹窗宽度 |
+| `--size-dialog-md` | 560px | 表单较长/含列表的弹窗宽度 |
+| `--size-popover-md` | 360px | 悬浮提示（文件清单等）宽度 |
+| `--size-popover-lg` | 460px | 悬浮提示（长路径清单）宽度 |
+| `--size-scroll-sm` | 320px | 弹窗内可滚动列表的最大高度 |
+| `--size-scroll-md` | 360px | 弹窗内可滚动结果区的最大高度 |
+| `--size-control-md` | 32px | 与 Element Plus 默认控件同高的行/图标列宽度 |
+
 ## 6. 字体与排版
 
 - 字体栈：`-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif`（不引入自定义 Web Font，减小体积、避免中文字重下载开销）。
+- 等宽字体栈（路径、代码等）：`--font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`。
 - 音标/英文释义可选衬线备用栈以做区分：`"Noto Serif SC", Georgia, serif`（可选，非强制）。
 - 字号阶梯：`--text-xs:12px` `--text-sm:13px` `--text-base:14px` `--text-md:16px` `--text-lg:18px` `--text-xl:20px` `--text-2xl:24px` `--text-3xl:32px`
 - 字重：正文 400，强调/小标题 500，标题 600，重要数字（如统计大盘的 KPI 数字）可用 700。

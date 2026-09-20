@@ -1,6 +1,7 @@
 :root {
   --font-family-base:
     -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-family-serif: 'Noto Serif SC', Georgia, serif;
 
   --text-xs: 12px;

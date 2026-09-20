@@ -2,6 +2,7 @@
 @import './tokens/typography.css';
 @import './tokens/spacing.css';
 @import './tokens/radius.css';
+@import './tokens/size.css';
 @import './tokens/shadow.css';
 @import './tokens/breakpoint.css';
 @import './base.css';

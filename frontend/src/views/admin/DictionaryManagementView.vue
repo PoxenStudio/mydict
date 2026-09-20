@@ -623,7 +623,7 @@ function definitionHtml(definition: string) {
       </div>
     </div>
 
-    <el-dialog v-model="editDialogVisible" title="编辑词典" width="420px">
+    <el-dialog v-model="editDialogVisible" title="编辑词典" width="var(--size-dialog-sm)">
       <el-form label-position="top" @submit.prevent="submitEdit">
         <el-form-item label="词典名称">
           <el-input v-model="editForm.name" placeholder="如：牛津高阶英汉双解词典" />
@@ -660,7 +660,7 @@ function definitionHtml(definition: string) {
     <el-dialog
       v-model="importDialogVisible"
       title="导入词典"
-      width="560px"
+      width="var(--size-dialog-md)"
       :close-on-click-modal="!batchRunning"
       :close-on-press-escape="!batchRunning"
       :show-close="!batchRunning"
@@ -812,7 +812,7 @@ function definitionHtml(definition: string) {
                       placeholder="词典名称"
                     />
                     <el-tag size="small">{{ FORMAT_LABELS[group.format] }}</el-tag>
-                    <el-popover placement="top" trigger="hover" :width="360">
+                    <el-popover placement="top" trigger="hover" width="var(--size-popover-md)">
                       <template #reference>
                         <span class="hint group-files"
                           >{{ group.files.length }} 个文件 ·
@@ -836,7 +836,7 @@ function definitionHtml(definition: string) {
                       v-if="dictsDirRecursive"
                       placement="top"
                       trigger="hover"
-                      :width="360"
+                      width="var(--size-popover-md)"
                     >
                       <template #reference>
                         <span class="hint group-dir">{{ group.dir || '/data/dicts' }}</span>
@@ -857,7 +857,7 @@ function definitionHtml(definition: string) {
                   v-if="dictsDirSkipped.length"
                   placement="top"
                   trigger="hover"
-                  :width="420"
+                  width="var(--size-popover-lg)"
                 >
                   <template #reference>
                     <p class="hint skipped-hint">
@@ -874,7 +874,7 @@ function definitionHtml(definition: string) {
                 本次导入的词典已写入数据库，其中 {{ importedSources.files.length }} 个源文件（{{
                   formatSize(importedSources.size)
                 }}）已不再被查词读取
-                <el-popover placement="top" trigger="hover" :width="460">
+                <el-popover placement="top" trigger="hover" width="var(--size-popover-lg)">
                   <template #reference>
                     <span class="source-paths">查看列表</span>
                   </template>
@@ -901,7 +901,7 @@ function definitionHtml(definition: string) {
     <el-dialog
       v-model="testQueryDialogVisible"
       :title="`测试查询 - ${testQueryTarget?.name ?? ''}`"
-      width="560px"
+      width="var(--size-dialog-md)"
     >
       <div class="test-query">
         <el-input v-model="testQueryWord" placeholder="输入词语前缀" @keyup.enter="runTestQuery">
@@ -926,7 +926,7 @@ function definitionHtml(definition: string) {
 
 <style scoped>
 .page {
-  max-width: 960px;
+  max-width: var(--size-content-md);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
@@ -977,7 +977,9 @@ function definitionHtml(definition: string) {
 .dict-list-header,
 .dict-row {
   display: grid;
-  grid-template-columns: 32px 32px 2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
+  grid-template-columns: var(--size-control-md) var(
+      --size-control-md
+    ) 2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -1086,13 +1088,13 @@ function definitionHtml(definition: string) {
 .path-text {
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-family-mono);
   overflow-wrap: anywhere;
 }
 
 .dicts-dir-scroll {
   /* 分组后每行是「勾选框 + 名称输入框 + 标签」的词典单元，比原来的单行文件名高不少 */
-  max-height: 320px;
+  max-height: var(--size-scroll-sm);
   overflow-y: auto;
 }
 
@@ -1125,6 +1127,7 @@ function definitionHtml(definition: string) {
 }
 
 .group-name {
+  /* 名称输入框在一行里的弹性宽度：够放下常见词典名，窄了才换行 */
   flex: 1 1 160px;
   min-width: 120px;
 }
@@ -1137,6 +1140,7 @@ function definitionHtml(definition: string) {
 }
 
 .group-dir {
+  /* 目录列只是辅助信息，超出省略，完整路径在 popover 里看 */
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1188,7 +1192,7 @@ function definitionHtml(definition: string) {
 .dir-row {
   display: flex;
   align-items: center;
-  height: 32px;
+  height: var(--size-control-md);
   /* el-radio-group/el-checkbox-group 自身把 font-size/line-height 重置成 0（配合
      el-radio/el-checkbox 各自重新设回来，用来消除 inline-flex 子项之间的空白间隙），这里的
      目录行是普通 div、不在这套重置范围内，会原样继承 0，导致图标（尺寸按 1em 算）和文字一起
@@ -1227,7 +1231,7 @@ function definitionHtml(definition: string) {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-height: 360px;
+  max-height: var(--size-scroll-md);
   overflow-y: auto;
 }
 
