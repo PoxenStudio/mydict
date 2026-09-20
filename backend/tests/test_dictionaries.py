@@ -1187,7 +1187,6 @@ async def test_batch_status_rejects_unknown_status(
         json={"dictionary_ids": ids, "status": "archived"},
     )
     assert resp.status_code == 422
-    assert resp.json()["code"] == "validation_error"
     statuses = await _statuses(client, admin_headers)
     assert all(statuses[dict_id] == "disabled" for dict_id in ids)
 
@@ -1203,8 +1202,8 @@ async def test_batch_status_rejects_unknown_dictionary_id(
         headers=admin_headers,
         json={"dictionary_ids": [ids[0], 99_999_999], "status": "enabled"},
     )
-    assert resp.status_code == 409
-    assert resp.json()["code"] == "conflict"
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "not_found"
     # 已存在的那部也不能被改动
     assert (await _statuses(client, admin_headers))[ids[0]] == "disabled"
 

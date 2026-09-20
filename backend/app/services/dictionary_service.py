@@ -14,6 +14,7 @@ from app.core.config import Settings
 from app.core.db import SessionLocal
 from app.core.exceptions import AppError, ConflictError, NotFoundError, ValidationAppError
 from app.core.query_cache import invalidate as invalidate_query_cache
+from app.models.audit import AuditLog
 from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
@@ -639,25 +640,33 @@ def set_dictionary_status(
 def set_dictionaries_status(
     db: Session, dictionary_ids: list[int], status: str, admin_id: int
 ) -> list[Dictionary]:
-    """批量启用/停用。
+    """批量启用/停用：状态变更与逐部审计日志在同一事务里提交，任何一步失败都整批回滚。
 
-    逐个复用 set_dictionary_status，这样审计日志（每部词典一条）与查询缓存失效的行为和单部操作
-    完全一致，事后能追溯到是哪一次批量操作改了哪几部。重复 ID 去重；只要有一个 ID 不存在就整批
-    拒绝，避免留下"改了一半"的中间状态。
+    重复 ID 去重；只要有一个 ID 不存在就整批拒绝（404）。
     """
-    # 与 dictionaries.status 的 CHECK 约束一致；先校验一次，避免整批跑到一半才被数据库拒绝
-    if status not in ("enabled", "disabled"):
-        raise ValidationAppError(f"不支持的状态：{status}")
-
     unique_ids = list(dict.fromkeys(dictionary_ids))
-    existing = {
-        row.id for row in db.query(Dictionary.id).filter(Dictionary.id.in_(unique_ids)).all()
-    }
-    missing = [dict_id for dict_id in unique_ids if dict_id not in existing]
+    found = {d.id: d for d in db.query(Dictionary).filter(Dictionary.id.in_(unique_ids)).all()}
+    missing = [dict_id for dict_id in unique_ids if dict_id not in found]
     if missing:
-        raise ConflictError(f"包含不存在的词典 ID：{missing}")
+        raise NotFoundError(f"包含不存在的词典 ID：{missing}")
 
-    return [set_dictionary_status(db, dict_id, status, admin_id) for dict_id in unique_ids]
+    try:
+        for dict_id in unique_ids:
+            found[dict_id].status = status
+            db.add(
+                AuditLog(
+                    actor_type="admin",
+                    actor_id=admin_id,
+                    action=f"dictionary.{status}",
+                    target=str(dict_id),
+                )
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_query_cache()
+    return [found[dict_id] for dict_id in unique_ids]
 
 
 def update_dictionary_metadata(

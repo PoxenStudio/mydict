@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -93,10 +94,8 @@ class ReorderRequest(BaseModel):
 
 
 class BatchStatusRequest(BaseModel):
-    """批量启用/停用。status 只接受 enabled/disabled，与 format 一样由服务层校验。"""
-
-    dictionary_ids: list[int] = Field(min_length=1)
-    status: str
+    dictionary_ids: list[int] = Field(min_length=1, max_length=500)
+    status: Literal["enabled", "disabled"]
 
 
 class AllowedDictionaryIdsRequest(BaseModel):
