@@ -1,27 +1,22 @@
-"""按字符脚本推断词典的语言方向。
+"""按字符脚本推断词典的语言方向：拉丁字母→en、汉字→中文、假名→ja。
 
-词典自身的元数据里没有可靠的语言字段（StarDict 的 .ifo、MDict 的 header 都没有），
-所以改为从样本「词头用什么文字写、释义用什么文字写」来推断：拉丁字母基本就是英文、
-汉字就是中文、假名就是日文。这个方法区分不了同用拉丁字母的语言（法语/德语/西班牙语
-都会被判成 en），这是已知且可接受的取舍——识别结果只是默认值，管理员可以在词典列表里
-随时改。
+区分不了同用拉丁字母的语言（法/德/西语都会判成 en），识别结果只是默认值，可在词典列表里修改。
 """
 
 import re
 
 from app.parsers.base import ParsedEntry
 
-# 有效字符少于这个数时任何占比都是噪声，宁可返回 None 交给调用方兜底。
+# 有效字符少于这个数时不做判断
 _MIN_CHARS = 20
 
-# 假名太少说明只是词源里混进来的零星字符，不足以判定为日文。
+# 假名少于这个数不判为日文
 _MIN_KANA = 10
 
-# 简体文本里传统字形是零出现，所以只要传统字形占到 1% 就足以判定为繁体。
+# 繁体独有字形占 CJK 字符的比例达到此值判为繁体
 _TRADITIONAL_RATIO = 0.01
 
-# 释义可能是 HTML（MDict 的释义整段是 HTML），标签名与属性名全是拉丁字母，
-# 不剥掉会把拉丁占比显著拉高、把中英判断带偏。
+# 释义可能是 HTML，标签与属性名会拉高拉丁字母占比，需先剥掉
 _TAG_RE = re.compile(r"<[^>]+>")
 
 _LATIN_RE = re.compile(r"[A-Za-z]")
@@ -30,9 +25,7 @@ _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 # 平假名 + 片假名
 _KANA_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
 
-# 只在繁体文本里出现的字形。这里刻意只收「繁体独有」的字，不做简繁对照表——
-# 像 制/製、里/裡、并/並、于/於 这类简体字形本身也通用于繁体的字必须排除，
-# 否则会把繁体文本误判成简体。
+# 只收繁体独有的字形；制/里/并/于 这类两种字体通用的字必须排除
 _TRADITIONAL_ONLY = frozenset(
     "後國學語詞漢義發說這個們為會來時過對開關門問間見現電車長萬與書頭買賣錢銀鐵鳥馬魚龍"
     "風雲聲聽讀寫記認識話請謝誰愛歡樂覺習樣點熱讓應該經濟織級紅綠紙線練結給統絲麗嚴豐臨"
@@ -56,15 +49,12 @@ def _classify(text: str) -> str | None:
         return None
     cjk_chars = _CJK_RE.findall(text)
     latin = len(_LATIN_RE.findall(text))
-    # 假名同样算有效字符，否则纯假名（片假名外来语）的日文词头会被当成样本不足。
+    # 假名也算有效字符，否则纯假名词头会被当成样本不足
     kana = len(_KANA_RE.findall(text))
     if len(cjk_chars) + latin + kana < _MIN_CHARS:
         return None
 
-    # 假名是日文排他性的判据（中英文文本都不会出现），优先于中英判断。要求假名数量
-    # 至少是汉字的三分之一：真实日文里假名占比通常与汉字相当，而中文词典偶尔在词源里
-    # 夹几个假名远达不到这个比例。漏判成中文比误判成日文更糟——汉字字形会被顺势认成
-    # 繁体，所以这里宁松勿严。
+    # 假名是日文的排他判据，优先于中英判断；要求假名数不低于汉字的 1/3，避免中文词典里零星假名误判
     if kana >= _MIN_KANA and kana * 3 >= len(cjk_chars):
         return "ja"
 
@@ -76,11 +66,7 @@ def _classify(text: str) -> str | None:
 
 
 def detect_language(entries: list[ParsedEntry]) -> tuple[str | None, str | None]:
-    """返回 (lang_from, lang_to)；任一侧判定不了时该侧为 None。
-
-    lang_from 看词头用什么文字写，lang_to 看释义用什么文字写，于是英汉、汉英、
-    汉语单语、英英四种常见情形都能区分开。
-    """
+    """返回 (lang_from, lang_to)：词头判 lang_from，释义判 lang_to；判定不了的一侧为 None。"""
     headwords = "\n".join(entry.word for entry in entries)
     definitions = "\n".join(_TAG_RE.sub(" ", entry.definition or "") for entry in entries)
     return _classify(headwords), _classify(definitions)

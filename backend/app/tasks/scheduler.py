@@ -5,8 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.timeutil import day_str, local_zone
 from app.tasks.stats_aggregation import aggregate_date
 
-# 显式传入业务时区：聚合的目标日是按本地日切的，让调度器的时间概念与之一致，
-# 不再依赖「APScheduler 默认时区恰好等于宿主机本地时区」这个巧合。
+# 聚合的目标日按本地日划分，调度器时区与之保持一致
 _scheduler = BackgroundScheduler(timezone=local_zone())
 
 

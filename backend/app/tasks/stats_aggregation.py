@@ -40,8 +40,7 @@ def _upsert(
 def aggregate_date(target_date: str) -> None:
     db = SessionLocal()
     try:
-        # 按「本地日」的 UTC 区间取日志，与写进 stat_date 的本地日期标签口径一致——之前用
-        # func.date(created_at) 是按 UTC 日分组，与本地日标签错开一个时区偏移。
+        # 按本地日对应的 UTC 区间取日志，与 stat_date 的本地日期标签口径一致
         day_start, day_end = day_bounds_utc(date.fromisoformat(target_date))
         logs = (
             db.query(QueryLog)

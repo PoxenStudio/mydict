@@ -73,10 +73,10 @@ class DictionaryImportTaskOut(BaseModel):
 class ImportFromDictsDirRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     format: str
-    # 留空表示导入时按词头/释义的文字种类自动识别语言方向。
+    # 留空表示导入时自动识别
     lang_from: str | None = Field(default=None, max_length=8)
     lang_to: str | None = Field(default=None, max_length=8)
-    # 只导入释义、不解包 .mdd 里的图片/发音：大词典的 .mdd 常有几个 GB，解包一份等于再占一份磁盘。
+    # 只导入释义，不解包 .mdd 里的图片/发音
     skip_resources: bool = False
     files: list[str] = Field(min_length=1)
 

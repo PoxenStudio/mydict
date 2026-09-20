@@ -70,7 +70,7 @@ class EcdictParser(DictionaryParser):
                 )
 
     def sample(self, file_paths: list[Path], limit: int) -> list[ParsedEntry]:
-        """只读前 limit 行；采样不需要 phonetic/extra，省掉 _build_extra 的 JSON 解析。"""
+        """只读前 limit 行，不构造 extra。"""
         sampled: list[ParsedEntry] = []
         with file_paths[0].open("r", encoding="utf-8-sig", newline="") as f:
             for row in csv.DictReader(f):

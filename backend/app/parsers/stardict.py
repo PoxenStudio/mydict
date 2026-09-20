@@ -8,13 +8,10 @@ from app.parsers.base import DictionaryParser, ParsedEntry
 _TEXT_TYPES = {"m", "l", "t", "y", "g", "x"}  # 纯文本/语法/词源等，按文本展示
 _HTML_TYPES = {"h"}
 
-# 采样最多读 .idx 的前 1MB：StarDict 的 .idx 是按词序排列的紧凑记录（每条十几字节），
-# 1MB 足够取出上千个词头用于判断语言，不必为几十万词条的词典整份读入。
+# 采样最多读 .idx 的前 1MB
 _SAMPLE_IDX_BYTES = 1024 * 1024
 
-# 采样释义时最多读 .dict 的前 8MB。正常词典的释义记录与词头同序，前 N 条落在文件很靠前
-# 的位置；这里加硬上限是为了防止异常偏移量导致采样把整个 GB 级文件读进来——真撞上这种
-# 情况宁可少拿几条释义（识别不出则回落默认值），也不能让扫描式采样吃掉内存。
+# 采样释义时最多读 .dict 的前 8MB，防止异常偏移把 GB 级文件整份读进内存
 _SAMPLE_DICT_BYTES = 8 * 1024 * 1024
 
 
@@ -52,10 +49,7 @@ def _read_idx_bytes(idx_path: Path, size: int = -1) -> bytes:
 
 
 def _read_dict_content(dict_path: Path, size: int = -1) -> bytes:
-    """读取 .dict（或其 .dz 压缩版）内容；size >= 0 时只读前 size 字节。
-
-    gzip 是流式格式，读压缩文件的少量前缀并不会把整个文件解压出来。
-    """
+    """读取 .dict（或其 .dz 压缩版）内容；size >= 0 时只读前 size 字节。"""
     if dict_path.suffix == ".dz" or dict_path.name.endswith(".dict.dz"):
         with gzip.open(dict_path, "rb") as f:
             return f.read(size)
@@ -88,7 +82,7 @@ def _read_idx_sample(idx_path: Path, offset_bits: int, limit: int) -> list[tuple
             if len(entries) >= limit:
                 break
     except ValueError:
-        # 读到的是 .idx 前缀，末尾可能是半条记录；已取到的记录足够采样。
+        # 前缀末尾可能是半条记录，已取到的足够采样
         pass
     return entries
 
@@ -173,8 +167,7 @@ class StarDictParser(DictionaryParser):
         entries = _read_idx_sample(idx_path, offset_bits, limit)
         if not entries:
             return []
-        # 只把采样条目实际覆盖到的那段 .dict 读出来（并受 _SAMPLE_DICT_BYTES 封顶），
-        # 词典再大也不会整份进内存。
+        # 只读采样条目覆盖到的那段 .dict，并受 _SAMPLE_DICT_BYTES 封顶
         needed = min(max(offset + length for _, offset, length in entries), _SAMPLE_DICT_BYTES)
         dict_bytes = _read_dict_content(dict_path, needed)
         return [

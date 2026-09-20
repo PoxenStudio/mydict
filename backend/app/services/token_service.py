@@ -11,7 +11,7 @@ from app.services.query_service import filter_existing_dictionary_ids
 
 
 def _usage(db: Session, token_id: int) -> tuple[int, int]:
-    # 计数器以本地日期为键（写入侧见 rate_limit_service），这里读同一个出处，避免以后又漂移
+    # 计数器以本地日期为键，与 rate_limit_service 写入口径一致
     today = today_str()
     today_row = (
         db.query(QueryStatsDaily)

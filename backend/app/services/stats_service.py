@@ -14,8 +14,7 @@ _VALID_DIMENSIONS = {"token", "user", "date", "source"}
 
 
 def get_overview(db: Session) -> dict:
-    # created_at 存的是 UTC，而「今天」按部署本地时区划分，所以必须用该本地日对应的 UTC 区间
-    # 去比；拿本地日期直接和 func.date(created_at) 比会在本地 00:00 到 UTC 偏移之间错开一整天。
+    # created_at 是 UTC，「今天」按本地时区划分，需用本地日对应的 UTC 区间比较
     start, end = day_bounds_utc(today())
     # 直接数 query_logs（而非等定时聚合写入 query_stats_daily），保证 Dashboard 概览实时；
     # 也更贴合「查询量」本身的语义——只数真正查过的词，不含 suggest/dictionaries 这类元信息调用。
@@ -127,7 +126,10 @@ def query_dimension_stats(
                 func.sum(QueryStatsDaily.query_count),
                 func.sum(QueryStatsDaily.rate_limited_count),
             )
-            .filter(QueryStatsDaily.stat_date >= start.isoformat(), QueryStatsDaily.stat_date <= end.isoformat())
+            .filter(
+                QueryStatsDaily.stat_date >= start.isoformat(),
+                QueryStatsDaily.stat_date <= end.isoformat(),
+            )
             .group_by(QueryStatsDaily.stat_date)
             .order_by(QueryStatsDaily.stat_date)
             .all()

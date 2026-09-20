@@ -29,10 +29,10 @@ logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
 
-# 语言识别采样条数：几百条词头/释义已足够判断文字种类，再多只是浪费解析时间。
+# 语言识别采样条数
 _SAMPLE_LIMIT = 200
 
-# 识别不出语言时的兜底方向，与前端导入弹窗的默认值保持一致。
+# 识别不出语言时的兜底方向，与前端导入弹窗默认值一致
 _FALLBACK_LANG_FROM = "en"
 _FALLBACK_LANG_TO = "zh-Hans"
 
@@ -98,7 +98,7 @@ def _resolve_dicts_subdir(inbox: Path, subpath: str) -> Path:
     return target
 
 
-# 文件名后缀 → 词典格式，用于把 /data/dicts 下散落的文件自动归组成词典单元。
+# 文件名后缀 → 词典格式
 _FORMAT_BY_EXT: dict[str, str] = {
     "mdx": "mdict",
     "mdd": "mdict",
@@ -111,37 +111,30 @@ _FORMAT_BY_EXT: dict[str, str] = {
     "csv": "ecdict",
 }
 
-# 构成一部可导入词典所必需的文件，外层列表是「与」、内层元组是「或」，对齐各
-# Parser 的实际要求（.mdd/.syn 是可选资源，不计入）。缺任一项即不可导入。
+# 一部词典的必需文件：外层是「与」、内层是「或」（.mdd/.syn 可选，不计入）
 _REQUIRED_EXTENSIONS: dict[str, tuple[tuple[str, ...], ...]] = {
     "mdict": (("mdx",),),
     "stardict": (("ifo",), ("idx", "idx.gz"), ("dict", "dict.dz")),
     "ecdict": (("csv",),),
 }
 
-# 双后缀必须先于单后缀匹配，否则 x.dict.dz 会被截成 .dz 这个不存在的后缀。
+# 双后缀须先于单后缀匹配
 _DOUBLE_EXTENSIONS = ("dict.dz", "idx.gz")
 
-# 一部词典里真正的「入口文件」：名称与主干以它为准，同组的资源文件不能反客为主。
+# 入口文件：词典名称与主干以它为准
 _ENTRY_EXTENSIONS = {"mdx", "ifo", "csv"}
 
-# MDict 的资源文件超过单个文件上限时会拆卷，形如 X.mdd / X.1.mdd / X.2.mdd（也见过到 .6）。
-# 这些卷号必须归到 X.mdx 那部词典，否则既会多出一堆「缺少 .mdx」的假分组，导入 X 时也会
-# 漏掉这些资源。但 X.1 也可能是词典名的一部分（如「三省堂スーパー大辞林3.0」），所以只在
-# 能对上同目录某个 .mdx 主干时才剥卷号，不做无条件剥离。
+# MDict 资源分卷 X.1.mdd / X.2.mdd…；X.1 也可能是词典名本身，仅在能对上同目录 .mdx 主干时才剥卷号
 _VOLUME_SUFFIX_RE = re.compile(r"\.\d+$")
 
-# 递归扫描的最大深度（相对扫描起点）。用户一般按「一个文件夹一部词典」整理，深度 1 就够；
-# 留到 4 是为了容忍再套一两层（如 EPWING 的 <词典>/DATA/HONMON 结构）。
+# 递归扫描的最大深度（相对扫描起点）
 _MAX_SCAN_DEPTH = 4
 
 
 def _split_dict_filename(filename: str) -> tuple[str, str, str] | None:
     """把文件名拆成 (格式, 分组键, 规范后缀)；后缀不属于任何词典格式时返回 None。
 
-    分组键带上格式前缀（如 "stardict:foo"）：同一目录下的 foo.mdx 与 foo.ifo 分属
-    两种格式、是两部不同的词典，不能因为主干相同就并成一组。键统一小写以实现大小写
-    不敏感，展示用的主干另由调用方按原始文件名截取。
+    分组键带格式前缀且统一小写，foo.mdx 与 foo.ifo 不会被并成一组。
     """
     lowered = filename.lower()
     for ext in _DOUBLE_EXTENSIONS:
@@ -168,7 +161,7 @@ def _missing_requirements(format_: str, exts: set[str]) -> list[str]:
 
 def _sanitize_dict_name(raw: str, fallback: str) -> str:
     name = " ".join(raw.split())
-    # 长度与 ImportFromDictsDirRequest.name 的 max_length 对齐，避免建议值反而提交不上去。
+    # 与 ImportFromDictsDirRequest.name 的 max_length 对齐
     return (name or fallback)[:255]
 
 
@@ -189,8 +182,7 @@ def _build_dict_groups(
 ) -> tuple[list[dict], list[str]]:
     """把同一目录下的文件按 (格式, 主干) 归组成待导入的词典单元，并列出被忽略的文件。
 
-    多卷资源（X.mdd / X.1.mdd / …）并入 X.mdx 那一组，但仅在同目录确实存在 X.mdx 时；
-    对不上主干的孤立 .mdd 仍单独成组并标为缺件，让管理员看得见。
+    多卷 .mdd 仅在同目录存在对应 .mdx 时并组，孤立的 .mdd 单独成组并标缺件。
     """
     mdx_stems = {
         path.name[: -len(".mdx")].lower() for path in files if path.name.lower().endswith(".mdx")
@@ -214,7 +206,7 @@ def _build_dict_groups(
         )
         group["paths"].append(path)
         group["exts"].add(ext)
-        # 主干取入口文件（.mdx/.ifo/.csv）的文件名，多卷里的「X.1」不能反客为主当成词典名
+        # 主干取入口文件名，避免分卷的「X.1」被当成词典名
         if group["stem"] is None or ext in _ENTRY_EXTENSIONS:
             group["stem"] = path.name[: -(len(ext) + 1)]
 
@@ -242,7 +234,7 @@ def _build_dict_groups(
                 "total_size": sum(f["size"] for f in files_out),
                 "importable": not missing,
                 "reason": f"缺少 {'、'.join(missing)} 文件" if missing else None,
-                # 组级「已导入」要求组内文件全部被消费过，避免只导过一半就整组跳过。
+                # 组内文件全部被消费过才算已导入
                 "imported": all(f["imported"] for f in files_out),
             }
         )
@@ -275,7 +267,7 @@ def _file_size(path: Path) -> int:
 
 
 def _iter_scan_dirs(root: Path, max_depth: int) -> Iterator[Path]:
-    """深度受限地遍历 root 及其子目录；跳过以 . 开头的目录与符号链接目录（避免环与越出词典目录）。"""
+    """深度受限地遍历 root 及其子目录；跳过以 . 开头的目录与符号链接目录。"""
     stack: list[tuple[Path, int]] = [(root, 0)]
     while stack:
         current, depth = stack.pop()
@@ -290,11 +282,7 @@ def _iter_scan_dirs(root: Path, max_depth: int) -> Iterator[Path]:
 def _build_dict_groups_recursive(
     root: Path, inbox: Path, imported_relpaths: set[str]
 ) -> tuple[list[dict], list[str]]:
-    """逐层扫描 root 下的所有目录，把每一层的文件各自归组。
-
-    每个目录单独归组（而不是把整棵子树混在一起），因为同一部词典的配套文件总是在同一个
-    文件夹里；混在一起反而会让不同目录下的同名文件互相干扰。
-    """
+    """逐层扫描 root 下的所有目录，每个目录的文件各自归组，避免不同目录的同名文件互相干扰。"""
     dictionaries: list[dict] = []
     skipped: list[str] = []
     for current in _iter_scan_dirs(root, _MAX_SCAN_DEPTH):
@@ -304,10 +292,7 @@ def _build_dict_groups_recursive(
         if not files:
             continue
         groups, ignored = _build_dict_groups(files, inbox, imported_relpaths)
-        # 「一个文件夹一部词典」是很常见的整理方式，这种时候目录名往往比文件名主干可读得多
-        # （如「[英] 韦氏大学词典」vs「[英-英]语音版图文版Merriam-Websters…」）。只在扫描
-        # 起点之外的目录、且该目录里恰好只有一部可导入词典时才采用目录名——扫描起点是容器
-        # 而不是某部词典的文件夹，一个目录放多部词典时目录名也无法区分它们。
+        # 扫描起点之外、且目录里恰好只有一部可导入词典时，用目录名（通常比文件名主干可读）
         importable = [group for group in groups if group["importable"]]
         if current != root and len(importable) == 1:
             importable[0]["name"] = _sanitize_dict_name(current.name, importable[0]["name"])
@@ -410,8 +395,7 @@ def start_dictionary_import(
     先一步掐断请求（虽然后端还在继续跑、最终会导入成功），界面上看起来像"导入
     没反应"，词典其实要再等一段时间才能查到。
 
-    lang_from/lang_to 传 None 表示导入时自动识别语言方向；识别需要采样词条，同样
-    是耗时操作，所以和解析一起放在后台线程里做，不拖慢这次请求的返回。
+    lang_from/lang_to 传 None 表示导入时自动识别（在后台线程里做）。
     """
     _validate_format(format_)
     _validate_file_extensions(format_, staged_paths)
@@ -489,17 +473,13 @@ def _resolve_languages(
     lang_from: str | None,
     lang_to: str | None,
 ) -> tuple[str, str]:
-    """把为 None 的一侧用采样识别出的语言补齐；识别不出时回落到默认方向。
-
-    dictionaries.lang_from/lang_to 是 NOT NULL，所以这里必须落到具体值。
-    """
+    """把为 None 的一侧用采样识别出的语言补齐；识别不出时回落到默认方向（列为 NOT NULL）。"""
     if lang_from is not None and lang_to is not None:
         return lang_from, lang_to
     try:
         detected_from, detected_to = detect_language(parser.sample(staged_paths, _SAMPLE_LIMIT))
     except Exception:
-        # 识别只是为了省掉一次手填，采样失败（文件损坏、格式异常等）不该连累整次导入，
-        # 回落默认方向让管理员导入后再改即可。
+        # 采样失败不该连累整次导入，回落默认方向，导入后可手动改
         logger.warning("语言方向自动识别失败，回落到默认值", exc_info=True)
         detected_from = detected_to = None
     return (
@@ -525,9 +505,7 @@ def import_dictionary(
     """解析并导入词典。调用方需已完成格式/文件名校验并登记好 task_id（见
     start_dictionary_import），这里只管解析入库、更新任务进度。
 
-    lang_from/lang_to 为 None 时按采样结果自动识别。
-    skip_resources=True 时只导入释义，不解包 .mdd 里的图片/发音（大词典的 .mdd 常有
-    几个 GB，解包一份等于再占一份磁盘），释义里的资源引用也保持原样不改写。
+    lang_from/lang_to 为 None 时按采样结果自动识别；skip_resources=True 时不解包 .mdd 资源。
 
     import_method="upload"：staged_paths 是浏览器上传的暂存文件，成功后移动归档到该词典的
     source/ 目录，由本应用管理，删除词典时一并清理。
@@ -554,7 +532,7 @@ def import_dictionary(
 
     dict_id = dictionary.id
     storage_root = Path(settings.dictionary_storage_path) / str(dict_id)
-    # 不要资源时连 res/ 目录都不建，磁盘上不留痕（storage_root 为空时会被下面的清理逻辑删掉）
+    # 不要资源时不建 res/ 目录
     resource_dir = None if skip_resources else storage_root / "res"
     source_dir = storage_root / "source"
 
