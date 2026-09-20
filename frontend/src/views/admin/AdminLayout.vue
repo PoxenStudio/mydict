@@ -5,6 +5,7 @@ import { useAdminAuthStore } from '../../stores/adminAuth'
 import ThemeToggle from '../../components/ThemeToggle.vue'
 import BackgroundTasksIndicator from '../../components/admin/BackgroundTasksIndicator.vue'
 
+const appVersion = __APP_VERSION__
 const router = useRouter()
 const authStore = useAdminAuthStore()
 const drawerOpen = ref(false)
@@ -39,7 +40,7 @@ function logout() {
       >
         ☰
       </button>
-      <span class="brand">MyDict 管理后台</span>
+      <span class="brand">MyDict 管理后台<span class="version">（v{{ appVersion }}）</span></span>
       <div class="topbar-actions">
         <BackgroundTasksIndicator />
         <ThemeToggle />
@@ -89,6 +90,12 @@ function logout() {
 .brand {
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+}
+
+.version {
+  font-weight: var(--font-weight-regular);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
 }
 
 .drawer-toggle {
