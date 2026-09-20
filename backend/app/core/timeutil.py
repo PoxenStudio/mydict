@@ -10,18 +10,36 @@
 `ix_query_logs_created_at` 索引，`func.date(col)` 会让索引失效。
 """
 
+import logging
 from datetime import date, datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
+from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
+
+
+def _system_zone():
+    return datetime.now().astimezone().tzinfo
+
+
+@lru_cache(maxsize=None)
+def _resolve_zone(name: str):
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning("TIMEZONE=%r 无效，回落到系统时区", name)
+    return _system_zone()
+
 
 def local_zone():
-    """部署本地时区：配置了 `settings.timezone` 就用它，否则跟随容器/宿主机本地时区。"""
-    name = (get_settings().timezone or "").strip()
-    if name:
-        return ZoneInfo(name)
-    return datetime.now().astimezone().tzinfo
+    """部署本地时区：配置了有效的 `settings.timezone` 就用它，否则用系统时区。
+
+    系统时区只是当前时刻的固定偏移，没有夏令时规则；有夏令时的地区请显式配置 TIMEZONE。
+    """
+    return _resolve_zone((get_settings().timezone or "").strip())
 
 
 def now_local() -> datetime:

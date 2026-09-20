@@ -61,3 +61,9 @@ def test_seconds_to_local_midnight_is_within_one_day() -> None:
     seconds = timeutil.seconds_to_local_midnight()
 
     assert 0 < seconds <= 24 * 60 * 60
+
+
+def test_invalid_timezone_falls_back_to_system_zone(monkeypatch) -> None:
+    monkeypatch.setattr(get_settings(), "timezone", "Not/AZone")
+
+    assert timeutil.now_local().utcoffset() == datetime.now().astimezone().utcoffset()
