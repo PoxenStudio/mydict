@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
 import DictionarySidebar from '../components/DictionarySidebar.vue'
@@ -17,6 +17,7 @@ import { prefersReducedMotion } from '../utils/motion'
 import type { QueryResultItem } from '../types/query'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useUserAuthStore()
 const settingsStore = useSettingsStore()
 const { favoriteMap, favoriteLoading, loadFavorites, toggleFavorite } = useFavorites()
@@ -96,6 +97,8 @@ onMounted(async () => {
     return
   }
   await Promise.all([loadFavorites(), loadDictionaryFilter()])
+  // 词典列表与登录态都就绪了，这时才处理地址栏里的 ?q=（外链直达）
+  await runFromUrl()
 })
 
 // 检索范围变了就用新范围重查（还没查过就不动）。比的是勾选结果的字符串，这样从
@@ -237,6 +240,8 @@ async function runSearch(query?: string) {
     const resp = await searchWord(q, filterIds.value)
     results.value = resp.results
     status.value = 'ok'
+    // 结果出来后把词同步进地址栏，链接才能分享、刷新才能复现
+    syncQueryToUrl(q)
     // 排序第一的那部词典默认展开，其余折叠
     const first = resp.results[0]
     expandedKey.value = first ? String(first.dictionary_id) : null
@@ -244,6 +249,35 @@ async function runSearch(query?: string) {
   } catch {
     status.value = 'error'
   }
+}
+
+/**
+ * 把当前查询词写进地址栏的 `?q=`。
+ *
+ * 用 `replace` 而不是 `push`：每查一个词就压一条历史的话，浏览器后退键很快就被查询记录塞满，
+ * 而这里的历史价值只是「能分享、刷新能复现」。值没变时不碰路由，免得白触发一次导航。
+ */
+function syncQueryToUrl(q: string) {
+  if (String(route.query.q ?? '') === q) return
+  router.replace({ query: q ? { q } : {} })
+}
+
+/**
+ * 外链直达：`/?q=词` 打开就查。
+ *
+ * 浏览器地址栏关键字（URL 模板填 `.../?q=%s`）、书签小工具、以及任何能拼 URL 的地方都靠它。
+ * 未登录时不能直接查（runSearch 会被登录墙挡掉），所以把词留在输入框里并说明原因——
+ * 否则用户点开链接看到的是空页面，会以为链接坏了。
+ */
+async function runFromUrl() {
+  const initial = String(route.query.q ?? '').trim()
+  if (!initial) return
+  word.value = initial
+  if (showLoginGate.value) {
+    ElMessage.info('请先登录后再查询')
+    return
+  }
+  await runSearch(initial)
 }
 
 /** iframe 里点了 entry:// 词条链接，按新词重查 */
