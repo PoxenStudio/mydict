@@ -405,6 +405,160 @@ def test_mdict_sample_does_not_extract_mdd_resources(tmp_path: Path) -> None:
     assert "/dict-res/" not in apple.definition
 
 
+# ------------------------------------------------- 采样：语言识别要跨整部词典取词头
+#
+# 早期实现只采样词典开头的 200 条，而这些位置常常是索引项、数字条目或整页扫描图，
+# 于是把中文词典判成了 en（实测用户的「汉典」46 万条就是这么被误判的）。语言方向是
+# 查询路由的依据，判错等于那部词典的内容永远查不到。
+
+
+def _build_mdict_txt(tmp_path: Path, pairs: list[tuple[str, str]], name: str = "many") -> Path:
+    from mdict_utils import writer
+
+    txt_path = tmp_path / f"{name}.txt"
+    txt_path.write_text(
+        "".join(f"{word}\n{definition}\n</>\n" for word, definition in pairs),
+        encoding="utf-8",
+    )
+    mdx_path = tmp_path / f"{name}.mdx"
+    writer.pack(
+        str(mdx_path),
+        writer.pack_mdx_txt(str(txt_path), encoding="utf-8"),
+        title="Many",
+        description="",
+        encoding="utf-8",
+    )
+    return mdx_path
+
+
+def _build_stardict_words(tmp_path: Path, words: list[str], name: str = "many") -> list[Path]:
+    dict_bytes = b""
+    idx_bytes = b""
+    offsets = []
+    for word in words:
+        content = f"释义 {word}".encode()
+        offsets.append((word, len(dict_bytes), len(content)))
+        dict_bytes += content
+    for word, offset, length in offsets:
+        idx_bytes += word.encode("utf-8") + b"\x00"
+        idx_bytes += struct.pack(">I", offset)
+        idx_bytes += struct.pack(">I", length)
+    ifo_path = tmp_path / f"{name}.ifo"
+    ifo_path.write_text(
+        "StarDict's dict ifo file\nversion=2.4.2\nbookname=Many\n"
+        f"wordcount={len(words)}\nidxfilesize={len(idx_bytes)}\nsametypesequence=m\n",
+        encoding="utf-8",
+    )
+    idx_path = tmp_path / f"{name}.idx"
+    idx_path.write_bytes(idx_bytes)
+    dict_path = tmp_path / f"{name}.dict"
+    dict_path.write_bytes(dict_bytes)
+    return [ifo_path, idx_path, dict_path]
+
+
+def _build_ecdict_words(tmp_path: Path, words: list[str], name: str = "many") -> Path:
+    import csv
+
+    csv_path = tmp_path / f"{name}.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["word", "definition", "translation"])
+        writer.writeheader()
+        for word in words:
+            writer.writerow({"word": word, "definition": "a definition", "translation": "释义"})
+    return csv_path
+
+
+def _is_spread(sampled: list[str], all_words: list[str]) -> bool:
+    """采样是否覆盖到了词典后段——只取开头的话后段一个都不会出现。"""
+    tail = set(all_words[len(all_words) // 2 :])
+    return bool(set(sampled) & tail)
+
+
+def test_is_informative_filters_index_entries_and_image_only_pages() -> None:
+    from app.parsers.base import is_informative
+
+    # 纯数字/符号词头是索引项，不代表正文用什么语言写
+    assert not is_informative("0", "苹果，一种水果")
+    assert not is_informative("110", "报警电话")
+    assert not is_informative("---", "分隔线")
+    # 扫描版词典整条释义就是一个图片引用，没有可判定的文字
+    assert not is_informative("苹果", '<img src="pic/a.jpg" width="100%">')
+    assert not is_informative("苹果", "&nbsp;")
+    # 正常词条
+    assert is_informative("苹果", "一种水果")
+    assert is_informative("apple", "a fruit")
+    # 极短但合法的释义不能被误伤（真实词典里 `n. 苹果` 很常见）
+    assert is_informative("apple", "n. 苹果")
+
+
+def test_mdict_sample_headwords_spreads_across_whole_dictionary(tmp_path: Path) -> None:
+    words = [f"w{index:03d}" for index in range(60)]
+    mdx_path = _build_mdict_txt(tmp_path, [(w, f"definition of {w}") for w in words])
+
+    sampled = MDictParser().sample_headwords([mdx_path], limit=10)
+
+    assert len(sampled) == 10
+    assert _is_spread(sampled, words), f"只取到了开头：{sampled}"
+    assert set(sampled) <= set(words)
+
+
+def test_stardict_sample_headwords_spreads_across_whole_dictionary(tmp_path: Path) -> None:
+    words = [f"w{index:03d}" for index in range(60)]
+    paths = _build_stardict_words(tmp_path, words)
+
+    sampled = StarDictParser().sample_headwords(paths, limit=10)
+
+    assert sampled, "StarDict 采样不该为空"
+    assert _is_spread(sampled, words), f"只取到了开头：{sampled}"
+    assert set(sampled) <= set(words)
+
+
+def test_ecdict_sample_headwords_spreads_across_whole_file(tmp_path: Path) -> None:
+    words = [f"w{index:03d}" for index in range(60)]
+    csv_path = _build_ecdict_words(tmp_path, words)
+
+    sampled = EcdictParser().sample_headwords([csv_path], limit=10)
+
+    assert len(sampled) == 10
+    assert _is_spread(sampled, words), f"只取到了开头：{sampled}"
+    assert set(sampled) <= set(words)
+
+
+def test_mdict_detection_survives_index_and_image_only_prefix(tmp_path: Path) -> None:
+    """开头全是数字索引项 + 整页扫描图时，仍要判出这是中文词典。
+
+    这正是「汉典」的形态：前若干条是 `0`、`110`、`120` 这类，字典开头还有整页图片词条。
+    """
+    from app.services.language_detect import detect_language
+
+    pairs = [(str(i), '<img src="pic/page.jpg" width="100%">') for i in range(30)]
+    # 中文词条要多到让词头侧的有效字符数越过识别下限（否则会返回 None 而不是 zh）
+    chinese = [
+        "光明", "山川", "风雨", "江海", "春秋", "日夜", "天地", "英雄",
+        "文章", "道路", "星辰", "草木", "飞鸟", "流水", "白云", "青山",
+    ]  # fmt: skip
+    pairs += [(word, f"<p>{word}，汉语常用词，释义见正文。</p>") for word in chinese]
+    mdx_path = _build_mdict_txt(tmp_path, pairs, name="hanyu")
+
+    parser = MDictParser()
+    headwords = parser.sample_headwords([mdx_path], limit=50)
+    definitions = [entry.definition for entry in parser.sample([mdx_path], limit=50)]
+
+    assert all(not headword.isdigit() for headword in headwords), headwords
+    assert detect_language(headwords, definitions) == ("zh-Hans", "zh-Hans")
+
+
+def test_mdict_sample_skips_uninformative_prefix(tmp_path: Path) -> None:
+    """sample() 要跳过纯图片词条，直到拿到有正文的词条为止。"""
+    pairs = [(str(i), '<img src="page.jpg">') for i in range(40)]
+    pairs += [("光明", "<p>光明，明亮之意。</p>"), ("山川", "<p>山川，山与河流。</p>")]
+    mdx_path = _build_mdict_txt(tmp_path, pairs, name="skip")
+
+    sampled = MDictParser().sample([mdx_path], limit=2)
+
+    assert [entry.word for entry in sampled] == ["光明", "山川"]
+
+
 def test_mdict_sample_then_parse_opens_mdx_once(tmp_path: Path, monkeypatch) -> None:
     from mdict_utils import writer
 
@@ -432,4 +586,38 @@ def test_mdict_sample_then_parse_opens_mdx_once(tmp_path: Path, monkeypatch) -> 
     entries = list(parser.parse([mdx_path], dictionary_id=1, resource_dir=None))
 
     assert [e.word for e in entries] == ["apple"]
+    assert len(opened) == 1
+
+
+def test_mdict_sample_headwords_and_sample_share_one_open(tmp_path: Path, monkeypatch) -> None:
+    """语言识别成对调用 sample_headwords() 与 sample()，两者必须复用同一次 MDX 打开。
+
+    这两条路径若各自打开一次，上游「采样与解析复用同一个已打开的 MDX」的优化就被抵消了；
+    而 test_mdict_sample_then_parse_opens_mdx_once 只覆盖 sample() → parse()，盖不住这里。
+    """
+    from mdict_utils import writer
+
+    from app.parsers import mdict as mdict_module
+
+    txt_path = tmp_path / "words.txt"
+    txt_path.write_text("apple\n<p>a fruit</p>\n</>\n", encoding="utf-8")
+    mdx_path = tmp_path / "test.mdx"
+    writer.pack(
+        str(mdx_path),
+        writer.pack_mdx_txt(str(txt_path), encoding="utf-8"),
+        title="Test",
+        description="",
+        encoding="utf-8",
+    )
+
+    opened: list[str] = []
+    original = mdict_module.MDX
+    monkeypatch.setattr(
+        mdict_module, "MDX", lambda path: opened.append(path) or original(path)
+    )
+
+    parser = MDictParser()
+    assert parser.sample_headwords([mdx_path], limit=10) == ["apple"]
+    assert [e.word for e in parser.sample([mdx_path], limit=10)] == ["apple"]
+
     assert len(opened) == 1

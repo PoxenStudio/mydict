@@ -29,8 +29,11 @@ logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
 
-# 语言识别采样条数
-_SAMPLE_LIMIT = 200
+# 语言识别采样条数。词头能做到跨整部词典均匀取样（MDict 的词头表在打开时就已全部读入
+# 内存，按下标取值是纯内存操作），所以多取一些几乎不花钱；释义只能顺序多读再过滤，
+# 取 200 条足够判断文字种类，再多只是浪费解析时间。
+_SAMPLE_HEADWORD_LIMIT = 500
+_SAMPLE_DEFINITION_LIMIT = 200
 
 # 识别不出语言时的兜底方向，与前端导入弹窗默认值一致
 _FALLBACK_LANG_FROM = "en"
@@ -477,7 +480,10 @@ def _resolve_languages(
     if lang_from is not None and lang_to is not None:
         return lang_from, lang_to
     try:
-        detected_from, detected_to = detect_language(parser.sample(staged_paths, _SAMPLE_LIMIT))
+        detected_from, detected_to = detect_language(
+            parser.sample_headwords(staged_paths, _SAMPLE_HEADWORD_LIMIT),
+            [entry.definition for entry in parser.sample(staged_paths, _SAMPLE_DEFINITION_LIMIT)],
+        )
     except Exception:
         # 采样失败不该连累整次导入，回落默认方向，导入后可手动改
         logger.warning("语言方向自动识别失败，回落到默认值", exc_info=True)
@@ -617,6 +623,60 @@ def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) ->
     if on_progress:
         on_progress(count)
     return count
+
+
+def source_paths_for(dictionary: Dictionary) -> list[Path]:
+    """取回重新解析这部词典所需的源文件路径。
+
+    两种导入方式的 `file_path` 语义不同：dicts_dir 存的是源文件绝对路径（分号分隔），
+    upload 存的是归档目录（文件被移进该目录，无扩展名区分，直接取目录内全部文件）。
+    """
+    raw = (dictionary.file_path or "").strip()
+    if not raw:
+        return []
+    if dictionary.import_method == "upload":
+        source_dir = Path(raw)
+        if not source_dir.is_dir():
+            return []
+        return sorted(path for path in source_dir.iterdir() if path.is_file())
+    paths: list[Path] = []
+    for part in raw.split(";"):
+        part = part.strip()
+        if part and Path(part).is_file():
+            paths.append(Path(part))
+    return paths
+
+
+def detect_dictionary_language(dictionary: Dictionary) -> tuple[str | None, str | None]:
+    """按当前采样逻辑重新识别一部词典的语言方向。
+
+    只读源文件，不写库——调用方决定是否落库（见 apply_detected_language）。
+    """
+    paths = source_paths_for(dictionary)
+    if not paths:
+        raise ValidationAppError(f"找不到「{dictionary.name}」的源文件，无法重新识别")
+    parser = _PARSERS[dictionary.format]()
+    headwords = parser.sample_headwords(paths, _SAMPLE_HEADWORD_LIMIT)
+    definitions = [entry.definition for entry in parser.sample(paths, _SAMPLE_DEFINITION_LIMIT)]
+    return detect_language(headwords, definitions)
+
+
+def apply_detected_language(
+    db: Session, dictionary: Dictionary, detected_from: str | None, detected_to: str | None
+) -> bool:
+    """把重新识别出的语言方向写回；只覆盖**识别出结论**的那一侧，返回是否有改动。"""
+    changed = False
+    if detected_from and dictionary.lang_from != detected_from:
+        dictionary.lang_from = detected_from
+        changed = True
+    if detected_to and dictionary.lang_to != detected_to:
+        dictionary.lang_to = detected_to
+        changed = True
+    if changed:
+        db.commit()
+        # lang_from 直接决定查询路由，缓存里带的是词典名的查询结果快照，必须整体失效
+        invalidate_query_cache()
+    return changed
 
 
 def set_dictionary_status(

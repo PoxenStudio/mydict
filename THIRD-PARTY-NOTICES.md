@@ -28,6 +28,7 @@
 | httptools | 0.8.0 | MIT |
 | idna | 3.19 | BSD-3-Clause |
 | mdict-utils | 1.3.14 | MIT |
+| opencc-python-reimplemented | 0.1.7 | Apache-2.0 |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause |
 | pydantic | 2.13.5 | MIT |
 | pydantic-settings | 2.15.0 | MIT |

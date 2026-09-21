@@ -13,8 +13,16 @@ _cache: TTLCache = TTLCache(maxsize=10_000, ttl=_TTL_SECONDS)
 _lock = Lock()
 
 
-def make_key(word_lower: str, dictionary_ids: tuple[int, ...]) -> str:
-    return f"{word_lower}|{','.join(str(i) for i in sorted(dictionary_ids))}"
+def make_key(word_lower: str, dictionary_ids: tuple[int, ...], extra: str = "") -> str:
+    """缓存 key。
+
+    `extra` 用来带上影响匹配结果、但不在 word/词典集合里的因素（例如查询扩展的规则版本），
+    漏掉它会让改规则后的新结果被旧缓存挡住。
+    """
+    parts = [word_lower, ",".join(str(i) for i in sorted(dictionary_ids))]
+    if extra:
+        parts.append(extra)
+    return "|".join(parts)
 
 
 def get(key: str):

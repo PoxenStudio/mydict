@@ -4,13 +4,15 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.deps import require_admin
-from app.core.exceptions import ValidationAppError
+from app.core.exceptions import NotFoundError, ValidationAppError
 from app.models.admin import Admin
+from app.models.dictionary import Dictionary
 from app.schemas.dictionary import (
     BatchStatusRequest,
     DictionaryImportTaskOut,
@@ -21,7 +23,8 @@ from app.schemas.dictionary import (
     ReorderRequest,
     TestQueryEntryOut,
 )
-from app.services import dictionary_service
+from app.services import dictionary_service, query_service
+from app.services.entry_render_service import render_entry_document
 
 router = APIRouter(prefix="/admin/dictionaries", tags=["admin-dictionaries"])
 
@@ -206,3 +209,25 @@ def test_query(
 ) -> list[TestQueryEntryOut]:
     entries = dictionary_service.test_query(db, dictionary_id, word)
     return [_entry_to_out(e) for e in entries]
+
+
+@router.get("/{dictionary_id}/entry", response_class=HTMLResponse)
+def entry_document(
+    dictionary_id: int,
+    word: str,
+    db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
+) -> HTMLResponse:
+    """管理端预览单条词条，供「测试查询」弹窗放进隔离 iframe。
+
+    与前台 /api/dict/entry/{id} 的区别是**不检查启用状态**——测试查询的对象常常正是
+    一部还没启用的词典，前台那条路会把它们挡掉。
+    必须走 iframe 而不是 v-html：管理端 token 也在 localStorage 里，用 v-html 渲染
+    第三方词典的 HTML 等于把权限最高的凭证暴露出去。
+    """
+    if db.get(Dictionary, dictionary_id) is None:
+        raise NotFoundError("词典不存在")
+    entry = query_service.get_entry(db, dictionary_id, word)
+    if entry is None:
+        raise NotFoundError("词条不存在")
+    return HTMLResponse(render_entry_document(entry.definition, dictionary_id=dictionary_id))

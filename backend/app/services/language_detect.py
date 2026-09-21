@@ -5,7 +5,7 @@
 
 import re
 
-from app.parsers.base import ParsedEntry
+from app.parsers.base import strip_markup
 
 # 有效字符少于这个数时不做判断
 _MIN_CHARS = 20
@@ -15,9 +15,6 @@ _MIN_KANA = 10
 
 # 繁体独有字形占 CJK 字符的比例达到此值判为繁体
 _TRADITIONAL_RATIO = 0.01
-
-# 释义可能是 HTML，标签与属性名会拉高拉丁字母占比，需先剥掉
-_TAG_RE = re.compile(r"<[^>]+>")
 
 _LATIN_RE = re.compile(r"[A-Za-z]")
 # CJK 统一表意文字（含扩展 A 与兼容表意文字）
@@ -65,8 +62,18 @@ def _classify(text: str) -> str | None:
     return "en"
 
 
-def detect_language(entries: list[ParsedEntry]) -> tuple[str | None, str | None]:
-    """返回 (lang_from, lang_to)：词头判 lang_from，释义判 lang_to；判定不了的一侧为 None。"""
-    headwords = "\n".join(entry.word for entry in entries)
-    definitions = "\n".join(_TAG_RE.sub(" ", entry.definition or "") for entry in entries)
-    return _classify(headwords), _classify(definitions)
+def detect_language(headwords: list[str], definitions: list[str]) -> tuple[str | None, str | None]:
+    """返回 (lang_from, lang_to)；任一侧判定不了时该侧为 None。
+
+    lang_from 看词头用什么文字写，lang_to 看释义用什么文字写，于是英汉、汉英、
+    汉语单语、英英四种常见情形都能区分开。
+
+    两侧分别传入（而不是共用一个 ParsedEntry 列表）是因为它们的取样方式不同：
+    词头能做到跨整部词典均匀取样（MDict 的内存词头表），释义只能顺序多取一些再过滤，
+    两者本来就不是同一批词条——而判定只看各自的字符构成，不需要它们配对。
+    """
+    headword_text = "\n".join(headwords)
+    # 释义那一侧先剥掉标签与字符实体：MDict 的释义整段是 HTML，标签名/属性名/`&nbsp;`
+    # 都是拉丁字符，不剥会把中文释义的拉丁占比显著拉高、把中英判断带偏。
+    definition_text = strip_markup("\n".join(definitions))
+    return _classify(headword_text), _classify(definition_text)

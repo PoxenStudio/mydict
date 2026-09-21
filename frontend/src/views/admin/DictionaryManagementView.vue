@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as dictApi from '../../api/admin/dictionaries'
 import DictionaryImportDialog from '../../components/admin/DictionaryImportDialog.vue'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
+import EntryFrame from '../../components/EntryFrame.vue'
 import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
 import type { DictionaryItem, DictionaryStatus, TestQueryEntry } from '../../types/dictionary'
 
@@ -178,12 +179,6 @@ async function runTestQuery() {
     testQueryWord.value.trim(),
   )
 }
-
-// 部分 ECDICT 数据（含已导入的旧数据）把多行释义存成字面 "\n" 而非真换行，
-// 这里兜底转换一次，避免预览里直接显示出 \n 这两个字符。
-function definitionHtml(definition: string) {
-  return definition.replace(/\\n/g, '\n')
-}
 </script>
 
 <template>
@@ -321,12 +316,25 @@ function definitionHtml(definition: string) {
           </template>
         </el-input>
         <div class="test-query-results">
-          <div v-for="(entry, i) in testQueryResults" :key="i" class="result-card">
+          <div
+            v-for="(entry, i) in testQueryResults"
+            :key="`${entry.word}-${i}`"
+            class="result-card"
+          >
             <div class="result-word">
               {{ entry.word }}
               <span v-if="entry.phonetic" class="result-phonetic">[{{ entry.phonetic }}]</span>
             </div>
-            <div class="result-definition" v-html="definitionHtml(entry.definition)"></div>
+            <!--
+              用隔离 iframe 而不是 v-html：管理端 token 也在 localStorage 里，直接注入
+              第三方词典的 HTML 等于把权限最高的凭证暴露出去（词典的 <style> 还会污染
+              整个后台界面）。
+            -->
+            <EntryFrame
+              v-if="testQueryTarget"
+              :key="`${entry.word}-${i}`"
+              :loader="() => dictApi.getEntryHtml(testQueryTarget!.id, entry.word)"
+            />
           </div>
           <p v-if="testQueryWord && testQueryResults.length === 0" class="hint">未查询到结果</p>
         </div>
@@ -482,12 +490,5 @@ function definitionHtml(definition: string) {
   font-weight: var(--font-weight-regular);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
-}
-
-.result-definition {
-  margin-top: var(--space-1);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  white-space: pre-wrap;
 }
 </style>

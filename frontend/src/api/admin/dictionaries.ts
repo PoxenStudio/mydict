@@ -68,3 +68,14 @@ export function testQuery(id: number, word: string) {
     params: { word },
   })
 }
+
+/**
+ * 管理端预览的单条词条文档，供「测试查询」弹窗放进隔离 iframe。
+ * 与前台 /dict/entry/{id} 的区别是不检查启用状态——测试对象常常正是还没启用的词典。
+ */
+export function getEntryHtml(id: number, word: string) {
+  return request.get<never, string>(`/admin/dictionaries/${id}/entry`, {
+    params: { word },
+    responseType: 'text',
+  })
+}

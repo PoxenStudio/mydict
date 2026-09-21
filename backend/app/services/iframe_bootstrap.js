@@ -1,0 +1,428 @@
+/*
+ * 注入到每个词条 iframe 里的引导脚本。
+ *
+ * 词条 iframe 用 sandbox="allow-scripts"（**不含** allow-same-origin）加载，因此它是一个
+ * 不透明源：既能继续跑词典自带 JS、保留各词典自己的排版，又拿不到父页面（token 存在
+ * localStorage 里，不能被第三方词典的脚本读走）。代价是不透明源下若干浏览器能力会抛异常，
+ * 这里逐个补上，并承担三件事：
+ *   1. 把词条文档的高度报给父页（无 allow-same-origin 时父页读不到 contentDocument）
+ *   2. 拦截词条内跳转（entry://）与发音（sound://）链接，转成消息交给父页处理
+ *   3. 把外链、弹窗、危险协议收敛到受控路径
+ *
+ * 与父页的协议（父页用 event.source === iframe.contentWindow 认证，不看 origin，
+ * 因为不透明源发出来的 origin 恒为 "null"）：
+ *   子 -> 父  mydict:ready / mydict:height / mydict:entry / mydict:open
+ *             mydict:audio-unsupported / mydict:audio-error / mydict:title
+ *   父 -> 子  mydict:cmd {cmd: 'anchor'|'ping'}
+ */
+(function () {
+  'use strict'
+  if (window.__mydictBooted) return
+  window.__mydictBooted = true
+
+  var DICT_ID = __MYDICT_DICT_ID__
+  var RES_PREFIX = '/dict-res/' + DICT_ID + '/res/'
+
+  /* ------------------------------------------------------------------ 通信 */
+
+  function send(type, payload) {
+    var msg = { type: 'mydict:' + type }
+    if (payload) {
+      for (var key in payload) {
+        if (Object.prototype.hasOwnProperty.call(payload, key)) msg[key] = payload[key]
+      }
+    }
+    try {
+      parent.postMessage(msg, '*')
+    } catch (e) {
+      /* 父页可能已销毁 */
+    }
+  }
+
+  /* --------------------------------------------------- 不透明源下的能力补齐 */
+
+  // localStorage/sessionStorage 在不透明源里访问即抛 SecurityError。
+  // 词典里用到的场景（记住折叠状态之类）只需要「不报错、本次会话内有效」。
+  function memoryStorage() {
+    var data = Object.create(null)
+    return {
+      getItem: function (k) {
+        k = String(k)
+        return k in data ? data[k] : null
+      },
+      setItem: function (k, v) {
+        data[String(k)] = String(v)
+      },
+      removeItem: function (k) {
+        delete data[String(k)]
+      },
+      clear: function () {
+        data = Object.create(null)
+      },
+      key: function (i) {
+        return Object.keys(data)[i] || null
+      },
+      get length() {
+        return Object.keys(data).length
+      }
+    }
+  }
+  function installStorage(name) {
+    var slot = '__mydict_' + name
+    try {
+      Object.defineProperty(window, name, {
+        configurable: true,
+        get: function () {
+          if (!this[slot]) this[slot] = memoryStorage()
+          return this[slot]
+        }
+      })
+    } catch (e) {
+      /* 定义失败就让它继续抛，词典自己通常会 try/catch */
+    }
+  }
+  installStorage('localStorage')
+  installStorage('sessionStorage')
+
+  try {
+    var jar = {}
+    Object.defineProperty(Document.prototype, 'cookie', {
+      configurable: true,
+      get: function () {
+        return Object.keys(jar)
+          .map(function (k) {
+            return k + '=' + jar[k]
+          })
+          .join('; ')
+      },
+      set: function (value) {
+        var pair = String(value).split(';')[0].split('=')
+        if (pair.length >= 2) jar[pair[0].trim()] = pair.slice(1).join('=')
+      }
+    })
+  } catch (e) {
+    /* 忽略 */
+  }
+
+  // 不透明源下 pushState/replaceState 抛 SecurityError，词典多半只是拿它做无刷新导航
+  try {
+    history.pushState = function () {}
+    history.replaceState = function () {}
+  } catch (e) {
+    /* 忽略 */
+  }
+
+  // 没有 allow-popups，window.open 会被拦掉。转给父页开新标签。
+  window.open = function (url) {
+    if (url) send('open', { url: String(url) })
+    return null
+  }
+
+  /* ------------------------------------------------------------ 高度上报 */
+
+  var lastHeight = -1
+  var pending = false
+  var ticks = 0
+
+  function measure() {
+    var docEl = document.documentElement
+    var body = document.body
+    var height = 0
+    if (docEl) height = Math.max(height, docEl.scrollHeight, docEl.offsetHeight)
+    if (body) height = Math.max(height, body.scrollHeight, body.offsetHeight)
+    return height
+  }
+
+  function flush() {
+    pending = false
+    var height = measure()
+    if (height <= 0) return
+    // 2px 迟滞：避免亚像素抖动导致父页反复重排、进而又触发这里，形成增长死循环
+    if (lastHeight >= 0 && Math.abs(height - lastHeight) < 2) return
+    lastHeight = height
+    send('height', { height: height })
+  }
+
+  function report() {
+    if (pending) return
+    pending = true
+    if (window.requestAnimationFrame) window.requestAnimationFrame(flush)
+    else setTimeout(flush, 16)
+  }
+
+  function observeHeight() {
+    try {
+      if (window.ResizeObserver && document.documentElement) {
+        var observer = new ResizeObserver(report)
+        observer.observe(document.documentElement)
+        if (document.body) observer.observe(document.body)
+      }
+    } catch (e) {
+      /* 忽略 */
+    }
+    try {
+      // 词典自带的折叠/切换 JS 会改 DOM 但不改根元素尺寸，MutationObserver 兜住这类
+      if (window.MutationObserver && document.documentElement) {
+        new MutationObserver(report).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true
+        })
+      }
+    } catch (e) {
+      /* 忽略 */
+    }
+    window.addEventListener('load', report)
+    window.addEventListener('resize', report)
+    window.addEventListener('error', report, true)
+    // 图片/音频是异步解码的，加载完成后高度会变
+    window.addEventListener(
+      'load',
+      function (event) {
+        var target = event.target
+        if (target && target.tagName && /^(IMG|AUDIO|VIDEO|SOURCE|IFRAME|OBJECT|EMBED)$/.test(target.tagName)) {
+          report()
+        }
+      },
+      true
+    )
+    // 部分词典的首屏内容由延迟脚本填充，定时补几次；有上限，不做无限轮询
+    ;[0, 60, 200, 600, 1500, 3000].forEach(function (delay) {
+      setTimeout(report, delay)
+    })
+    var tail = setInterval(function () {
+      ticks++
+      report()
+      if (ticks > 20) clearInterval(tail)
+    }, 1000)
+  }
+
+  /* --------------------------------------------------------- 链接与音频 */
+
+  var AUDIO_EXT_RE = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|wma)(?:[?#].*)?$/i
+  var SPX_EXT_RE = /\.spx(?:[?#].*)?$/i
+
+  // 遗留坏链接：早期导入代码把 entry://x 改成了 /dict-res/N/res/entry:/x（旧库里还有
+  // 数百万行）。修复命令跑完之前先在这里兼容，用户不必等迁移就能点。
+  var LEGACY_RE = /^\/dict-res\/\d+\/res\/(entry|sound):\/(.*)$/i
+
+  function resourceUrl(raw) {
+    var path = String(raw).replace(/^[\\/]+/, '')
+    return RES_PREFIX + path
+  }
+
+  // .spx 浏览器都不支持。离线转码脚本（scripts/transcode_spx.py）会在同目录生成 .mp3
+  // 或 .opus，两个都试一遍——用哪个取决于跑脚本时选的格式，用户也可能只转了一部分。
+  // 全都取不到再回退原文件，父页据此提示「格式不支持」而不是静默失败。
+  function audioCandidates(url) {
+    if (!SPX_EXT_RE.test(url)) return [url]
+    return [url.replace(SPX_EXT_RE, '.mp3'), url.replace(SPX_EXT_RE, '.opus'), url]
+  }
+
+  var audioEl = null
+  function playAudio(url) {
+    var candidates = audioCandidates(url)
+    var index = 0
+    function attempt() {
+      if (index >= candidates.length) {
+        send(candidates.length > 1 ? 'audio-unsupported' : 'audio-error', { url: url })
+        return
+      }
+      var current = candidates[index++]
+      if (!audioEl) {
+        audioEl = document.createElement('audio')
+        audioEl.setAttribute('data-mydict-player', '1')
+        audioEl.style.display = 'none'
+        ;(document.body || document.documentElement).appendChild(audioEl)
+      }
+      audioEl.onerror = attempt
+      audioEl.onended = function () {
+        send('audio-ended', { url: url })
+      }
+      audioEl.src = current
+      var played = audioEl.play()
+      if (played && played.catch) {
+        played.catch(function () {
+          attempt()
+        })
+      }
+    }
+    attempt()
+  }
+
+  function scrollToAnchor(anchor) {
+    if (!anchor) return
+    var target = null
+    try {
+      target = document.getElementById(anchor) || document.getElementsByName(anchor)[0]
+    } catch (e) {
+      target = null
+    }
+    if (target && target.scrollIntoView) target.scrollIntoView(true)
+    report()
+  }
+
+  function findAnchor(event) {
+    var node = event.target
+    while (node && node !== document && node.tagName !== 'A') node = node.parentNode
+    return node && node.tagName === 'A' ? node : null
+  }
+
+  // 返回 true 表示这次点击已被接管，不应再交给词典自带的处理器
+  function handleLink(href) {
+    if (href === null || href === undefined) return false
+    var raw = String(href).trim()
+    if (!raw) return false
+
+    var hashIndex = raw.indexOf('#')
+    var anchor = hashIndex >= 0 ? raw.slice(hashIndex + 1) : ''
+    var base = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw
+
+    if (base.slice(0, 8).toLowerCase() === 'entry://') {
+      var word = base.slice(8)
+      if (word) send('entry', { word: word, anchor: anchor })
+      else scrollToAnchor(anchor) // entry://#anchor 是页内跳转
+      return true
+    }
+
+    if (base.slice(0, 8).toLowerCase() === 'sound://') {
+      playAudio(resourceUrl(base.slice(8)))
+      return true
+    }
+
+    var legacy = LEGACY_RE.exec(base)
+    if (legacy) {
+      var kind = legacy[1].toLowerCase()
+      var rest = legacy[2]
+      if (kind === 'entry') {
+        if (rest) send('entry', { word: rest, anchor: anchor })
+        else scrollToAnchor(anchor)
+      } else {
+        playAudio(RES_PREFIX + rest)
+      }
+      return true
+    }
+
+    if (base.charAt(0) === '#') {
+      scrollToAnchor(anchor)
+      return true
+    }
+
+    // 危险协议：不导航、也不交给词典的处理器
+    if (/^(javascript|vbscript|file|blob|data):/i.test(base)) return true
+
+    if (/^(https?:)?\/\//i.test(base) || /^www\./i.test(base) || /^mailto:/i.test(base)) {
+      send('open', { url: base })
+      return true
+    }
+
+    if (base.slice(0, RES_PREFIX.length) === RES_PREFIX && AUDIO_EXT_RE.test(base)) {
+      playAudio(base)
+      return true
+    }
+    return false
+  }
+
+  document.addEventListener(
+    'click',
+    function (event) {
+      var anchorEl = findAnchor(event)
+      if (!anchorEl) return
+      var target = (anchorEl.getAttribute('target') || '').toLowerCase()
+      if (target === '_top' || target === '_parent') {
+        // 没有 allow-top-navigation，跳出去会失败并可能报错，直接吞掉
+        event.preventDefault()
+        return
+      }
+      if (handleLink(anchorEl.getAttribute('href'))) {
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && anchorEl.getAttribute('href')) {
+        // 没有 allow-popups，浏览器开不了新标签，转给父页
+        event.preventDefault()
+        send('open', { url: anchorEl.getAttribute('href') })
+      }
+    },
+    true
+  )
+
+  document.addEventListener(
+    'auxclick',
+    function (event) {
+      if (event.button !== 1) return
+      var anchorEl = findAnchor(event)
+      if (!anchorEl) return
+      event.preventDefault()
+      send('open', { url: anchorEl.getAttribute('href') || '' })
+    },
+    true
+  )
+
+  // <audio src="sound://..."> 这类不是链接、点不到，需要在文档就绪后直接改写属性。
+  // 只扫媒体元素（数量很少），不做全文档遍历。
+  // 媒体元素没法像 playAudio 那样自己逐个试，所以挂 error 事件按候选顺序换源。
+  function attachAudioFallback(el, candidates) {
+    var index = 0
+    function attempt() {
+      if (index >= candidates.length) return
+      el.setAttribute('src', candidates[index++])
+    }
+    el.addEventListener('error', attempt)
+    attempt()
+  }
+
+  function fixMediaSources() {
+    var nodes
+    try {
+      nodes = document.querySelectorAll('audio,source,video,embed,object')
+    } catch (e) {
+      return
+    }
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i]
+      var mediaLike = /^(AUDIO|VIDEO|SOURCE)$/.test(el.tagName)
+      ;['src', 'data'].forEach(function (attr) {
+        var value = el.getAttribute && el.getAttribute(attr)
+        if (!value) return
+        var fixed = null
+        if (value.slice(0, 8).toLowerCase() === 'sound://') fixed = resourceUrl(value.slice(8))
+        else {
+          var legacy = LEGACY_RE.exec(value)
+          if (legacy && legacy[1].toLowerCase() === 'sound') fixed = RES_PREFIX + legacy[2]
+        }
+        if (!fixed) return
+        if (attr === 'src' && mediaLike) {
+          attachAudioFallback(el, audioCandidates(fixed))
+        } else {
+          el.setAttribute(attr, audioCandidates(fixed)[0])
+        }
+      })
+    }
+  }
+
+  window.addEventListener('message', function (event) {
+    var data = event.data
+    if (!data || data.type !== 'mydict:cmd') return
+    if (data.cmd === 'anchor') scrollToAnchor(data.anchor)
+    else if (data.cmd === 'ping') {
+      report()
+      send('ready', {})
+    }
+  })
+
+  function onReady() {
+    fixMediaSources()
+    observeHeight()
+    report()
+    send('ready', {})
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onReady)
+  } else {
+    onReady()
+  }
+})()

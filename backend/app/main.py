@@ -70,7 +70,13 @@ app.include_router(web_public_settings_router, prefix="/api")
 
 @app.get("/dict-res/{dictionary_id}/res/{resource_path:path}")
 def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
-    """只读对外暴露词典 res/ 子目录；source/ 原始文件不经此路由可达。"""
+    """只读对外暴露词典 res/ 子目录；source/ 原始文件不经此路由可达。
+
+    必须带 Access-Control-Allow-Origin：词条 iframe 用 sandbox="allow-scripts"
+    （不含 allow-same-origin），它是不透明源，加载这里的 @font-face 与 XHR 都算跨域，
+    没有这个头会**静默失败** —— 表现为词典自带字体/样式无声失效。资源本身是公开只读的，
+    放开跨域没有问题。
+    """
     try:
         normalized = normalize_resource_path(resource_path)
     except ValueError:
@@ -78,7 +84,13 @@ def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
     target = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res" / normalized
     if not target.is_file():
         raise HTTPException(status_code=404)
-    return FileResponse(target)
+    return FileResponse(
+        target,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 
 static_dir = Path(__file__).parent / "static"

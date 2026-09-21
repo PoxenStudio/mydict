@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -6,6 +7,7 @@ from app.core.deps import require_user
 from app.models.user import User
 from app.schemas.vocab import VocabCreateRequest, VocabItemOut, VocabListResponse
 from app.services import vocab_service
+from app.services.entry_render_service import render_entry_document
 
 router = APIRouter(prefix="/vocab", tags=["web-vocab"])
 
@@ -38,6 +40,24 @@ def add_vocab(
 ) -> VocabItemOut:
     return vocab_service.add_vocab_item(
         db, "user", user.id, body.word, body.dictionary_id, body.note
+    )
+
+
+@router.get("/{item_id}/entry", response_class=HTMLResponse)
+def vocab_entry_document(
+    item_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """把生词本里保存的释义**快照**渲染成隔离 iframe 用的 HTML 文档。
+
+    刻意渲染快照而不是按词典实时取：生词本存的就是收藏当时那份释义，词典后来被删除或
+    修改都不该影响它——实时取会在这两种情况下直接渲染失败。快照里的资源引用在导入时
+    就已改写成 /dict-res/{id}/res/ 绝对地址，所以只要词典还在，图片发音照常能显示。
+    """
+    item = vocab_service.get_vocab_item(db, "user", user.id, item_id)
+    return HTMLResponse(
+        render_entry_document(item.definition or "", dictionary_id=item.dictionary_id or 0)
     )
 
 
