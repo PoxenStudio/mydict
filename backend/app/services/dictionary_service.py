@@ -24,6 +24,7 @@ from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
 from app.services.background_task_service import background_tasks
 from app.services.language_detect import detect_language
+from app.services.spx_transcode import count_pending_spx, ffmpeg_path, transcode_pending
 
 logger = logging.getLogger("mydict.dictionary")
 
@@ -452,6 +453,16 @@ def _run_import_in_background(
             import_method=import_method,
             skip_resources=skip_resources,
         )
+        # 解析入库完成后 res/ 已经全部落盘，顺手数一遍待转的 .spx。列表接口不做实时扫描
+        # （The little dict 单部就有 67.6 万个资源文件，63 部逐个走一遍会让请求卡死），
+        # 这个计数只在这里、手动扫描、批量转码结束时三处写入。
+        dictionary.spx_pending_count = count_pending_spx(
+            Path(settings.dictionary_storage_path) / str(dictionary.id) / "res"
+        )
+        # 用 UTC 且去掉 tzinfo，与 imported_at 的 CURRENT_TIMESTAMP 保持同一种写法——
+        # SQLite 上混用 aware/naive 会让比较和排序出错
+        dictionary.spx_scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
         background_tasks.succeed(
             task_id,
             {
@@ -459,6 +470,7 @@ def _run_import_in_background(
                 "word_count": dictionary.word_count,
                 "lang_from": dictionary.lang_from,
                 "lang_to": dictionary.lang_to,
+                "spx_pending_count": dictionary.spx_pending_count,
             },
         )
     except AppError as exc:
@@ -467,6 +479,139 @@ def _run_import_in_background(
         logger.exception("词典导入后台任务失败：%s", name)
         background_tasks.fail(task_id, "导入失败：服务器内部错误，请查看后端日志")
     finally:
+        db.close()
+
+
+def _spx_targets(db: Session, dictionary_ids: list[int] | None) -> list[Dictionary]:
+    """解析要处理的词典；传了 id 就按传入顺序返回，任一个不存在就整体拒绝。"""
+    query = db.query(Dictionary)
+    if not dictionary_ids:
+        return query.order_by(Dictionary.sort_order, Dictionary.id).all()
+    unique = list(dict.fromkeys(dictionary_ids))
+    found = {d.id: d for d in query.filter(Dictionary.id.in_(unique)).all()}
+    missing = [dict_id for dict_id in unique if dict_id not in found]
+    if missing:
+        raise NotFoundError(f"包含不存在的词典 ID：{missing}")
+    return [found[dict_id] for dict_id in unique]
+
+
+def start_spx_scan(db: Session, dictionary_ids: list[int] | None, settings: Settings) -> int:
+    """登记「扫描发音资源」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
+
+    只统计待转 .spx 数并写回两列，不动任何文件。必须在后台跑：大词典单部就有 67.6 万个
+    资源文件，放在请求里会把接口卡死。
+    """
+    targets = _spx_targets(db, dictionary_ids)
+    task = background_tasks.start("dictionary_spx_scan", "扫描发音资源")
+    threading.Thread(
+        target=_run_spx_scan_in_background,
+        args=(task.id, [d.id for d in targets], settings),
+        daemon=True,
+    ).start()
+    return task.id
+
+
+def _run_spx_scan_in_background(task_id: int, dictionary_ids: list[int], settings: Settings) -> None:
+    """后台线程入口：请求生命周期已结束，单独开 session。"""
+    db = SessionLocal()
+    try:
+        total = len(dictionary_ids)
+        pending_total = 0
+        for index, dict_id in enumerate(dictionary_ids, start=1):
+            dictionary = db.get(Dictionary, dict_id)
+            if dictionary is None:  # 扫描期间被删掉了
+                continue
+            pending = count_pending_spx(
+                Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+            )
+            dictionary.spx_pending_count = pending
+            dictionary.spx_scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.commit()
+            pending_total += pending
+            background_tasks.update_progress(task_id, {"done": index, "total": total})
+        background_tasks.succeed(task_id, {"scanned": total, "pending": pending_total})
+    except Exception:
+        logger.exception("扫描发音资源失败")
+        background_tasks.fail(task_id, "扫描失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
+# 同一时间只允许一个转码任务：两个任务同时在同一批 res 目录里跑，会互相抢文件
+_spx_transcode_lock = threading.Lock()
+
+
+def start_spx_transcode(db: Session, dictionary_ids: list[int], settings: Settings) -> int:
+    """登记「批量转码发音」后台任务，返回 task_id。
+
+    ffmpeg 缺失时直接抛错、不登记任务——这是管理员显式发起的操作，给一个注定失败的任务
+    还不如当场说清楚；这与按需转码那条路「静默降级成 404」不同。
+    """
+    if ffmpeg_path() is None:        raise ValidationAppError(
+            "容器里没有可用的 ffmpeg。它不随镜像分发（GPL/LGPL 与本项目 MIT 授权不兼容），"
+            "需要自行挂载——见「系统设置 → 发音转码」里的安装说明，挂好后重启容器再试。"
+        )
+    if not _spx_transcode_lock.acquire(blocking=False):
+        raise ConflictError("已有一个发音转码任务在跑，等它结束再发起")
+
+    targets = _spx_targets(db, dictionary_ids)
+    task = background_tasks.start("dictionary_spx_transcode", "发音转码")
+    try:
+        threading.Thread(
+            target=_run_spx_transcode_in_background,
+            args=(task.id, [d.id for d in targets], settings),
+            daemon=True,
+        ).start()
+    except Exception:
+        _spx_transcode_lock.release()
+        background_tasks.fail(task.id, "转码线程启动失败")
+        raise
+    return task.id
+
+
+def _run_spx_transcode_in_background(
+    task_id: int, dictionary_ids: list[int], settings: Settings
+) -> None:
+    db = SessionLocal()
+    try:
+        total = len(dictionary_ids)
+        summary = {"ok": 0, "failed": 0, "prune_failed": 0}
+        for index, dict_id in enumerate(dictionary_ids, start=1):
+            dictionary = db.get(Dictionary, dict_id)
+            if dictionary is None:  # 转码期间被删掉了
+                continue
+            res_dir = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+
+            def report(done: int, files_total: int, _index: int = index) -> None:
+                # 单部词典内部按文件节流上报：一部大词典几十万个文件，每次都报会把
+                # 登记表刷爆；浮标读的是 done/total（词典级），files_* 只是便于排查
+                if done % 500 != 0 and done != files_total:
+                    return
+                background_tasks.update_progress(
+                    task_id,
+                    {
+                        "done": _index - 1,
+                        "total": total,
+                        "files_done": done,
+                        "files_total": files_total,
+                    },
+                )
+
+            result = transcode_pending(res_dir, on_progress=report)
+            for key in summary:
+                summary[key] += int(result.get(key, 0))
+            # 结束时重扫一遍，而不是拿「总数减去成功数」增量维护：并发、删除失败、外部改动
+            # 都会让增量算错，而重扫相对几十万次 ffmpeg 而言是免费的
+            dictionary.spx_pending_count = count_pending_spx(res_dir)
+            dictionary.spx_scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.commit()
+            background_tasks.update_progress(task_id, {"done": index, "total": total})
+        background_tasks.succeed(task_id, summary)
+    except Exception as exc:  # noqa: BLE001 - 整批失败要落到任务状态里
+        logger.exception("批量转码发音失败")
+        background_tasks.fail(task_id, f"转码失败：{exc}")
+    finally:
+        _spx_transcode_lock.release()
         db.close()
 
 
@@ -755,6 +900,64 @@ def update_dictionary_metadata(
     invalidate_query_cache()
     db.refresh(dictionary)
     return dictionary
+
+
+def rename_dictionaries(
+    db: Session,
+    *,
+    pattern: str,
+    replacement: str,
+    dictionary_ids: list[int] | None,
+    dry_run: bool,
+    admin_id: int,
+) -> dict:
+    """按正则批量重命名词典。
+
+    pattern 用 Python re 语法，replacement 支持 ``\\1`` 这类反向引用；dictionary_ids 留空表示
+    对全部词典生效。只动 name——format 决定当初怎么解析入库、改名不会重新解析，语言方向另有
+    批量识别的入口。
+
+    先预览（dry_run=True）再应用是刻意的：正则是全局替换，一次写错就能改坏几十部词典名，
+    而名字是用户唯一认得出哪部是哪部的标识。
+    """
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        raise ValidationAppError(f"正则表达式无效：{exc}") from exc
+
+    query = db.query(Dictionary)
+    if dictionary_ids:
+        query = query.filter(Dictionary.id.in_(list(dict.fromkeys(dictionary_ids))))
+
+    items: list[dict] = []
+    for dictionary in query.order_by(Dictionary.sort_order, Dictionary.id).all():
+        new_name = compiled.sub(replacement, dictionary.name).strip()
+        # 改成空名或超长名的跳过：留一个不可用的名字比不改更糟
+        if not new_name or new_name == dictionary.name or len(new_name) > 255:
+            continue
+        items.append({"id": dictionary.id, "name": dictionary.name, "new_name": new_name})
+
+    if not dry_run and items:
+        try:
+            for item in items:
+                db.get(Dictionary, item["id"]).name = item["new_name"]
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        for item in items:
+            log_action(
+                db,
+                actor_type="admin",
+                actor_id=admin_id,
+                action="dictionary.rename",
+                target=str(item["id"]),
+                detail={"from": item["name"], "to": item["new_name"]},
+            )
+        # 查询结果的缓存里带着词典名称快照
+        invalidate_query_cache()
+
+    return {"items": items, "applied": not dry_run}
 
 
 def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: Settings) -> None:

@@ -20,16 +20,22 @@ mp3/opus 就正常了。
     先拿一小批试：    --limit 20
     换格式/并发：      --format opus --jobs 16
 
-产出：每个 `x.spx` 旁边生成 `x.mp3`（默认），**保留原 .spx**。前端会优先取转码后的文件，
+产出：每个 `x.spx` 旁边生成 `x.mp3`（默认），**默认保留原 .spx**——前端优先取转码后的文件、
 取不到再回退原文件，所以部分转码也不会坏。
+
+想回收空间就加 `--prune-source`：只在**产物确实非空**时才删原 .spx；转码失败的、以及跳过
+处理的（已有产物）都按各自规则来——失败的保留源文件，已有产物的顺手回收源文件。
 
 实测（用户的真实词典库，单个文件平均 4.8 KB）：
 
     格式    单线程耗时     产物相对原始体积    全量 98.9 万个的估算
-    mp3     0.055 秒/个    1.44 倍            约 6.5 GB，单线程约 15 小时
-    opus    0.185 秒/个    0.64 倍            约 2.9 GB，单线程约 51 小时
+    mp3     0.055 秒/个    1.44 倍            约 6.5 GB
+    opus    0.185 秒/个    0.64 倍            约 2.9 GB
 
-默认选 mp3：快 3 倍多，且 iOS Safari 对 Ogg Opus 的支持一直不完整。
+所以「转 mp3 + 删源」净增约 2 GB（原 4.51 GB → 6.5 GB），而「转 opus + 删源」净省约 1.6 GB
+（不过 iOS Safari 对 Ogg Opus 的支持一直不完整，桌面端用才推荐）。
+
+默认选 mp3：兼容性最好。
 """
 
 from __future__ import annotations
@@ -61,9 +67,14 @@ def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
-def _transcode(source: Path, target: Path, codec_args: list[str], force: bool) -> str:
+def _transcode(
+    source: Path, target: Path, codec_args: list[str], force: bool, prune_source: bool
+) -> str:
     """返回 'ok' / 'skipped' / 'failed'。"""
     if not force and target.exists() and target.stat().st_size > 0:
+        # 已经有产物：顺手把源文件回收掉（前提是产物非空）
+        if prune_source:
+            source.unlink(missing_ok=True)
         return "skipped"
     result = subprocess.run(
         [
@@ -85,6 +96,8 @@ def _transcode(source: Path, target: Path, codec_args: list[str], force: bool) -
         # 失败时别留下半成品：前端拿到 0 字节文件会播放失败，还不如回退到原 .spx
         target.unlink(missing_ok=True)
         return "failed"
+    if prune_source:
+        source.unlink(missing_ok=True)
     return "ok"
 
 
@@ -101,6 +114,11 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=8, help="并发数，默认 8")
     parser.add_argument("--limit", type=int, default=0, help="只处理前 N 个（试跑用）")
     parser.add_argument("--force", action="store_true", help="已有产物也重新转")
+    parser.add_argument(
+        "--prune-source",
+        action="store_true",
+        help="产物非空时删掉原 .spx 以回收空间（默认保留；转码失败的一定保留）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只统计不转码")
     args = parser.parse_args()
 
@@ -142,7 +160,7 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futures = {
             pool.submit(
-                _transcode, path, path.with_suffix(suffix), codec_args, args.force
+                _transcode, path, path.with_suffix(suffix), codec_args, args.force, args.prune_source
             ): path
             for path in sources
         }

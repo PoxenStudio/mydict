@@ -1,4 +1,5 @@
 import request from './request'
+import { currentTheme } from '../composables/useTheme'
 import type { PublicDictionary, QueryHistoryEntry, QueryResponse } from '../types/query'
 
 /**
@@ -25,8 +26,9 @@ export function listDictionaries() {
  * 「可用词典」限制。
  */
 export function getEntryHtml(dictionaryId: number, word: string) {
+  // 带上主题：明暗直接写进文档，iframe 首屏就不会先白一下再变色
   return request.get<never, string>(`/dict/entry/${dictionaryId}`, {
-    params: { word },
+    params: { word, theme: currentTheme() },
     responseType: 'text',
   })
 }
@@ -37,7 +39,10 @@ export function getEntryHtml(dictionaryId: number, word: string) {
  * 都不该影响它。
  */
 export function getVocabEntryHtml(itemId: number) {
-  return request.get<never, string>(`/vocab/${itemId}/entry`, { responseType: 'text' })
+  return request.get<never, string>(`/vocab/${itemId}/entry`, {
+    params: { theme: currentTheme() },
+    responseType: 'text',
+  })
 }
 
 export function getQueryHistory() {

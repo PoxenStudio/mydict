@@ -1,8 +1,9 @@
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from starlette.responses import FileResponse
 
 from app.api.admin.auth import router as admin_auth_router
@@ -21,11 +22,14 @@ from app.api.web.dict import router as web_dict_router
 from app.api.web.public_settings import router as web_public_settings_router
 from app.api.web.vocab import router as web_vocab_router
 from app.core.config import get_settings
+from app.core.db import get_db
 from app.core.exceptions import AppError, RateLimitedError
 from app.core.logging import configure_logging
 from app.core.migrate import run_migrations
 from app.core.version import get_app_version
+from app.services import spx_transcode
 from app.services.resource_service import normalize_resource_path
+from app.services.settings_service import get_bool_setting
 from app.tasks.scheduler import start_scheduler
 
 settings = get_settings()
@@ -68,14 +72,36 @@ app.include_router(web_vocab_router, prefix="/api")
 app.include_router(web_public_settings_router, prefix="/api")
 
 
+def _transcode_spx_on_demand(db: Session, target: Path) -> Path | None:
+    """请求的 mp3 不存在时，看能不能拿同名的 .spx 现转一个出来。
+
+    要在四个条件都满足时才动手：请求的就是 .mp3、同名 .spx 在场、后台开关开着、容器里
+    能找到 ffmpeg。任一不满足就返回 None，让调用方照旧 404——前端会回退到原文件并提示
+    「这个格式放不了」，与没有这个功能时表现一致。
+    """
+    if target.suffix.lower() != ".mp3":
+        return None
+    source = target.with_suffix(".spx")
+    if not source.is_file():
+        return None
+    if not get_bool_setting(db, "spx_online_transcode", True):
+        return None
+    return spx_transcode.transcode_to_mp3(source)
+
+
 @app.get("/dict-res/{dictionary_id}/res/{resource_path:path}")
-def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
+def dict_resource(
+    dictionary_id: int, resource_path: str, db: Session = Depends(get_db)
+) -> FileResponse:
     """只读对外暴露词典 res/ 子目录；source/ 原始文件不经此路由可达。
 
     必须带 Access-Control-Allow-Origin：词条 iframe 用 sandbox="allow-scripts"
     （不含 allow-same-origin），它是不透明源，加载这里的 @font-face 与 XHR 都算跨域，
     没有这个头会**静默失败** —— 表现为词典自带字体/样式无声失效。资源本身是公开只读的，
     放开跨域没有问题。
+
+    少部分发音是 Speex（.spx），浏览器放不了；前端会先来要同名 .mp3，这里在它不存在时
+    按需转一个（见 `_transcode_spx_on_demand`）。
     """
     try:
         normalized = normalize_resource_path(resource_path)
@@ -83,7 +109,9 @@ def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
         raise HTTPException(status_code=404) from None
     target = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res" / normalized
     if not target.is_file():
-        raise HTTPException(status_code=404)
+        target = _transcode_spx_on_demand(db, target)
+        if target is None:
+            raise HTTPException(status_code=404)
     return FileResponse(
         target,
         headers={

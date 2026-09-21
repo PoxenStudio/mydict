@@ -282,7 +282,7 @@ defineExpose({ submit, cancel, running: batchRunning, scanning })
       <p class="hint">
         已自动识别词典，格式与名称都已填好（名称可改）。语言方向在导入时按词头/释义的文字种类自动识别，导入后可在词典列表里编辑修正。
       </p>
-      <div class="dicts-dir-scroll">
+      <div class="dicts-dir-scroll app-scrollbar">
         <template v-if="!dictsDirRecursive">
           <div
             v-for="dir in dictsDirDirectories"

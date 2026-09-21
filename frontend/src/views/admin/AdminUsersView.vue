@@ -199,7 +199,7 @@ function formatDate(value: string | null) {
         </p>
 
         <h4>生词本（{{ detail.vocab_items.length }}）</h4>
-        <ul v-if="detail.vocab_items.length" class="detail-list">
+        <ul v-if="detail.vocab_items.length" class="detail-list app-scrollbar">
           <li v-for="item in detail.vocab_items" :key="item.id">
             <strong>{{ item.word }}</strong>
             <span v-if="item.phonetic"> [{{ item.phonetic }}]</span>
@@ -208,7 +208,7 @@ function formatDate(value: string | null) {
         <p v-else class="hint">暂无生词</p>
 
         <h4>最近查询</h4>
-        <ul v-if="detail.recent_queries.length" class="detail-list">
+        <ul v-if="detail.recent_queries.length" class="detail-list app-scrollbar">
           <li v-for="(q, i) in detail.recent_queries" :key="i">
             {{ q.word }}
             <span class="hint">（{{ q.status }} · {{ formatDate(q.created_at) }}）</span>

@@ -17,3 +17,27 @@ const LANGUAGE_LABELS: Record<string, string> = Object.fromEntries([
 export function langLabel(code: string) {
   return LANGUAGE_LABELS[code] ?? code
 }
+
+/**
+ * 中文系的全部 lang_from 取值（含早期数据里的裸 `zh`）。
+ *
+ * 查询路由本来就不区分简繁——输入汉字时这三种码都算「优先语言」——所以凡是「按中文筛」
+ * 的地方都该一次覆盖它们。词典管理页的语种 tab 与前台检索范围的「中文」按钮共用这份定义。
+ */
+export const ZH_CODES = ['zh', 'zh-Hans', 'zh-Hant']
+
+/** 把某个 lang_from 归到「按语种看词典」用的分组键；简繁都归成 `zh`。 */
+export function langGroupOf(code: string): string {
+  return ZH_CODES.includes(code) ? 'zh' : code
+}
+
+/** 语种分组键的显示名；表里没有的原样返回。 */
+const LANG_GROUP_LABELS: Record<string, string> = {
+  zh: '中文',
+  en: '英文',
+  ja: '日文',
+}
+
+export function langGroupLabel(group: string) {
+  return LANG_GROUP_LABELS[group] ?? group
+}

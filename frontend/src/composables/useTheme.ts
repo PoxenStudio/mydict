@@ -1,7 +1,7 @@
 import { ref, watchEffect } from 'vue'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
-type ResolvedTheme = 'light' | 'dark'
+export type ResolvedTheme = 'light' | 'dark'
 
 const STORAGE_KEY = 'mydict-theme'
 const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -36,4 +36,14 @@ media.addEventListener('change', () => {
 
 export function useTheme() {
   return { theme, resolvedTheme, setTheme }
+}
+
+/**
+ * 当前解析后的主题值。
+ *
+ * 给不持有组件实例的地方用（api 层、工具函数）：它们调 useTheme() 只能拿到 ref，
+ * 而请求参数需要的是此刻的值。
+ */
+export function currentTheme(): ResolvedTheme {
+  return resolvedTheme.value
 }

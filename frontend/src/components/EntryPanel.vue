@@ -174,13 +174,16 @@ function isLoading(word: string) {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
   overflow: hidden;
+  /* 展开时把标题滚到视口顶部（见 HomeView 的 toggleGroup），留一点呼吸空间别贴边 */
+  scroll-margin-top: var(--space-4);
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
+  /* 垂直只留 --space-1：标题行的高度实际由 32px 的收藏按钮决定，多给的 padding 只是白占地方 */
+  padding: var(--space-1) var(--space-5);
   cursor: pointer;
   user-select: none;
 }

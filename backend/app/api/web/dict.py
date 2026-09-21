@@ -1,4 +1,5 @@
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
@@ -93,6 +94,7 @@ def search(
 def entry_document(
     dictionary_id: int,
     word: str,
+    theme: Literal["light", "dark"] | None = None,
     caller: WebCaller = Depends(get_web_caller),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -105,6 +107,9 @@ def entry_document(
     刻意**不**计入按 IP 的查询配额：它是一次已经计过配额的查询的子请求，按部计费会让
     「展开 N 部词典」变成 N+1 次配额；而且它一次只返回一条词条，比 /search 一次返回
     全部命中词典的释义暴露更少。
+
+    theme 由前端按当前主题带上：直接写进文档，iframe 首屏就是正确的明暗，不必等父页的
+    postMessage 到达再变色（那会有一次肉眼可见的闪变）。
     """
     dictionary = db.get(Dictionary, dictionary_id)
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
@@ -120,7 +125,15 @@ def entry_document(
     if entry is None:
         raise NotFoundError("词条不存在")
 
-    return HTMLResponse(render_entry_document(entry.definition, dictionary_id=dictionary_id))
+    return HTMLResponse(
+        render_entry_document(
+            # allow_lookup：只有前台查询页有查词框能接住「选中文字查词」这个动作
+            entry.definition,
+            dictionary_id=dictionary_id,
+            theme=theme,
+            allow_lookup=True,
+        )
+    )
 
 
 @router.get("/history", response_model=QueryHistoryResponse)

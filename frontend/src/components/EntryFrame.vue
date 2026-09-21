@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useTheme } from '../composables/useTheme'
 
 const props = defineProps<{
   /**
@@ -20,6 +21,8 @@ const emit = defineEmits<{
   /** 发音是 .spx 且没有转码产物，浏览器放不了 */
   unsupportedAudio: []
 }>()
+
+const { resolvedTheme } = useTheme()
 
 // 展开前给一个下限高度，避免 iframe 从 0 高度闪一下
 const MIN_HEIGHT = 120
@@ -90,6 +93,25 @@ function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
+/**
+ * 把当前主题下发给 iframe 里的文档。
+ *
+ * 子页是不透明源的独立文档，读不到父页的 CSS 变量；它那份暗色样式靠 data-mydict-theme
+ * 属性开关，所以主题变化必须由父页通知。
+ *
+ * 用消息而不是重建 iframe：EntryPanel 特意保留已挂载的 iframe，就是为了折叠再展开时
+ * 不丢音频播放位置与内部滚动。
+ */
+function postTheme() {
+  iframeRef.value?.contentWindow?.postMessage(
+    { type: 'mydict:cmd', cmd: 'theme', theme: resolvedTheme.value },
+    '*',
+  )
+}
+
+// 主题切换时通知本组件持有的 iframe（每个 iframe 各发各的）
+watch(resolvedTheme, postTheme)
+
 function onMessage(event: MessageEvent) {
   const frame = iframeRef.value
   // 用 source 辨认来源：iframe 是不透明源（sandbox 未给 allow-same-origin），
@@ -103,6 +125,8 @@ function onMessage(event: MessageEvent) {
   switch (data.type) {
     case 'mydict:ready':
       loading.value = false
+      // 子页的 message 监听此时已装好，是下发主题最可靠的时机
+      postTheme()
       break
     case 'mydict:height':
       applyHeight(Number(data.height))
@@ -175,6 +199,7 @@ onBeforeUnmount(() => {
       :srcdoc="html"
       sandbox="allow-scripts"
       referrerpolicy="no-referrer"
+      @load="postTheme"
       :style="{ height: `${boxHeight}px`, overflow: scrollable ? 'auto' : 'hidden' }"
       title="词条内容"
     />

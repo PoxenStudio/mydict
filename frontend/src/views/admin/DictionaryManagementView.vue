@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as dictApi from '../../api/admin/dictionaries'
+import { getSpxTranscodeStatus } from '../../api/admin/settings'
+import { resultNumber, useImportTask } from '../../composables/useImportTask'
 import DictionaryImportDialog from '../../components/admin/DictionaryImportDialog.vue'
+import DictionaryRenameDialog from '../../components/admin/DictionaryRenameDialog.vue'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
 import EntryFrame from '../../components/EntryFrame.vue'
-import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
+import { LANGUAGE_OPTIONS, langGroupLabel, langGroupOf, langLabel } from '../../utils/language'
 import type { DictionaryItem, DictionaryStatus, TestQueryEntry } from '../../types/dictionary'
 
 const dictionaries = ref<DictionaryItem[]>([])
 const loading = ref(false)
+const renameDialogVisible = ref(false)
 
 async function loadDictionaries() {
   loading.value = true
@@ -22,7 +26,10 @@ async function loadDictionaries() {
   }
 }
 
-onMounted(loadDictionaries)
+onMounted(() => {
+  loadDictionaries()
+  loadSpxStatus()
+})
 
 // --- 启用/禁用 ---
 async function toggleStatus(item: DictionaryItem) {
@@ -34,15 +41,59 @@ async function toggleStatus(item: DictionaryItem) {
   if (index !== -1) dictionaries.value[index] = updated
 }
 
+// --- 语种 tab 与「只看需转码」筛选 ---
+const activeLang = ref('all')
+const onlyNeedsTranscode = ref(false)
+
+/** tab 计数按**全量**统计——按过滤后的列表算，一点进去计数就归零了 */
+const langTabs = computed(() => {
+  const counts = new Map<string, number>()
+  for (const item of dictionaries.value) {
+    const group = langGroupOf(item.lang_from)
+    counts.set(group, (counts.get(group) ?? 0) + 1)
+  }
+  return [
+    { value: 'all', label: '全部', count: dictionaries.value.length },
+    ...[...counts].map(([group, count]) => ({
+      value: group,
+      label: langGroupLabel(group),
+      count,
+    })),
+  ]
+})
+
+const visibleDictionaries = computed(() =>
+  dictionaries.value.filter(
+    (item) =>
+      (activeLang.value === 'all' || langGroupOf(item.lang_from) === activeLang.value) &&
+      (!onlyNeedsTranscode.value || item.spx_pending_count > 0),
+  ),
+)
+
+// 换筛选条件就清空勾选，否则下一步的批量操作会作用到看不见的行上
+watch([activeLang, onlyNeedsTranscode], () => {
+  selectedIds.value = []
+})
+
+/** 只有「全部」视图且没开需转码筛选时才能拖拽排序。
+
+    排序写的是**全量**顺序，而被过滤掉的行不在视野里——让它拖会把隐藏项的次序一起改乱，
+    而「移到哪」在隐藏项存在时本来就没有明确语义。 */
+const draggable = computed(() => activeLang.value === 'all' && !onlyNeedsTranscode.value)
+
 // --- 批量启用/停用 ---
 const selectedIds = ref<number[]>([])
 const statusBatchRunning = ref(false)
 
 const allSelected = computed(
-  () => dictionaries.value.length > 0 && selectedIds.value.length === dictionaries.value.length,
+  () =>
+    visibleDictionaries.value.length > 0 &&
+    visibleDictionaries.value.every((item) => selectedIds.value.includes(item.id)),
 )
 const someSelected = computed(
-  () => selectedIds.value.length > 0 && selectedIds.value.length < dictionaries.value.length,
+  () =>
+    !allSelected.value &&
+    visibleDictionaries.value.some((item) => selectedIds.value.includes(item.id)),
 )
 
 function toggleSelect(id: number) {
@@ -52,7 +103,7 @@ function toggleSelect(id: number) {
 }
 
 function toggleSelectAll(checked: string | number | boolean) {
-  selectedIds.value = checked ? dictionaries.value.map((item) => item.id) : []
+  selectedIds.value = checked ? visibleDictionaries.value.map((item) => item.id) : []
 }
 
 async function batchSetStatus(status: DictionaryStatus) {
@@ -156,6 +207,69 @@ async function onDrop(targetIndex: number) {
   dictionaries.value = await dictApi.reorderDictionaries(list.map((d) => d.id))
 }
 
+// --- 发音转码 ---
+const spxAvailable = ref(false)
+const spxRunning = ref(false)
+
+/** 容器里有没有 ffmpeg。没有时「转码」按钮要禁用并说明原因，否则点了只会拿到 422 */
+async function loadSpxStatus() {
+  try {
+    spxAvailable.value = (await getSpxTranscodeStatus()).available
+  } catch {
+    spxAvailable.value = false
+  }
+}
+
+const { waitForImportTask } = useImportTask()
+
+/** 扫描发音资源、回填「待转码 .spx 数」；有勾选就只扫勾选的 */
+async function scanSpx() {
+  const ids = selectedIds.value.length ? [...selectedIds.value] : null
+  spxRunning.value = true
+  try {
+    const { task_id } = await dictApi.scanSpx(ids)
+    const task = await waitForImportTask(task_id, 30 * 60 * 1000)
+    await loadDictionaries()
+    ElMessage.success(`扫描完成，共发现 ${resultNumber(task, 'pending') ?? 0} 个待转发音`)
+  } finally {
+    spxRunning.value = false
+  }
+}
+
+/** 批量转码（单部也走这里）。成功后后端会删掉原 .spx。 */
+async function transcodeSpx(ids: number[]) {
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将把 ${ids.length} 部词典里缺少 mp3 的 .spx 发音转成 mp3，**转成功后删除原 .spx**` +
+        '（你的源词典文件另有备份，不会丢失）。转码在后端进行，可以关掉页面。',
+      '发音转码',
+      { type: 'warning', confirmButtonText: '开始转码' },
+    )
+  } catch {
+    return
+  }
+  spxRunning.value = true
+  try {
+    const { task_id } = await dictApi.transcodeSpx(ids)
+    // 转码是小时级任务（一部大词典可能有几十万个文件），轮询给足时间
+    const task = await waitForImportTask(task_id, 6 * 60 * 60 * 1000)
+    await loadDictionaries()
+    ElMessage.success(
+      `转码完成：成功 ${resultNumber(task, 'ok') ?? 0}、失败 ${resultNumber(task, 'failed') ?? 0}`,
+    )
+  } finally {
+    spxRunning.value = false
+  }
+}
+
+/** 批量栏只对「选中项里真的需要转码的」发起——选了一堆没有 .spx 的不该白跑一趟 */
+const transcodeTargetIds = computed(() =>
+  visibleDictionaries.value
+    .filter((item) => selectedIds.value.includes(item.id) && item.spx_pending_count > 0)
+    .map((item) => item.id),
+)
+
 // --- 导入弹窗 ---
 const importDialogVisible = ref(false)
 
@@ -188,7 +302,28 @@ async function runTestQuery() {
         <h1>词典管理</h1>
         <RefreshButton :loading="loading" @refresh="loadDictionaries" />
       </div>
+      <el-button :loading="spxRunning" @click="scanSpx">扫描发音资源</el-button>
+      <el-button @click="renameDialogVisible = true">批量重命名</el-button>
       <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
+    </div>
+
+    <div class="filter-bar">
+      <div class="lang-tabs">
+        <button
+          v-for="tab in langTabs"
+          :key="tab.value"
+          type="button"
+          class="lang-tab"
+          :class="{ active: activeLang === tab.value }"
+          @click="activeLang = tab.value"
+        >
+          {{ tab.label }}<span class="tab-count">{{ tab.count }}</span>
+        </button>
+      </div>
+      <label class="need-toggle">
+        <el-checkbox v-model="onlyNeedsTranscode" />
+        <span>只看需转码</span>
+      </label>
     </div>
 
     <div v-if="selectedIds.length" class="batch-bar">
@@ -198,6 +333,17 @@ async function runTestQuery() {
       </el-button>
       <el-button size="small" :loading="statusBatchRunning" @click="batchSetStatus('disabled')">
         批量停用
+      </el-button>
+      <el-button
+        size="small"
+        type="warning"
+        plain
+        :loading="spxRunning"
+        :disabled="!transcodeTargetIds.length"
+        :title="spxAvailable ? '' : '容器里没有 ffmpeg，见「系统设置 → 发音转码」'"
+        @click="transcodeSpx(transcodeTargetIds)"
+      >
+        批量转码（{{ transcodeTargetIds.length }}）
       </el-button>
       <el-button text size="small" :disabled="statusBatchRunning" @click="selectedIds = []">
         取消选择
@@ -224,11 +370,11 @@ async function runTestQuery() {
       </div>
 
       <div
-        v-for="(item, index) in dictionaries"
+        v-for="(item, index) in visibleDictionaries"
         :key="item.id"
         class="dict-row"
         :class="{ selected: selectedIds.includes(item.id) }"
-        draggable="true"
+        :draggable="draggable"
         @dragstart="onDragStart(index)"
         @dragover.prevent
         @drop="onDrop(index)"
@@ -240,8 +386,23 @@ async function runTestQuery() {
             @change="toggleSelect(item.id)"
           />
         </span>
-        <span class="col-drag" title="拖拽调整顺序">⠿</span>
-        <span class="col-name">{{ item.name }}</span>
+        <span
+          class="col-drag"
+          :class="{ disabled: !draggable }"
+          :title="draggable ? '拖拽调整顺序' : '筛选状态下不能排序——顺序是全局的'"
+          >⠿</span
+        >
+        <span class="col-name">
+          <span class="dict-name-text" :title="item.name">{{ item.name }}</span>
+          <el-tag
+            v-if="item.spx_pending_count > 0"
+            type="warning"
+            size="small"
+            :title="`还有 ${item.spx_pending_count} 个 .spx 发音没有转码`"
+          >
+            需转码
+          </el-tag>
+        </span>
         <span class="col-format"
           ><el-tag size="small">{{ item.format }}</el-tag></span
         >
@@ -260,11 +421,25 @@ async function runTestQuery() {
           <el-button text @click="openEdit(item)">编辑</el-button>
           <el-button text type="danger" @click="confirmDelete(item)">删除</el-button>
           <el-button text @click="openTestQuery(item)">测试查询</el-button>
+          <el-button
+            v-if="item.spx_pending_count > 0"
+            text
+            type="warning"
+            :loading="spxRunning"
+            :disabled="!spxAvailable"
+            :title="spxAvailable ? '' : '容器里没有 ffmpeg，见「系统设置 → 发音转码」'"
+            @click="transcodeSpx([item.id])"
+          >
+            转码
+          </el-button>
         </span>
       </div>
 
       <div v-if="!loading && dictionaries.length === 0" class="empty-state">
         暂无词典，点击右上角「导入词典」开始导入。
+      </div>
+      <div v-else-if="!loading && visibleDictionaries.length === 0" class="empty-state">
+        当前筛选条件下没有词典。
       </div>
     </div>
 
@@ -304,6 +479,12 @@ async function runTestQuery() {
 
     <DictionaryImportDialog v-model="importDialogVisible" @imported="loadDictionaries" />
 
+    <DictionaryRenameDialog
+      v-model="renameDialogVisible"
+      :selected-ids="selectedIds"
+      @renamed="loadDictionaries"
+    />
+
     <el-dialog
       v-model="testQueryDialogVisible"
       :title="`测试查询 - ${testQueryTarget?.name ?? ''}`"
@@ -315,7 +496,7 @@ async function runTestQuery() {
             <el-button @click="runTestQuery">查询</el-button>
           </template>
         </el-input>
-        <div class="test-query-results">
+        <div class="test-query-results app-scrollbar">
           <div
             v-for="(entry, i) in testQueryResults"
             :key="`${entry.word}-${i}`"
@@ -345,7 +526,8 @@ async function runTestQuery() {
 
 <style scoped>
 .page {
-  max-width: var(--size-content-md);
+  /* 这个列表列最多（勾选/拖拽/名称/格式/语言/词条数/状态/操作），960px 太挤 */
+  max-width: var(--size-content-lg);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
@@ -373,7 +555,60 @@ async function runTestQuery() {
   background: var(--color-bg-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
-  overflow: hidden;
+  /* 窄窗口时横向滚动，而不是把 8 列压成不可读——行自己带 min-width */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.lang-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.lang-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.lang-tab:hover {
+  background: var(--color-hover-tint);
+}
+
+.lang-tab.active {
+  background: var(--color-brand-500);
+  color: #fff;
+}
+
+.tab-count {
+  font-size: var(--text-xs);
+  opacity: 0.75;
+}
+
+.need-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .batch-bar {
@@ -396,12 +631,14 @@ async function runTestQuery() {
 .dict-list-header,
 .dict-row {
   display: grid;
+  /* 名称列与操作列都放宽了：名称后面挂了「需转码」标签，操作列多了「转码」按钮 */
   grid-template-columns:
     var(--size-control-md) var(--size-control-md)
-    2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
+    minmax(0, 2fr) 1fr 1fr 0.8fr 0.8fr minmax(220px, 1.8fr);
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
+  min-width: 980px;
 }
 
 .dict-list-header {
@@ -433,6 +670,24 @@ async function runTestQuery() {
 .col-drag {
   color: var(--color-text-tertiary);
   text-align: center;
+}
+
+.col-drag.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.col-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dict-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .col-actions {

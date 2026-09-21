@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -46,6 +48,7 @@ def add_vocab(
 @router.get("/{item_id}/entry", response_class=HTMLResponse)
 def vocab_entry_document(
     item_id: int,
+    theme: Literal["light", "dark"] | None = None,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -57,7 +60,9 @@ def vocab_entry_document(
     """
     item = vocab_service.get_vocab_item(db, "user", user.id, item_id)
     return HTMLResponse(
-        render_entry_document(item.definition or "", dictionary_id=item.dictionary_id or 0)
+        render_entry_document(
+            item.definition or "", dictionary_id=item.dictionary_id or 0, theme=theme
+        )
     )
 
 

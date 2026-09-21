@@ -13,7 +13,7 @@
  * 因为不透明源发出来的 origin 恒为 "null"）：
  *   子 -> 父  mydict:ready / mydict:height / mydict:entry / mydict:open
  *             mydict:audio-unsupported / mydict:audio-error / mydict:title
- *   父 -> 子  mydict:cmd {cmd: 'anchor'|'ping'}
+ *   父 -> 子  mydict:cmd {cmd: 'anchor'|'ping'|'theme'}
  */
 (function () {
   'use strict'
@@ -22,6 +22,94 @@
 
   var DICT_ID = __MYDICT_DICT_ID__
   var RES_PREFIX = '/dict-res/' + DICT_ID + '/res/'
+  // 是否启用「选中文字 → 查词」菜单。由服务端按渲染路径决定：只有前台查询页有查词框，
+  // 生词本与管理端预览传 false（在那里点了也没人能接住这个查询）。
+  var ALLOW_LOOKUP = __MYDICT_LOOKUP__
+
+  /* ------------------------------------------------------------------ 主题 */
+
+  /* ----------------------------------------- 暗色下过暗的文字自动提亮 */
+
+  // 词典常把颜色写死，深蓝是重灾区：浅色底上够看，一到暗色底几乎看不见。写死的颜色值五花
+  // 八门，靠 CSS 属性选择器枚举不完，而 CSS 自己算不了亮度，所以这里换个思路——读渲染后的
+  // 计算颜色，太暗就按同色相提亮（蓝的还是蓝的，只是变亮），并记下原值以便切回浅色时还原。
+  //
+  // 灰阶的深色（纯黑、深灰）不在这里管，交给注入的 CSS 规则统一处理：它们没有色相，
+  // 提到「浅灰」不如直接用主题前景色。
+  var TEXT_MIN_LUMINANCE = 0.45
+  var TEXT_BOOST_LIGHTNESS = 66
+  // 大词条可能有上万个元素，逐个读计算样式要花时间，超过这个数就只处理前一批
+  var TEXT_SCAN_LIMIT = 5000
+  var boostedText = []
+
+  function parseRgb(value) {
+    var match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(value || '')
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
+  }
+
+  function relativeLuminance(rgb) {
+    return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255
+  }
+
+  function restoreTextColors() {
+    for (var i = 0; i < boostedText.length; i++) {
+      boostedText[i][0].style.color = boostedText[i][1]
+    }
+    boostedText = []
+  }
+
+  function boostDarkText() {
+    restoreTextColors()
+    if (document.documentElement.getAttribute('data-mydict-theme') !== 'dark') return
+    // hsl(from …) 是相对颜色语法，太老的浏览器不认；不支持就整段跳过，别写出无效声明
+    if (!window.CSS || !CSS.supports || !CSS.supports('color', 'hsl(from red h s 50%)')) return
+    if (!document.body) return
+
+    var nodes = document.body.querySelectorAll('*')
+    var count = Math.min(nodes.length, TEXT_SCAN_LIMIT)
+    for (var i = 0; i < count; i++) {
+      var el = nodes[i]
+      var rgb = parseRgb(window.getComputedStyle(el).color)
+      if (!rgb || relativeLuminance(rgb) >= TEXT_MIN_LUMINANCE) continue
+      if (rgb[0] === rgb[1] && rgb[1] === rgb[2]) continue
+      boostedText.push([el, el.style.color])
+      el.style.color =
+        'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'
+    }
+  }
+
+  /**
+   * 切换词条内容的明暗。样式侧全部门控在 html[data-mydict-theme='dark'] 上，这里只写属性。
+   *
+   * 显式写 'light'（而不是移除属性）是必需的：文档开头可能已按系统偏好设成了 dark，
+   * 移除属性并不能把它改回浅色。
+   */
+  function applyTheme(theme) {
+    try {
+      document.documentElement.setAttribute(
+        'data-mydict-theme',
+        theme === 'dark' ? 'dark' : 'light'
+      )
+    } catch (e) {
+      /* 拿不到 documentElement 就算了，不值得为它打断整个引导脚本 */
+    }
+    if (theme === 'dark') boostDarkText()
+    else restoreTextColors()
+  }
+
+  // 首屏兜底：文档里没有主题初值（调用方没带 theme 参数）时先跟随系统偏好，
+  // 免得暗色下闪一帧白底。父页随后发来的 mydict:cmd 会把它纠正过来。
+  try {
+    if (
+      !document.documentElement.getAttribute('data-mydict-theme') &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches
+    ) {
+      applyTheme('dark')
+    }
+  } catch (e) {
+    /* 忽略 */
+  }
 
   /* ------------------------------------------------------------------ 通信 */
 
@@ -407,14 +495,121 @@
     var data = event.data
     if (!data || data.type !== 'mydict:cmd') return
     if (data.cmd === 'anchor') scrollToAnchor(data.anchor)
+    else if (data.cmd === 'theme') applyTheme(data.theme)
     else if (data.cmd === 'ping') {
       report()
       send('ready', {})
     }
   })
 
+  /* -------------------------------------------------------- 选中文字查词 */
+
+  // 选中词条里的文字时，在选区旁边弹一个【查词】，点了把选中文字交给父页去查。
+  //
+  // 菜单画在 iframe **内部**而不是父页：iframe 是不透明源，内部点击不会冒泡到父页，画在
+  // 父页得做坐标换算，而且 iframe 内容长高时要重定位（高度上报会反复触发）。画在这里，
+  // 点击直接复用既有的 mydict:entry 消息，父页一行都不用改。
+  var LOOKUP_MIN_CHARS = 1
+  // 超过这个长度基本是整行/整段拖选，不是要查的词
+  var LOOKUP_MAX_CHARS = 30
+  var lookupMenu = null
+  var lookupText = ''
+
+  function hideLookupMenu() {
+    if (lookupMenu && lookupMenu.parentNode) lookupMenu.parentNode.removeChild(lookupMenu)
+    lookupMenu = null
+    lookupText = ''
+  }
+
+  function selectedText() {
+    var selection = window.getSelection && window.getSelection()
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return null
+    var text = selection.toString().replace(/\s+/g, ' ').trim()
+    if (text.length < LOOKUP_MIN_CHARS || text.length > LOOKUP_MAX_CHARS) return null
+    return text
+  }
+
+  function showLookupMenu(range, text) {
+    hideLookupMenu()
+    lookupText = text
+    var rect = range.getBoundingClientRect()
+
+    lookupMenu = document.createElement('div')
+    lookupMenu.className = 'mydict-lookup'
+    lookupMenu.setAttribute('role', 'button')
+    lookupMenu.textContent = '查词'
+    // 先藏起来挂上去，量完尺寸再定位，免得在左上角闪一下
+    lookupMenu.style.visibility = 'hidden'
+    ;(document.documentElement || document.body).appendChild(lookupMenu)
+
+    var width = lookupMenu.offsetWidth
+    var height = lookupMenu.offsetHeight
+    var gap = 6
+    var top = rect.bottom + gap
+    // 底边放不下就翻到选区上方，再放不下就贴顶
+    if (top + height > window.innerHeight) top = Math.max(0, rect.top - height - gap)
+    var left = Math.max(0, Math.min(rect.left + rect.width / 2 - width / 2,
+                                  window.innerWidth - width))
+    lookupMenu.style.top = top + 'px'
+    lookupMenu.style.left = left + 'px'
+    lookupMenu.style.visibility = 'visible'
+
+    // mousedown 必须拦：不拦的话点按钮会先把选区清掉，然后才轮到 click，查词就查了个空
+    lookupMenu.addEventListener('mousedown', function (event) {
+      event.preventDefault()
+      event.stopPropagation()
+    })
+    lookupMenu.addEventListener('click', function (event) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (lookupText) send('entry', { word: lookupText })
+      hideLookupMenu()
+    })
+  }
+
+  function onLookupMouseUp(event) {
+    if (event.button !== 0) return
+    if (lookupMenu && lookupMenu.contains(event.target)) return
+    var text = selectedText()
+    var selection = window.getSelection && window.getSelection()
+    if (!text || !selection || !selection.rangeCount) {
+      hideLookupMenu()
+      return
+    }
+    showLookupMenu(selection.getRangeAt(0), text)
+  }
+
+  function onLookupSelectionChange() {
+    // 只在菜单已经显示时才管——拖选过程中这个事件会疯狂触发
+    if (lookupMenu && selectedText() !== lookupText) hideLookupMenu()
+  }
+
+  function onLookupMouseDown(event) {
+    if (lookupMenu && lookupMenu.contains(event.target)) return
+    hideLookupMenu()
+  }
+
+  function onLookupKeyDown(event) {
+    if (event.key === 'Escape') hideLookupMenu()
+  }
+
+  function installLookupMenu() {
+    if (!ALLOW_LOOKUP) return
+    document.addEventListener('mouseup', onLookupMouseUp)
+    // capture 阶段：要在选区被清掉之前知道「这一下点的是菜单还是别处」
+    document.addEventListener('mousedown', onLookupMouseDown, true)
+    document.addEventListener('selectionchange', onLookupSelectionChange)
+    document.addEventListener('keydown', onLookupKeyDown)
+    // capture 的 scroll 能同时覆盖 window 滚动与 iframe 内部的滚动容器
+    window.addEventListener('scroll', hideLookupMenu, true)
+    window.addEventListener('resize', hideLookupMenu)
+  }
+
   function onReady() {
     fixMediaSources()
+    // 首屏就是暗色时，正文已经解析完了，这时才做得了提亮
+    boostDarkText()
+    installLookupMenu()
     observeHeight()
     report()
     send('ready', {})

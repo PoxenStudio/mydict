@@ -49,6 +49,50 @@ _CJK_RE = re.compile(r"[一-鿿]")
 # 命中中文输入时这三种取值的词典都要能被匹配到，见下方 _ZH_LANG_CODES。
 _ZH_LANG_CODES = ("zh", "zh-Hans", "zh-Hant")
 
+# MDict 用 `@@@LINK=目标词条` 表示「本词条与目标词条同义」，词典制作者拿它做同义词、大小写、
+# 简繁变体，以及日语词典里的「見出し語 → 見出し語【読み】」跳转。实测用户库里这类条目有
+# 10,505,543 条（占 2468 万词条的 42%），不解析的话用户看到的就是这一行标记本身。
+_LINK_RE = re.compile(r"^\s*@@@LINK\s*=\s*(.+?)\s*$", re.IGNORECASE)
+
+# 解引用的最大层数：词典里确实存在 A→B→C 的多级跳转，同时也要防住互相指向的环。
+# 只在查询时解引用、不落库，因为多数重定向条目指向的是共享内容——导入时展开会把
+# 同一份释义复制上千万份。
+_MAX_LINK_DEPTH = 5
+
+
+def _link_target(definition: str | None) -> str | None:
+    """释义是 `@@@LINK=xxx` 时返回目标词头，否则返回 None。"""
+    match = _LINK_RE.match(definition or "")
+    return match.group(1) if match else None
+
+
+def _resolve_link(db: Session, entry: DictEntry) -> DictEntry:
+    """跟进词条重定向，返回真正承载释义的那条记录。
+
+    只在本词典内跳转——重定向的目标是同一部词典里的另一个词头。链式跳转一路跟到底，
+    最多 `_MAX_LINK_DEPTH` 层；目标缺失时原样返回当前这条，让调用方至少还能显示那行标记
+    （比空白好排查）。
+    """
+    current = entry
+    seen: set[str] = set()
+    for _ in range(_MAX_LINK_DEPTH):
+        target = _link_target(current.definition)
+        if target is None:
+            return current
+        key = target.lower()
+        if key in seen:  # 环：别再跟了
+            return current
+        seen.add(key)
+        following = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == entry.dictionary_id, DictEntry.word_lower == key)
+            .first()
+        )
+        if following is None:
+            return entry
+        current = following
+    return current
+
 
 def detect_lang(word: str) -> str:
     return "zh" if _CJK_RE.search(word) else "en"
@@ -239,18 +283,22 @@ def search_word(
     # 结果顺序决定前端手风琴里「哪一部默认展开」，所以显式按候选词典的顺序排，
     # 不依赖数据库返回行的顺序。
     order = {d.id: index for index, d in enumerate(candidates.dictionaries)}
-    results = [
-        {
-            "dictionary_id": e.dictionary_id,
-            "dictionary_name": by_id[e.dictionary_id].name,
-            "word": e.word,
-            "phonetic": e.phonetic,
-            "definition": e.definition,
-            "extra": json.loads(e.extra) if e.extra else None,
-            "lang_match": e.dictionary_id in candidates.preferred_ids,
-        }
-        for e in entries
-    ]
+    results = []
+    for e in entries:
+        # 释义是 @@@LINK= 时跟进到目标词条取内容；但词头仍显示用户查到的那个，
+        # 否则标题行的词会突然变成另一个写法（如「中国」变成「中国【ちゅうごく①】」）
+        resolved = _resolve_link(db, e)
+        results.append(
+            {
+                "dictionary_id": e.dictionary_id,
+                "dictionary_name": by_id[e.dictionary_id].name,
+                "word": e.word,
+                "phonetic": resolved.phonetic,
+                "definition": resolved.definition,
+                "extra": json.loads(e.extra) if e.extra else None,
+                "lang_match": e.dictionary_id in candidates.preferred_ids,
+            }
+        )
     results.sort(key=lambda item: order[item["dictionary_id"]])
     query_cache.set(cache_key, results)
     return results
@@ -260,9 +308,9 @@ def get_entry(db: Session, dictionary_id: int, word: str) -> DictEntry | None:
     """取某部词典里的一条词条，供词条 HTML 渲染接口使用。
 
     不做任何语言/优先级路由：调用方已经指定了「哪部词典的哪个词」，
-    这正是查询结果卡片里的那一对。
+    这正是查询结果卡片里的那一对。释义是 `@@@LINK=` 时会跟进到目标词条（见 `_resolve_link`）。
     """
-    return (
+    entry = (
         db.query(DictEntry)
         .filter(
             DictEntry.dictionary_id == dictionary_id,
@@ -270,6 +318,7 @@ def get_entry(db: Session, dictionary_id: int, word: str) -> DictEntry | None:
         )
         .first()
     )
+    return _resolve_link(db, entry) if entry is not None else None
 
 
 def suggest_prefix(

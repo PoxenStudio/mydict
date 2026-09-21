@@ -1,5 +1,6 @@
 :root {
   --size-content-md: 960px;
+  --size-content-lg: 1220px;
   --size-dialog-sm: 420px;
   --size-dialog-md: 560px;
   --size-popover-md: 360px;
@@ -7,4 +8,6 @@
   --size-scroll-sm: 320px;
   --size-scroll-md: 360px;
   --size-control-md: 32px;
+  --size-control-lg: 44px;
+  --size-scrollbar-width: 8px;
 }

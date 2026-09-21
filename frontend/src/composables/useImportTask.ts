@@ -42,22 +42,25 @@ export function useImportTask() {
     unmounted = true
   })
 
-  async function waitForImportTask(taskId: number): Promise<BackgroundTask> {
-    const deadline = Date.now() + POLL_TIMEOUT_MS
+  async function waitForImportTask(
+    taskId: number,
+    timeoutMs = POLL_TIMEOUT_MS,
+  ): Promise<BackgroundTask> {
+    const deadline = Date.now() + timeoutMs
     let failures = 0
     while (!unmounted) {
       try {
         const task = await tasksApi.getTask(taskId)
         failures = 0
         if (task.status === 'success') return task
-        if (task.status === 'error') throw new Error(task.error ?? '导入失败')
+        if (task.status === 'error') throw new Error(task.error ?? '任务失败')
       } catch (err) {
         // 任务自身失败直接抛出；偶发的轮询请求失败容忍几次，任务在后端仍在跑
         if (!isAxiosError(err)) throw err
         failures += 1
         if (failures >= POLL_MAX_CONSECUTIVE_FAILURES) throw err
       }
-      if (Date.now() > deadline) throw new Error('等待导入超时，请稍后在词典列表确认是否已完成')
+      if (Date.now() > deadline) throw new Error('等待任务超时，请稍后在列表页确认是否已完成')
       await sleep(POLL_INTERVAL_MS)
     }
     throw new PollAbortedError()

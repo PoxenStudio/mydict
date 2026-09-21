@@ -1263,3 +1263,129 @@ async def test_batch_status_requires_admin(client: AsyncClient) -> None:
         json={"dictionary_ids": [1], "status": "enabled"},
     )
     assert resp.status_code == 401
+
+
+# --------------------------------------------------------------------- 批量重命名
+
+
+async def _import_named_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], name: str
+) -> int:
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
+        data={"name": name, "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+        files={"files": ("rename.csv", _ecdict_csv_bytes(), "text/csv")},
+    )
+    return dictionary["id"]
+
+
+async def _names(client: AsyncClient, admin_headers: dict[str, str]) -> dict[int, str]:
+    listing = await client.get("/api/admin/dictionaries", headers=admin_headers)
+    return {d["id"]: d["name"] for d in listing.json()}
+
+
+async def test_rename_preview_does_not_touch_names(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """dry_run 只回对照表：正则写错一次能改坏几十个名字，得先能看见结果再决定。"""
+    first = await _import_named_dictionary(client, admin_headers, "[中]汉典")
+    second = await _import_named_dictionary(client, admin_headers, "[日]大辞林")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": r"^\[[中英日]\]",
+            "replacement": "",
+            "dictionary_ids": [first, second],
+            "dry_run": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["applied"] is False
+    assert {item["new_name"] for item in body["items"]} == {"汉典", "大辞林"}
+
+    names = await _names(client, admin_headers)
+    assert names[first] == "[中]汉典"
+
+
+async def test_rename_applies_changes(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    dictionary_id = await _import_named_dictionary(client, admin_headers, "[英]牛津高阶")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": r"^\[英\]",
+            "replacement": "",
+            "dictionary_ids": [dictionary_id],
+            "dry_run": False,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["applied"] is True
+    assert (await _names(client, admin_headers))[dictionary_id] == "牛津高阶"
+
+
+async def test_rename_supports_backreferences(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """替换串支持 \\1 这类反向引用，方便只保留捕获到的分组。"""
+    dictionary_id = await _import_named_dictionary(client, admin_headers, "汉典（中华书局）")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": r"^(.+?)（.+）$",
+            "replacement": r"\1",
+            "dictionary_ids": [dictionary_id],
+            "dry_run": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["new_name"] == "汉典"
+
+
+async def test_rename_skips_names_that_would_become_empty(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """替换结果为空就跳过：留一个不可用的名字比不改更糟。"""
+    dictionary_id = await _import_named_dictionary(client, admin_headers, "词库")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": "^.*$",
+            "replacement": "",
+            "dictionary_ids": [dictionary_id],
+            "dry_run": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"] == []
+
+
+async def test_rename_rejects_invalid_pattern(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={"pattern": "([", "replacement": "", "dry_run": True},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "validation_error"
+
+
+async def test_rename_requires_admin(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        json={"pattern": "a", "replacement": "", "dry_run": True},
+    )
+    assert resp.status_code == 401

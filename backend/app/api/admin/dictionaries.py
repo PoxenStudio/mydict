@@ -2,6 +2,7 @@ import json
 import shutil
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
@@ -21,6 +22,10 @@ from app.schemas.dictionary import (
     DictsDirListingOut,
     ImportFromDictsDirRequest,
     ReorderRequest,
+    RenameDictionariesOut,
+    RenameDictionariesRequest,
+    SpxScanRequest,
+    SpxTranscodeRequest,
     TestQueryEntryOut,
 )
 from app.services import dictionary_service, query_service
@@ -159,6 +164,60 @@ def batch_status(
     )
 
 
+@router.post("/scan-spx", response_model=DictionaryImportTaskOut)
+def scan_spx(
+    body: SpxScanRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _admin: Admin = Depends(require_admin),
+) -> DictionaryImportTaskOut:
+    """扫描各部词典资源目录里「待转码」的 .spx 数量并写回词典记录。
+
+    为什么要在后台跑：大词典单部就有几十万个资源文件（实测 The little dict 67.6 万个），
+    放在请求里会把接口卡死。立即返回 task_id，前端轮询 /admin/tasks/{task_id}。
+    """
+    return DictionaryImportTaskOut(
+        task_id=dictionary_service.start_spx_scan(db, body.dictionary_ids, settings)
+    )
+
+
+@router.post("/transcode-spx", response_model=DictionaryImportTaskOut)
+def transcode_spx(
+    body: SpxTranscodeRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _admin: Admin = Depends(require_admin),
+) -> DictionaryImportTaskOut:
+    """把选中词典里待转的 .spx 批量转成 mp3，**转成功后删掉原 .spx**（源词典文件另存有备份）。
+
+    单部与批量共用这一个端点。容器里没有 ffmpeg 时直接报 422，不登记一个注定失败的任务。
+    """
+    return DictionaryImportTaskOut(
+        task_id=dictionary_service.start_spx_transcode(db, body.dictionary_ids, settings)
+    )
+
+
+@router.post("/rename", response_model=RenameDictionariesOut)
+def rename_dictionaries(
+    body: RenameDictionariesRequest,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> RenameDictionariesOut:
+    """按正则批量重命名词典。
+
+    默认 dry_run：前端先拿一份「原名称 → 新名称」的对照表给管理员过目，确认后再以
+    dry_run=false 调一次真正落库。响应里只含会被改名的条目。
+    """
+    return dictionary_service.rename_dictionaries(
+        db,
+        pattern=body.pattern,
+        replacement=body.replacement,
+        dictionary_ids=body.dictionary_ids,
+        dry_run=body.dry_run,
+        admin_id=admin.id,
+    )
+
+
 @router.put("/{dictionary_id}", response_model=DictionaryOut)
 def update_dictionary(
     dictionary_id: int,
@@ -215,6 +274,7 @@ def test_query(
 def entry_document(
     dictionary_id: int,
     word: str,
+    theme: Literal["light", "dark"] | None = None,
     db: Session = Depends(get_db),
     _admin: Admin = Depends(require_admin),
 ) -> HTMLResponse:
@@ -230,4 +290,6 @@ def entry_document(
     entry = query_service.get_entry(db, dictionary_id, word)
     if entry is None:
         raise NotFoundError("词条不存在")
-    return HTMLResponse(render_entry_document(entry.definition, dictionary_id=dictionary_id))
+    return HTMLResponse(
+        render_entry_document(entry.definition, dictionary_id=dictionary_id, theme=theme)
+    )

@@ -9,6 +9,8 @@ let timer: ReturnType<typeof setInterval> | undefined
 
 const TASK_TYPE_LABELS: Record<string, string> = {
   dictionary_import: '词典导入',
+  dictionary_spx_scan: '发音资源扫描',
+  dictionary_spx_transcode: '发音转码',
 }
 
 function taskLabel(task: BackgroundTask) {
@@ -16,7 +18,11 @@ function taskLabel(task: BackgroundTask) {
 }
 
 function taskProgressText(task: BackgroundTask) {
-  const done = task.progress_data.done
+  const { done, total } = task.progress_data
+  // 扫描/转码按「已完成 / 总数」报进度；词典导入报的是已写入的词条数，没有总数
+  if (typeof done === 'number' && typeof total === 'number' && total > 0) {
+    return `已处理 ${done.toLocaleString()} / ${total.toLocaleString()}`
+  }
   return typeof done === 'number' ? `已处理 ${done.toLocaleString()} 条` : '处理中…'
 }
 
