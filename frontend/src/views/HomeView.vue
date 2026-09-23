@@ -96,7 +96,11 @@ onMounted(async () => {
     router.replace('/admin/setup')
     return
   }
-  await Promise.all([loadFavorites(), loadDictionaryFilter()])
+  // 收藏与词典列表各自容错：任一失败都不该把后面的「外链直达」带下去。
+  // 这里是裸 Promise.all 的话，loadFavorites 在未登录等场景下一 reject，
+  // runFromUrl() 就永远不执行——表现为打开 /?q=词 输入框空着、毫无反应，
+  // 而且异常发生在 async 回调里，只会变成一条 unhandled rejection，很难查。
+  await Promise.all([loadFavorites().catch(() => undefined), loadDictionaryFilter()])
   // 词典列表与登录态都就绪了，这时才处理地址栏里的 ?q=（外链直达）
   await runFromUrl()
 })
@@ -277,7 +281,13 @@ async function runFromUrl() {
     ElMessage.info('请先登录后再查询')
     return
   }
-  await runSearch(initial)
+  try {
+    await runSearch(initial)
+  } catch {
+    // runSearch 内部已经吃了查询本身的异常（会把状态置成 error），这里只是兜住
+    // 「连查询都没发起就抛了」的意外，别让它变成静默的 unhandled rejection
+    status.value = 'error'
+  }
 }
 
 /** iframe 里点了 entry:// 词条链接，按新词重查 */
