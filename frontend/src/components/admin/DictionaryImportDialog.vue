@@ -164,7 +164,7 @@ async function submit() {
           :label="
             isSingleFileFormat
               ? '词典文件（ECDICT 只能选 1 个 CSV）'
-              : '词典文件（可多选，如 .mdx + .mdd）'
+              : '词典文件（可多选：.mdx + .mdd，以及同目录的 .css / 字体）'
           "
         >
           <el-upload

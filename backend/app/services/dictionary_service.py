@@ -24,6 +24,7 @@ from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
 from app.services.background_task_service import background_tasks
 from app.services.language_detect import detect_language
+from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 from app.services.spx_transcode import count_pending_spx, ffmpeg_path, transcode_pending
 
 logger = logging.getLogger("mydict.dictionary")
@@ -48,8 +49,12 @@ _PARSERS: dict[str, type[DictionaryParser]] = {
 
 # 上传/目录导入时按声明的 format 做文件后缀白名单校验，防止内容与声明格式不符
 # （如把任意文件伪装成词典上传）；具体格式细节仍由各 Parser 在解析阶段兜底校验。
+#
+# mdict 额外允许 MDict 的附属资源（CSS/字体/JS/图片）——它们按惯例放在 .mdx 同级目录，
+# 词条里的 <link href="oxbw.css"> 就指着它们。只收 .mdx/.mdd 会让上传的词典丢样式。
+# 伪装成词典仍不可行：解析阶段没有 .mdx 会直接报错。
 _ALLOWED_EXTENSIONS: dict[str, set[str]] = {
-    "mdict": {".mdx", ".mdd"},
+    "mdict": {".mdx", ".mdd"} | SIBLING_RESOURCE_EXTENSIONS,
     "stardict": {".ifo", ".idx", ".dict", ".syn", ".dict.dz", ".idx.gz"},
     "ecdict": {".csv"},
 }
@@ -533,6 +538,67 @@ def _run_spx_scan_in_background(task_id: int, dictionary_ids: list[int], setting
     except Exception:
         logger.exception("扫描发音资源失败")
         background_tasks.fail(task_id, "扫描失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
+def start_resource_repair(
+    db: Session, dictionary_ids: list[int] | None, settings: Settings
+) -> int:
+    """登记「补齐附属资源」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
+
+    存量词典是在「导入时复制 .mdx 同级资源」这件事修好之前导入的，`res/` 里只有 `.mdd`
+    解包出来的内容，样式表/字体/脚本全都缺——于是图标按原始像素渲染（大辞泉的发音图标
+    75×74、岩波的派生語图标 387×150）、表格丢掉边框。这个任务把它们补进各自的 `res/`，
+    **不需要重新导入任何词典**。
+    """
+    targets = _spx_targets(db, dictionary_ids)
+    task = background_tasks.start("dictionary_resource_repair", "补齐附属资源")
+    threading.Thread(
+        target=_run_resource_repair_in_background,
+        args=(task.id, [d.id for d in targets], settings),
+        daemon=True,
+    ).start()
+    return task.id
+
+
+def _run_resource_repair_in_background(
+    task_id: int, dictionary_ids: list[int], settings: Settings
+) -> None:
+    """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
+    db = SessionLocal()
+    try:
+        total = len(dictionary_ids)
+        repaired = 0
+        copied = 0
+        skipped = 0
+        for index, dict_id in enumerate(dictionary_ids, start=1):
+            dictionary = db.get(Dictionary, dict_id)
+            if dictionary is None:  # 补齐期间被删掉了
+                continue
+            res_dir = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+            # 当初勾了「不导入发音/图片」的词典没有 res/，释义里的资源引用也没被改写
+            # （改了只会指向不存在的文件），单独补文件进去也用不上
+            if not res_dir.is_dir():
+                skipped += 1
+                background_tasks.update_progress(task_id, {"done": index, "total": total})
+                continue
+            sources = [
+                Path(raw.strip())
+                for raw in (dictionary.file_path or "").split(";")
+                if raw.strip()
+            ]
+            count = copy_sibling_resources(res_dir, sources)
+            if count:
+                repaired += 1
+            copied += count
+            background_tasks.update_progress(task_id, {"done": index, "total": total})
+        background_tasks.succeed(
+            task_id, {"dictionaries": repaired, "files": copied, "skipped": skipped}
+        )
+    except Exception:
+        logger.exception("补齐附属资源失败")
+        background_tasks.fail(task_id, "补齐失败：服务器内部错误，请查看后端日志")
     finally:
         db.close()
 

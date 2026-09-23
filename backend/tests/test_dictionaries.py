@@ -1389,3 +1389,172 @@ async def test_rename_requires_admin(client: AsyncClient) -> None:
         json={"pattern": "a", "replacement": "", "dry_run": True},
     )
     assert resp.status_code == 401
+
+
+# ------------------------------------------- MDict 同级附属资源（CSS/字体/脚本）
+#
+# MDict 的惯例是把样式表、字体、脚本放在 .mdx 同级目录，词条里的 <link href="oxbw.css">
+# 就指着它们（大辞泉、岩波、広辞苑、明镜、新世纪、Weblio 等 63 部全是这样，Weblio 甚至
+# 没有 .mdd）。早先只解包 .mdd，这些文件全部 404，于是图标按原始像素渲染、表格丢边框。
+
+
+async def test_import_from_dicts_dir_copies_sibling_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """导入时把 .mdx 同级的 CSS 一并复制进 res/，词典本体不进 res/。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    files["mini.css"] = b"img.audio{height:1em}"
+    settings = get_settings()
+
+    rel = _write_scratch("sibling-res", files)
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "Sibling Res",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    dict_id = task["result"]["dictionary_id"]
+
+    res = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+    # 同级 css 被复制过来（这正是图标尺寸与表格边框的来源）
+    assert (res / "mini.css").read_bytes() == b"img.audio{height:1em}"
+    # .mdd 照常解包
+    assert (res / "pic" / "apple.png").exists()
+    # 词典本体不进 res/：词条已入库、.mdd 已解包，复制本体只会白占几十 MB
+    assert not (res / "mini.mdx").exists()
+    assert not (res / "mini.mdd").exists()
+
+
+async def test_upload_accepts_sibling_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """浏览器上传也允许带上配套的 CSS/字体：MDict 的白名单此前只收 .mdx/.mdd，
+    上传的词典注定丢样式。伪装成词典仍不可行——解析阶段没有 .mdx 会直接报错。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
+        data={
+            "name": "Uploaded Sibling",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+        },
+        files=[
+            ("files", ("mini.mdx", files["mini.mdx"], "application/octet-stream")),
+            ("files", ("mini.mdd", files["mini.mdd"], "application/octet-stream")),
+            ("files", ("mini.css", b"img.audio{height:1em}", "text/css")),
+        ],
+    )
+
+    storage = Path(settings.dictionary_storage_path) / str(dictionary["id"])
+    assert (storage / "res" / "mini.css").read_bytes() == b"img.audio{height:1em}"
+    # 上传的文件归档到本应用管理的 source/（repair-resources 的源目录就是它）
+    assert (storage / "source" / "mini.css").exists()
+
+
+async def test_repair_resources_backfills_existing_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """存量词典靠这个端点补文件——不必重新导入（大辞泉有 95 万词条，重导代价太大）。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    rel = _write_scratch("repair-res", files)
+
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Repair Res",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    res = Path(settings.dictionary_storage_path) / str(dictionary["id"]) / "res"
+    # 模拟「修好之前导入的存量词典」：res/ 里没有同级 css
+    assert not (res / "mini.css").exists()
+    _write_scratch("repair-res", {"mini.css": b"img.audio{height:1em}"})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-resources",
+        headers=admin_headers,
+        json={"dictionary_ids": [dictionary["id"]]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert task["result"] == {"dictionaries": 1, "files": 1, "skipped": 0}
+
+    assert (res / "mini.css").read_bytes() == b"img.audio{height:1em}"
+
+    # 再跑一次：文件已在，不重复计数（幂等）
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-resources",
+        headers=admin_headers,
+        json={"dictionary_ids": [dictionary["id"]]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["result"] == {"dictionaries": 0, "files": 0, "skipped": 0}
+
+
+async def test_repair_resources_skips_dictionaries_without_res_dir(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """勾了「不导入发音/图片」的词典没有 res/，释义里的资源引用也没被改写，补文件用不上。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    rel = _write_scratch("repair-skip", files)
+
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Repair Skip",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "skip_resources": True,
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    res = Path(settings.dictionary_storage_path) / str(dictionary["id"]) / "res"
+    assert not res.exists()
+    _write_scratch("repair-skip", {"mini.css": b"x"})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-resources",
+        headers=admin_headers,
+        json={"dictionary_ids": [dictionary["id"]]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert task["result"] == {"dictionaries": 0, "files": 0, "skipped": 1}
+    assert not res.exists()
+
+
+async def test_repair_resources_rejects_unknown_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-resources",
+        headers=admin_headers,
+        json={"dictionary_ids": [999999]},
+    )
+    assert resp.status_code == 404
+
+
+async def test_repair_resources_requires_admin(client: AsyncClient) -> None:
+    resp = await client.post("/api/admin/dictionaries/repair-resources", json={})
+    assert resp.status_code == 401

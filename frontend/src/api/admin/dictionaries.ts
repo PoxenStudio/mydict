@@ -94,6 +94,19 @@ export function transcodeSpx(dictionaryIds: number[]) {
   })
 }
 
+/**
+ * 补齐附属资源：把词典源文件旁边的 CSS/字体/JS/图片补进各自的 res/。
+ *
+ * MDict 的样式表与字体放在 .mdx 同级目录而不是 .mdd 里，早先的导入代码只解包 .mdd，
+ * 于是存量词典全都缺这些文件（图标按原始像素渲染、表格丢边框）。不需要重新导入。
+ * dictionaryIds 留空表示全部词典。
+ */
+export function repairResources(dictionaryIds?: number[] | null) {
+  return request.post<never, { task_id: number }>('/admin/dictionaries/repair-resources', {
+    dictionary_ids: dictionaryIds && dictionaryIds.length ? dictionaryIds : null,
+  })
+}
+
 export function testQuery(id: number, word: string) {
   return request.get<never, TestQueryEntry[]>(`/admin/dictionaries/${id}/test-query`, {
     params: { word },

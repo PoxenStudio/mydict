@@ -1,5 +1,54 @@
+import logging
+import os
 import re
+import shutil
+from collections.abc import Iterable
 from pathlib import Path
+
+logger = logging.getLogger("mydict.resource")
+
+# 词条文档（含它引用的 CSS）可能用到的资源类型。带点的全小写形式，上传白名单也复用它。
+#
+# 刻意不含 Eudic 专有索引（.db / .db-wal / .bix / .bin）与 .pdf：实测词典目录里这类文件
+# 占了附属文件总大小的六成（102MB / 176MB），却与 HTML 渲染毫无关系。
+SIBLING_RESOURCE_EXTENSIONS = frozenset(
+    {
+        ".css",
+        ".js",
+        ".mjs",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".webp",
+        ".avif",
+        ".bmp",
+        ".ico",
+        ".cur",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".oga",
+        ".opus",
+        ".m4a",
+        ".aac",
+        ".flac",
+        ".spx",
+        ".mp4",
+        ".webm",
+        ".html",
+        ".htm",
+        ".txt",
+        ".json",
+        ".xml",
+    }
+)
 
 # 匹配 HTML 中 src="..." / href="..." 属性值。
 # 负向前瞻一口气跳过所有「不该改写」的引用，避免每条外部链接都要进一次 Python 回调——
@@ -42,6 +91,70 @@ def write_resource(resource_dir: Path, relative_path: str, content: bytes) -> No
     target = resource_dir / normalized
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
+
+
+def _source_dirs(sources: Iterable[Path]) -> list[Path]:
+    """把「词典相关路径」统一成要扫描的目录列表。
+
+    传进来的既可能是文件（dicts_dir 导入存的是 .mdx/.mdd 的完整路径），
+    也可能是目录（浏览器上传导入存的是该词典的 source/ 目录），两种都要能处理。
+    """
+    dirs: list[Path] = []
+    for source in sources:
+        directory = source if source.is_dir() else source.parent
+        if directory not in dirs:
+            dirs.append(directory)
+    return dirs
+
+
+def copy_sibling_resources(resource_dir: Path, sources: Iterable[Path]) -> int:
+    """把词典文件旁边的附属资源复制进 `resource_dir`，返回成功复制的文件数。
+
+    MDict 的惯例是把样式表、字体、脚本、图片放在 `.mdx` **同级目录**：词条里的
+    `<link href="oxbw.css">` 与 CSS 里的 `url("SourceHanSerifJP-Regular.otf")` 都按
+    「词典文件所在目录」解析——MDict 客户端就是这么做的。这些文件并不在 `.mdd` 里
+    （实测大辞泉的 `oxbw.css`/`oxbw.js`、岩波的 `iwakoku.css`、広辞苑的 `gcy.css` 与 6 个
+    `.otf`、明镜的 `MK3.css`、新世纪的 `xinrihanshuangjie.css`、Weblio 的 `thesaurus.css`
+    都是如此，Weblio 甚至没有 `.mdd`），所以只解包 `.mdd` 会让它们全部 404——词条于是以
+    无样式渲染，图标回到原始像素（`Audio.png` 75×74、`b276.png` 387×150）、表格丢掉边框。
+
+    只扫一层目录、只复制扩展名在白名单里的**直接子文件**。
+
+    已存在的同名文件不覆盖：`.mdd` 里解包出来的那份属于词典容器内，更权威。
+    写入走「临时文件 + os.replace」原子替换——补齐存量词典时词典是启用状态、可能正有人
+    在查，直接写会让请求读到半截 CSS。
+    """
+    count = 0
+    for directory in _source_dirs(sources):
+        try:
+            children = sorted(directory.iterdir(), key=lambda item: item.name.lower())
+        except OSError:
+            logger.warning("无法读取词典目录 %s，跳过附属资源复制", directory, exc_info=True)
+            continue
+
+        for child in children:
+            # 词典本体（.mdx/.mdd）不在白名单里，自然不会被复制
+            if child.suffix.lower() not in SIBLING_RESOURCE_EXTENSIONS:
+                continue
+            # 符号链接可能指向词典目录之外，不跟着走
+            if child.is_symlink() or not child.is_file():
+                continue
+
+            target = resource_dir / child.name
+            if target.exists():
+                continue
+            temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+            try:
+                resource_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(child, temporary)
+                os.replace(temporary, target)
+            except OSError:
+                # 单个文件失败不该连累整次导入，也不留临时文件
+                logger.warning("复制附属资源失败 %s", child, exc_info=True)
+                temporary.unlink(missing_ok=True)
+                continue
+            count += 1
+    return count
 
 
 def _split_suffix(raw: str) -> tuple[str, str]:

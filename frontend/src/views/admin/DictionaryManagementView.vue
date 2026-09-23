@@ -210,6 +210,8 @@ async function onDrop(targetIndex: number) {
 // --- 发音转码 ---
 const spxAvailable = ref(false)
 const spxRunning = ref(false)
+// 补齐附属资源（CSS/字体/脚本）——与发音无关，独立于 spxRunning 免得互相禁用
+const resourceRunning = ref(false)
 
 /** 容器里有没有 ffmpeg。没有时「转码」按钮要禁用并说明原因，否则点了只会拿到 422 */
 async function loadSpxStatus() {
@@ -233,6 +235,30 @@ async function scanSpx() {
     ElMessage.success(`扫描完成，共发现 ${resultNumber(task, 'pending') ?? 0} 个待转发音`)
   } finally {
     spxRunning.value = false
+  }
+}
+
+/**
+ * 补齐附属资源：把源文件旁边的 CSS/字体/JS/图片补进各部词典的 res/。
+ *
+ * 早先的导入代码只解包 .mdd，而 MDict 的样式表与字体按惯例放在 .mdx 同级目录，于是
+ * 存量词典全都缺这些文件——词条以无样式渲染，图标回到原始像素、表格丢边框。
+ * 这里不用重新导入任何词典；有勾选就只处理勾选的。
+ */
+async function repairResources() {
+  const ids = selectedIds.value.length ? [...selectedIds.value] : null
+  resourceRunning.value = true
+  try {
+    const { task_id } = await dictApi.repairResources(ids)
+    const task = await waitForImportTask(task_id, 30 * 60 * 1000)
+    const files = resultNumber(task, 'files') ?? 0
+    const skipped = resultNumber(task, 'skipped') ?? 0
+    ElMessage.success(
+      `补齐完成：为 ${resultNumber(task, 'dictionaries') ?? 0} 部词典复制了 ${files} 个文件` +
+        (skipped ? `，跳过 ${skipped} 部（导入时未选择解包资源）` : ''),
+    )
+  } finally {
+    resourceRunning.value = false
   }
 }
 
@@ -303,6 +329,7 @@ async function runTestQuery() {
         <RefreshButton :loading="loading" @refresh="loadDictionaries" />
       </div>
       <el-button :loading="spxRunning" @click="scanSpx">扫描发音资源</el-button>
+      <el-button :loading="resourceRunning" @click="repairResources">补齐附属资源</el-button>
       <el-button @click="renameDialogVisible = true">批量重命名</el-button>
       <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
     </div>

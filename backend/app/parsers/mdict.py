@@ -11,7 +11,11 @@ from app.parsers.base import (
     is_informative_headword,
     spread_downsample,
 )
-from app.services.resource_service import rewrite_resource_refs, write_resource
+from app.services.resource_service import (
+    copy_sibling_resources,
+    rewrite_resource_refs,
+    write_resource,
+)
 
 
 def _open_mdict(factory, path: Path):
@@ -55,6 +59,9 @@ class MDictParser(DictionaryParser):
                 for key, content in mdd.items():
                     relative_path = key.decode("utf-8", errors="replace")
                     write_resource(resource_dir, relative_path, content)
+            # 样式表/字体/脚本不在 .mdd 里，而是躺在 .mdx 同级目录；见
+            # copy_sibling_resources 的说明
+            copy_sibling_resources(resource_dir, file_paths)
 
         for mdx_path in mdx_paths:
             mdx = self._open_mdx(mdx_path)
