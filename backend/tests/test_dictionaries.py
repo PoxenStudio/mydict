@@ -1495,7 +1495,7 @@ async def test_repair_resources_backfills_existing_dictionary(
     assert resp.status_code == 200, resp.text
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
     assert task["status"] == "success", task
-    assert task["result"] == {"dictionaries": 1, "files": 1, "skipped": 0}
+    assert task["result"] == {"dictionaries": 1, "files": 1}
 
     assert (res / "mini.css").read_bytes() == b"img.audio{height:1em}"
 
@@ -1506,32 +1506,38 @@ async def test_repair_resources_backfills_existing_dictionary(
         json={"dictionary_ids": [dictionary["id"]]},
     )
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
-    assert task["result"] == {"dictionaries": 0, "files": 0, "skipped": 0}
+    assert task["result"] == {"dictionaries": 0, "files": 0}
 
 
-async def test_repair_resources_skips_dictionaries_without_res_dir(
+async def test_repair_resources_creates_res_dir_for_mdx_only_dictionary(
     client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
 ) -> None:
-    """勾了「不导入发音/图片」的词典没有 res/，释义里的资源引用也没被改写，补文件用不上。"""
+    """只有 .mdx 没有 .mdd 的词典也该补——它从来没有过 res/，但照样需要那个 css。
+
+    第一版实现写的是「没有 res/ 就跳过，说明用户当初勾了 skip_resources」，把这一整类
+    都误判掉了：Weblio類語辞典、moji辞書、thesaurus近反义词、搜韵诗词等 19 部全都只有
+    .mdx，而它们的释义引用照常被改写成了 /dict-res/…，缺了 css 表格就看不出是表格。
+    """
     files = _build_mdict_with_resource_bytes(tmp_path)
     settings = get_settings()
-    rel = _write_scratch("repair-skip", files)
+    # 只导入 .mdx：没有 .mdd 就没有资源可解包，导入时也不会建 res/
+    rel = _write_scratch("repair-mdx-only", {"mini.mdx": files["mini.mdx"]})
 
     dictionary = await import_from_dicts_dir(
         client,
         admin_headers,
         json={
-            "name": "Repair Skip",
+            "name": "Repair Mdx Only",
             "format": "mdict",
             "lang_from": "en",
             "lang_to": "zh-Hans",
-            "skip_resources": True,
-            "files": [f"{rel}/{name}" for name in files],
+            "files": [f"{rel}/mini.mdx"],
         },
     )
     res = Path(settings.dictionary_storage_path) / str(dictionary["id"]) / "res"
     assert not res.exists()
-    _write_scratch("repair-skip", {"mini.css": b"x"})
+    # 同级 css 是这个词典本来就有的，只是早先的导入代码没复制它
+    _write_scratch("repair-mdx-only", {"mini.css": b"table{border:1px solid}"})
 
     resp = await client.post(
         "/api/admin/dictionaries/repair-resources",
@@ -1540,8 +1546,8 @@ async def test_repair_resources_skips_dictionaries_without_res_dir(
     )
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
     assert task["status"] == "success", task
-    assert task["result"] == {"dictionaries": 0, "files": 0, "skipped": 1}
-    assert not res.exists()
+    assert task["result"] == {"dictionaries": 1, "files": 1}
+    assert (res / "mini.css").read_bytes() == b"table{border:1px solid}"
 
 
 async def test_repair_resources_rejects_unknown_dictionary(

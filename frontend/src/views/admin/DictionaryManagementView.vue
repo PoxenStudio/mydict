@@ -251,11 +251,9 @@ async function repairResources() {
   try {
     const { task_id } = await dictApi.repairResources(ids)
     const task = await waitForImportTask(task_id, 30 * 60 * 1000)
-    const files = resultNumber(task, 'files') ?? 0
-    const skipped = resultNumber(task, 'skipped') ?? 0
     ElMessage.success(
-      `补齐完成：为 ${resultNumber(task, 'dictionaries') ?? 0} 部词典复制了 ${files} 个文件` +
-        (skipped ? `，跳过 ${skipped} 部（导入时未选择解包资源）` : ''),
+      `补齐完成：为 ${resultNumber(task, 'dictionaries') ?? 0} 部词典复制了 ` +
+        `${resultNumber(task, 'files') ?? 0} 个文件`,
     )
   } finally {
     resourceRunning.value = false

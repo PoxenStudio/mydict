@@ -571,31 +571,27 @@ def _run_resource_repair_in_background(
         total = len(dictionary_ids)
         repaired = 0
         copied = 0
-        skipped = 0
         for index, dict_id in enumerate(dictionary_ids, start=1):
             dictionary = db.get(Dictionary, dict_id)
             if dictionary is None:  # 补齐期间被删掉了
-                continue
-            res_dir = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
-            # 当初勾了「不导入发音/图片」的词典没有 res/，释义里的资源引用也没被改写
-            # （改了只会指向不存在的文件），单独补文件进去也用不上
-            if not res_dir.is_dir():
-                skipped += 1
-                background_tasks.update_progress(task_id, {"done": index, "total": total})
                 continue
             sources = [
                 Path(raw.strip())
                 for raw in (dictionary.file_path or "").split(";")
                 if raw.strip()
             ]
-            count = copy_sibling_resources(res_dir, sources)
+            # 不检查 res/ 是否已存在——`copy_sibling_resources` 会按需建目录。
+            # 曾经这里加过「没有 res/ 就跳过，说明用户当初勾了 skip_resources」，是错的：
+            # 只有 .mdx 没有 .mdd 的词典（Weblio類語辞典、moji辞書、thesaurus近反义词…）
+            # 同样没有 res/，但它们的释义引用照常被改写成了 /dict-res/…，正需要这个文件。
+            count = copy_sibling_resources(
+                Path(settings.dictionary_storage_path) / str(dict_id) / "res", sources
+            )
             if count:
                 repaired += 1
             copied += count
             background_tasks.update_progress(task_id, {"done": index, "total": total})
-        background_tasks.succeed(
-            task_id, {"dictionaries": repaired, "files": copied, "skipped": skipped}
-        )
+        background_tasks.succeed(task_id, {"dictionaries": repaired, "files": copied})
     except Exception:
         logger.exception("补齐附属资源失败")
         background_tasks.fail(task_id, "补齐失败：服务器内部错误，请查看后端日志")
