@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useTheme } from '../composables/useTheme'
+import ImageLightbox from './ImageLightbox.vue'
 
 const props = defineProps<{
   /**
@@ -40,6 +41,9 @@ const MESSAGE_WINDOW_MS = 1000
 
 const iframeRef = ref<HTMLIFrameElement | null>(null)
 const html = ref('')
+// 大图查看器：由 iframe 里的图片点击触发
+const lightboxSrc = ref('')
+const lightboxAlt = ref('')
 const loading = ref(true)
 const failed = ref(false)
 const boxHeight = ref(MIN_HEIGHT)
@@ -140,6 +144,13 @@ function onMessage(event: MessageEvent) {
     case 'mydict:audio-unsupported':
       emit('unsupportedAudio')
       break
+    case 'mydict:image':
+      // 扫描版词典（辞海这类）的整页图片在词条里太小，点开用大图查看器看
+      if (typeof data.src === 'string' && data.src) {
+        lightboxSrc.value = data.src
+        lightboxAlt.value = typeof data.alt === 'string' ? data.alt : ''
+      }
+      break
     case 'mydict:audio-error':
       ElMessage.warning('发音播放失败')
       break
@@ -177,6 +188,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage)
+  lightboxSrc.value = ''
   if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer)
 })
 </script>
@@ -202,6 +214,12 @@ onBeforeUnmount(() => {
       @load="postTheme"
       :style="{ height: `${boxHeight}px`, overflow: scrollable ? 'auto' : 'hidden' }"
       title="词条内容"
+    />
+    <ImageLightbox
+      v-if="lightboxSrc"
+      :src="lightboxSrc"
+      :alt="lightboxAlt"
+      @close="lightboxSrc = ''"
     />
   </div>
 </template>

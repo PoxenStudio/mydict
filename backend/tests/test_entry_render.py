@@ -95,6 +95,21 @@ def test_script_in_definition_is_preserved_for_the_iframe() -> None:
     assert '<script>document.title="x"</script>' in html
 
 
+def test_bootstrap_reports_clicked_images_to_the_parent() -> None:
+    """点大图要通知父页弹查看器——扫描版词典（辞海）一整页的字按容器宽度显示根本读不了。
+
+    引导脚本是未压缩源码直接内联的，所以这些字面量一定能在产物里找到。
+    """
+    html = render_entry_document("<p>x</p>", dictionary_id=1)
+    assert "IMAGE_MIN_SIZE" in html
+    assert "send('image'" in html
+    # 引导脚本里出现 </script 会提前截断整个 script 块（表现为词条白屏），
+    # 所以取出它所在的那个 <script> 块单独确认一次
+    start = html.index(BOOT_MARK)
+    block = html[html.rindex("<script>", 0, start) : html.index("</script>", start)]
+    assert "</script" not in block
+
+
 def test_dark_theme_style_is_injected() -> None:
     """词典原文常把颜色写死（白底黑字），暗色下要靠这段样式翻掉。"""
     html = render_entry_document("<p>x</p>", dictionary_id=1)

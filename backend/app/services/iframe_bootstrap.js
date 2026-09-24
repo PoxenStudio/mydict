@@ -412,10 +412,28 @@
     return false
   }
 
+  // 扫描版词典（如辞海）的整页图片按容器宽度显示后，一页上的多栏小字根本读不了，
+  // 所以点大图时交给父页弹一个可缩放的大图查看器。
+  //
+  // 用**渲染尺寸**而不是 naturalWidth 判「够大」：各词典正文里到处是 16px 的小图标
+  // （发音按钮、词性括号、派生語图标），点它们弹大图会很烦；而一张大图若被 CSS 缩成
+  // 16px 当图标用，同样不该弹。
+  var IMAGE_MIN_SIZE = 160
+
   document.addEventListener(
     'click',
     function (event) {
       var anchorEl = findAnchor(event)
+      var href = anchorEl ? anchorEl.getAttribute('href') : null
+      // 包在 <a href> 里的图仍走链接逻辑（有些词典把图做成链接）
+      if (!href && event.target && event.target.tagName === 'IMG') {
+        var box = event.target.getBoundingClientRect()
+        if (box.width >= IMAGE_MIN_SIZE || box.height >= IMAGE_MIN_SIZE) {
+          event.preventDefault()
+          send('image', { src: event.target.currentSrc || event.target.src, alt: event.target.alt || '' })
+          return
+        }
+      }
       if (!anchorEl) return
       var target = (anchorEl.getAttribute('target') || '').toLowerCase()
       if (target === '_top' || target === '_parent') {
