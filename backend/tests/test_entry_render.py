@@ -523,3 +523,16 @@ def test_bootstrap_tames_light_backgrounds_in_dark_mode() -> None:
     assert "BG_TAME_LIGHTNESS" in html
     # 词典常写 `background:#f2f3ee url(bg.jpg)` 这样的简写，只翻颜色的话底图还在
     assert "background-image:none" in html
+
+
+def test_document_clips_horizontal_bleed() -> None:
+    """iframe 高度由内容撑出来，本就不该有滚动条；但词典常用负外边距做「出血」
+    （千篇汉语词典是 `ul{margin:-12px -6px 0}`，左右各溢出 6px）。
+
+    这 6px 会引出两根滚动条：横向那根占掉约 15px 视口高度，于是内容又纵向溢出。
+    实测横向溢出量：千篇恒为 6px，大辞泉/辞海/広辞苑/明镜/Weblio/大辭海全为 0——
+    都是装饰性出血，裁掉不会丢内容。
+    """
+    html = render_entry_document("<p>x</p>", dictionary_id=1)
+    # 用 clip 而不是 hidden：hidden 会让 html 变成滚动容器，连带影响 position:sticky
+    assert "overflow-x:clip" in html

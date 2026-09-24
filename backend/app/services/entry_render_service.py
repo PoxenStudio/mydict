@@ -70,6 +70,18 @@ _THEME_STYLE = (
     "</style>"
 )
 
+# iframe 的高度是由内容撑出来的（引导脚本上报 scrollHeight，父页据此设置），所以正常的
+# 情况下它不该出现滚动条。但词典常用**负外边距做「出血」**——千篇汉语词典是
+# `ul{margin:-12px -6px 0}`，左右各溢出 6px。
+#
+# 这 6px 会引出**两根**滚动条：横向那根占掉约 15px 视口高度，于是内容又纵向溢出，纵向那根
+# 也跟着出现。实测各词典的横向溢出量：千篇恒为 6px，大辞泉/辞海/広辞苑/明镜/Weblio/大辭海
+# 全是 0——都是装饰性出血，没有真实内容被裁掉。
+#
+# 用 `clip` 而不是 `hidden`：`hidden` 会让 html 变成滚动容器（连带影响 position:sticky 等），
+# `clip` 只是裁掉、不产生滚动容器。
+_NO_HSCROLL_STYLE = "<style>html{overflow-x:clip}</style>"
+
 # 选中词条里的文字时弹出的【查词】按钮样式。
 #
 # 刻意与 _THEME_STYLE 分开：那份有「不能出现 <html>/<body>/<!doctype 字面量」的断言，
@@ -134,6 +146,7 @@ def _head_snippet(
         f'<meta http-equiv="Content-Security-Policy" content="{_SANDBOX_CSP}">'
         f"{_theme_init_script(theme)}"
         f"{_THEME_STYLE}"
+        f"{_NO_HSCROLL_STYLE}"
         f"{lookup_style}"
         f"<script>{bootstrap}</script>"
     )
