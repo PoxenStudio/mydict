@@ -27,6 +27,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # SQLite 的 DDL 按 alembic 的假设是非事务性的：batch_alter_table 的「建临时表」这一步
+    # 会立即提交。所以上次运行若在拷数据途中被打断（进程被杀、断电），会留下一个空的
+    # `_alembic_tmp_dict_entries`，重跑时直接撞「table already exists」。先清掉它，
+    # 让迁移可以安全重试。
+    op.execute("DROP TABLE IF EXISTS _alembic_tmp_dict_entries")
     with op.batch_alter_table("dict_entries") as batch_op:
         batch_op.drop_constraint("uq_dict_entries_dictionary_word", type_="unique")
         batch_op.create_index(
