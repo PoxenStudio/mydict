@@ -25,7 +25,6 @@ from app.schemas.dictionary import (
     RenameDictionariesOut,
     RenameDictionariesRequest,
     SpxScanRequest,
-    SpxTranscodeRequest,
     TestQueryEntryOut,
 )
 from app.services import dictionary_service, query_service
@@ -164,23 +163,6 @@ def batch_status(
     )
 
 
-@router.post("/scan-spx", response_model=DictionaryImportTaskOut)
-def scan_spx(
-    body: SpxScanRequest,
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-    _admin: Admin = Depends(require_admin),
-) -> DictionaryImportTaskOut:
-    """扫描各部词典资源目录里「待转码」的 .spx 数量并写回词典记录。
-
-    为什么要在后台跑：大词典单部就有几十万个资源文件（实测 The little dict 67.6 万个），
-    放在请求里会把接口卡死。立即返回 task_id，前端轮询 /admin/tasks/{task_id}。
-    """
-    return DictionaryImportTaskOut(
-        task_id=dictionary_service.start_spx_scan(db, body.dictionary_ids, settings)
-    )
-
-
 @router.post("/repair-from-source", response_model=DictionaryImportTaskOut)
 def repair_from_source(
     body: SpxScanRequest,
@@ -220,22 +202,6 @@ def reparse_dictionaries(
     """
     return DictionaryImportTaskOut(
         task_id=dictionary_service.start_reparse(db, body.dictionary_ids, settings)
-    )
-
-
-@router.post("/transcode-spx", response_model=DictionaryImportTaskOut)
-def transcode_spx(
-    body: SpxTranscodeRequest,
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-    _admin: Admin = Depends(require_admin),
-) -> DictionaryImportTaskOut:
-    """把选中词典里待转的 .spx 批量转成 mp3，**转成功后删掉原 .spx**（源词典文件另存有备份）。
-
-    单部与批量共用这一个端点。容器里没有 ffmpeg 时直接报 422，不登记一个注定失败的任务。
-    """
-    return DictionaryImportTaskOut(
-        task_id=dictionary_service.start_spx_transcode(db, body.dictionary_ids, settings)
     )
 
 

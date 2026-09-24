@@ -585,3 +585,22 @@ def test_multi_entry_document_falls_back_to_first_on_full_document() -> None:
     assert ">A<" in html
     # 没有走聚合路径：只有第一条的内容
     assert "mydict-entry" not in html
+
+
+def test_bootstrap_decodes_speex_in_the_browser() -> None:
+    """`.spx` 的播改走前端 JS 解码（libspeex 编译产物）。
+
+    浏览器原生解码器都不支持 Speex，但 django-mdict 项目用 libspeex 的 JS 移植在浏览器里
+    直接解，实测可行——不需要服务端转码、不需要 ffmpeg。引导脚本在候选（mp3/opus）都落空
+    后走到原 .spx 时，fetch 字节交给解码器解成 WAV 再播。
+    """
+    html = render_entry_document("<p>x</p>", dictionary_id=1)
+    # 解码器脚本从父页静态资源动态加载（srcdoc iframe 的相对 URL 以父页地址为 base）
+    assert "/speex/speex.min.js" in html
+    assert "/speex/bitstring.min.js" in html and "/speex/pcmdata.min.js" in html
+    # 双声道采样率减半的经验修正（NHK 的 32kHz 双声道 spx 不减半会播放过快）
+    assert "header.rate = header.rate / 2" in html
+    # 内联脚本不能出现 </script
+    start = html.index(BOOT_MARK)
+    block = html[html.rindex("<script>", 0, start) : html.index("</script>", start)]
+    assert "</script" not in block

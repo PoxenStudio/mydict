@@ -301,7 +301,7 @@ function searchFromEntry(next: string) {
 }
 
 function onUnsupportedAudio() {
-  ElMessage.warning('这部词典的发音是浏览器不支持的 Speex 格式（尚未转码），暂时无法播放')
+  ElMessage.warning('这条发音不存在或解码失败，暂时无法播放')
 }
 </script>
 

@@ -9,10 +9,6 @@ export interface DictionaryItem {
   lang_from: string
   lang_to: string
   word_count: number
-  /** 待转码的 .spx 发音数；> 0 时列表里打「需转码」标签 */
-  spx_pending_count: number
-  /** 上次检测发音资源的时间；null 表示从未检测过（存量数据） */
-  spx_scanned_at: string | null
   sort_order: number
   status: DictionaryStatus
   import_method: DictionaryImportMethod

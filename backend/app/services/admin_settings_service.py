@@ -5,7 +5,7 @@ from app.services import settings_service
 from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
 
-_BOOL_KEYS = {"open_access", "allow_registration", "spx_online_transcode"}
+_BOOL_KEYS = {"open_access", "allow_registration"}
 _INT_KEYS = {
     "token_default_daily_limit",
     "anonymous_ip_rate_limit_per_min",
@@ -24,11 +24,6 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         ),
         "allow_registration": settings_service.get_bool_setting(
             db, "allow_registration", defaults.allow_registration_default
-        ),
-        # 默认开启：没挂 ffmpeg 时这一步自然降级（请求照旧 404），开关只是给「挂了但不想用」
-        # 这种情况留一个出口
-        "spx_online_transcode": settings_service.get_bool_setting(
-            db, "spx_online_transcode", True
         ),
         "token_default_daily_limit": settings_service.get_int_setting(
             db, "token_default_daily_limit", defaults.token_default_daily_limit

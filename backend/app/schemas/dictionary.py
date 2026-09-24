@@ -13,8 +13,6 @@ class DictionaryOut(BaseModel):
     lang_from: str
     lang_to: str
     word_count: int
-    spx_pending_count: int
-    spx_scanned_at: datetime | None
     sort_order: int
     status: str
     import_method: str

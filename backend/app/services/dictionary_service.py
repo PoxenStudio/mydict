@@ -29,7 +29,6 @@ from app.services.definition_repair import (
 )
 from app.services.language_detect import detect_language
 from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
-from app.services.spx_transcode import count_pending_spx, ffmpeg_path, transcode_pending
 
 logger = logging.getLogger("mydict.dictionary")
 
@@ -462,15 +461,6 @@ def _run_import_in_background(
             import_method=import_method,
             skip_resources=skip_resources,
         )
-        # 解析入库完成后 res/ 已经全部落盘，顺手数一遍待转的 .spx。列表接口不做实时扫描
-        # （The little dict 单部就有 67.6 万个资源文件，63 部逐个走一遍会让请求卡死），
-        # 这个计数只在这里、手动扫描、批量转码结束时三处写入。
-        dictionary.spx_pending_count = count_pending_spx(
-            Path(settings.dictionary_storage_path) / str(dictionary.id) / "res"
-        )
-        # 用 UTC 且去掉 tzinfo，与 imported_at 的 CURRENT_TIMESTAMP 保持同一种写法——
-        # SQLite 上混用 aware/naive 会让比较和排序出错
-        dictionary.spx_scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
         background_tasks.succeed(
             task_id,
@@ -502,48 +492,6 @@ def _spx_targets(db: Session, dictionary_ids: list[int] | None) -> list[Dictiona
     if missing:
         raise NotFoundError(f"包含不存在的词典 ID：{missing}")
     return [found[dict_id] for dict_id in unique]
-
-
-def start_spx_scan(db: Session, dictionary_ids: list[int] | None, settings: Settings) -> int:
-    """登记「扫描发音资源」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
-
-    只统计待转 .spx 数并写回两列，不动任何文件。必须在后台跑：大词典单部就有 67.6 万个
-    资源文件，放在请求里会把接口卡死。
-    """
-    targets = _spx_targets(db, dictionary_ids)
-    task = background_tasks.start("dictionary_spx_scan", "扫描发音资源")
-    threading.Thread(
-        target=_run_spx_scan_in_background,
-        args=(task.id, [d.id for d in targets], settings),
-        daemon=True,
-    ).start()
-    return task.id
-
-
-def _run_spx_scan_in_background(task_id: int, dictionary_ids: list[int], settings: Settings) -> None:
-    """后台线程入口：请求生命周期已结束，单独开 session。"""
-    db = SessionLocal()
-    try:
-        total = len(dictionary_ids)
-        pending_total = 0
-        for index, dict_id in enumerate(dictionary_ids, start=1):
-            dictionary = db.get(Dictionary, dict_id)
-            if dictionary is None:  # 扫描期间被删掉了
-                continue
-            pending = count_pending_spx(
-                Path(settings.dictionary_storage_path) / str(dict_id) / "res"
-            )
-            dictionary.spx_pending_count = pending
-            dictionary.spx_scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            db.commit()
-            pending_total += pending
-            background_tasks.update_progress(task_id, {"done": index, "total": total})
-        background_tasks.succeed(task_id, {"scanned": total, "pending": pending_total})
-    except Exception:
-        logger.exception("扫描发音资源失败")
-        background_tasks.fail(task_id, "扫描失败：服务器内部错误，请查看后端日志")
-    finally:
-        db.close()
 
 
 def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Settings) -> int:
@@ -752,84 +700,6 @@ def _run_source_repair_in_background(
         logger.exception("从源文件修复失败")
         background_tasks.fail(task_id, "修复失败：服务器内部错误，请查看后端日志")
     finally:
-        db.close()
-
-
-# 同一时间只允许一个转码任务：两个任务同时在同一批 res 目录里跑，会互相抢文件
-_spx_transcode_lock = threading.Lock()
-
-
-def start_spx_transcode(db: Session, dictionary_ids: list[int], settings: Settings) -> int:
-    """登记「批量转码发音」后台任务，返回 task_id。
-
-    ffmpeg 缺失时直接抛错、不登记任务——这是管理员显式发起的操作，给一个注定失败的任务
-    还不如当场说清楚；这与按需转码那条路「静默降级成 404」不同。
-    """
-    if ffmpeg_path() is None:        raise ValidationAppError(
-            "容器里没有可用的 ffmpeg。它不随镜像分发（GPL/LGPL 与本项目 MIT 授权不兼容），"
-            "需要自行挂载——见「系统设置 → 发音转码」里的安装说明，挂好后重启容器再试。"
-        )
-    if not _spx_transcode_lock.acquire(blocking=False):
-        raise ConflictError("已有一个发音转码任务在跑，等它结束再发起")
-
-    targets = _spx_targets(db, dictionary_ids)
-    task = background_tasks.start("dictionary_spx_transcode", "发音转码")
-    try:
-        threading.Thread(
-            target=_run_spx_transcode_in_background,
-            args=(task.id, [d.id for d in targets], settings),
-            daemon=True,
-        ).start()
-    except Exception:
-        _spx_transcode_lock.release()
-        background_tasks.fail(task.id, "转码线程启动失败")
-        raise
-    return task.id
-
-
-def _run_spx_transcode_in_background(
-    task_id: int, dictionary_ids: list[int], settings: Settings
-) -> None:
-    db = SessionLocal()
-    try:
-        total = len(dictionary_ids)
-        summary = {"ok": 0, "failed": 0, "prune_failed": 0}
-        for index, dict_id in enumerate(dictionary_ids, start=1):
-            dictionary = db.get(Dictionary, dict_id)
-            if dictionary is None:  # 转码期间被删掉了
-                continue
-            res_dir = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
-
-            def report(done: int, files_total: int, _index: int = index) -> None:
-                # 单部词典内部按文件节流上报：一部大词典几十万个文件，每次都报会把
-                # 登记表刷爆；浮标读的是 done/total（词典级），files_* 只是便于排查
-                if done % 500 != 0 and done != files_total:
-                    return
-                background_tasks.update_progress(
-                    task_id,
-                    {
-                        "done": _index - 1,
-                        "total": total,
-                        "files_done": done,
-                        "files_total": files_total,
-                    },
-                )
-
-            result = transcode_pending(res_dir, on_progress=report)
-            for key in summary:
-                summary[key] += int(result.get(key, 0))
-            # 结束时重扫一遍，而不是拿「总数减去成功数」增量维护：并发、删除失败、外部改动
-            # 都会让增量算错，而重扫相对几十万次 ffmpeg 而言是免费的
-            dictionary.spx_pending_count = count_pending_spx(res_dir)
-            dictionary.spx_scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            db.commit()
-            background_tasks.update_progress(task_id, {"done": index, "total": total})
-        background_tasks.succeed(task_id, summary)
-    except Exception as exc:  # noqa: BLE001 - 整批失败要落到任务状态里
-        logger.exception("批量转码发音失败")
-        background_tasks.fail(task_id, f"转码失败：{exc}")
-    finally:
-        _spx_transcode_lock.release()
         db.close()
 
 

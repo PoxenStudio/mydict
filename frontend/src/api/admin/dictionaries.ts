@@ -77,24 +77,6 @@ export function reorderDictionaries(orderedIds: number[]) {
 }
 
 /**
- * 扫描发音资源：统计各部词典里待转码的 .spx 数并回填。dictionaryIds 留空表示全部词典。
- *
- * 放在后台跑（大词典单部就有几十万个资源文件），返回 task_id 供轮询。
- */
-export function scanSpx(dictionaryIds?: number[] | null) {
-  return request.post<never, { task_id: number }>('/admin/dictionaries/scan-spx', {
-    dictionary_ids: dictionaryIds && dictionaryIds.length ? dictionaryIds : null,
-  })
-}
-
-/** 批量转码发音；单部传一个 id 走同一个端点。**转成功后后端会删掉原 .spx**。 */
-export function transcodeSpx(dictionaryIds: number[]) {
-  return request.post<never, { task_id: number }>('/admin/dictionaries/transcode-spx', {
-    dictionary_ids: dictionaryIds,
-  })
-}
-
-/**
  * 从源文件修复：把「只存在于源文件里、导入时被漏掉的东西」补进已导入的词典。
  *
  * 两件事：① 补 .mdx 同级的 CSS/字体/JS/图片（MDict 按惯例把它们放在 .mdx 旁边而不是

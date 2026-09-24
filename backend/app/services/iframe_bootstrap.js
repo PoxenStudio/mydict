@@ -344,29 +344,122 @@
     return RES_PREFIX + path
   }
 
-  // .spx 浏览器都不支持。离线转码脚本（scripts/transcode_spx.py）会在同目录生成 .mp3
-  // 或 .opus，两个都试一遍——用哪个取决于跑脚本时选的格式，用户也可能只转了一部分。
-  // 全都取不到再回退原文件，父页据此提示「格式不支持」而不是静默失败。
+  // .spx（Ogg Speex）浏览器的原生解码器都不支持，但 libspeex 编译成的 JS 解码器可以
+  // 在浏览器里解（django-mdict 项目就是这么做的，实测可行）。所以候选顺序是
+  // `.mp3` → `.opus`（词典自带的或历史转码产物，原生 audio 直接放）→ 原 `.spx`
+  //（走 JS 解码）。全都失败再报错，父页据此提示而不是静默失败。
   function audioCandidates(url) {
     if (!SPX_EXT_RE.test(url)) return [url]
     return [url.replace(SPX_EXT_RE, '.mp3'), url.replace(SPX_EXT_RE, '.opus'), url]
+  }
+
+  /* ------------------------------------------------ Speex 的 JS 解码播放 */
+
+  // 解码器从父页的静态资源加载。srcdoc iframe 里相对 URL 以父页地址为 base
+  //（与上面 /dict-res 的解析同理），所以绝对路径 /speex/... 就能命中。
+  var SPEEX_SCRIPTS = [
+    '/speex/bitstring.min.js',
+    '/speex/pcmdata.min.js',
+    '/speex/speex.min.js'
+  ]
+  var speexLoader = null
+
+  function loadSpeexDecoder() {
+    if (speexLoader) return speexLoader
+    speexLoader = new Promise(function (resolve, reject) {
+      var loaded = 0
+      SPEEX_SCRIPTS.forEach(function (src) {
+        var el = document.createElement('script')
+        el.src = src
+        el.onload = function () {
+          loaded += 1
+          if (loaded === SPEEX_SCRIPTS.length) resolve()
+        }
+        el.onerror = function () {
+          speexLoader = null // 允许下次重试
+          reject(new Error('解码器脚本加载失败: ' + src))
+        }
+        ;(document.head || document.documentElement).appendChild(el)
+      })
+    })
+    return speexLoader
+  }
+
+  function binaryString(bytes) {
+    // Uint8Array → 二进制字符串。必须分块：apply 的参数个数有上限，大文件会爆栈
+    var CHUNK = 8192
+    var out = ''
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      out += String.fromCharCode.apply(
+        null,
+        bytes.subarray(i, Math.min(i + CHUNK, bytes.length))
+      )
+    }
+    return out
+  }
+
+  // 解码规则与 django-mdict 的 mdict.js 一致（含那条经验修正：双声道时采样率减半，
+  // 否则 NHK 的 32kHz 双声道 spx 会播放过快）
+  function decodeSpeex(bytes) {
+    var ogg = new Ogg(binaryString(bytes), { file: true })
+    ogg.demux()
+    var header = Speex.parseHeader(ogg.frames[0])
+    if (header.nb_channels == 2) header.rate = header.rate / 2
+    var spx = new Speex({ quality: 8, mode: header.mode, rate: header.rate })
+    var wave = PCMData.encode({
+      sampleRate: header.rate,
+      channelCount: header.nb_channels,
+      bytesPerSample: 2,
+      data: spx.decode(ogg.bitstream(), ogg.segments)
+    })
+    return new Blob([Speex.util.str2ab(wave)], { type: 'audio/wav' })
+  }
+
+  /** 把 spx 解码成 WAV 并塞给 `el` 播放；失败走 `fail`。 */
+  function playSpeexDecoded(el, spxUrl, fail) {
+    loadSpeexDecoder()
+      .then(function () {
+        return fetch(spxUrl).then(function (resp) {
+          if (!resp.ok) throw new Error('HTTP ' + resp.status)
+          return resp.arrayBuffer()
+        })
+      })
+      .then(function (buf) {
+        el.src = URL.createObjectURL(decodeSpeex(new Uint8Array(buf)))
+        var played = el.play()
+        if (played && played.catch) played.catch(fail)
+      })
+      .catch(fail)
+  }
+
+  function ensureAudioEl() {
+    if (!audioEl) {
+      audioEl = document.createElement('audio')
+      audioEl.setAttribute('data-mydict-player', '1')
+      audioEl.style.display = 'none'
+      ;(document.body || document.documentElement).appendChild(audioEl)
+    }
+    return audioEl
   }
 
   var audioEl = null
   function playAudio(url) {
     var candidates = audioCandidates(url)
     var index = 0
+    function fail() {
+      send(candidates.length > 1 ? 'audio-unsupported' : 'audio-error', { url: url })
+    }
     function attempt() {
       if (index >= candidates.length) {
-        send(candidates.length > 1 ? 'audio-unsupported' : 'audio-error', { url: url })
+        fail()
         return
       }
       var current = candidates[index++]
-      if (!audioEl) {
-        audioEl = document.createElement('audio')
-        audioEl.setAttribute('data-mydict-player', '1')
-        audioEl.style.display = 'none'
-        ;(document.body || document.documentElement).appendChild(audioEl)
+      var el = ensureAudioEl()
+      // 走到原 .spx 这一步：原生放不了，交给 JS 解码
+      if (SPX_EXT_RE.test(current)) {
+        playSpeexDecoded(el, current, fail)
+        return
       }
       audioEl.onerror = attempt
       audioEl.onended = function () {
@@ -556,7 +649,13 @@
     var index = 0
     function attempt() {
       if (index >= candidates.length) return
-      el.setAttribute('src', candidates[index++])
+      var current = candidates[index++]
+      if (SPX_EXT_RE.test(current)) {
+        // 词典自带的 <audio src="...spx">：原生放不了，解码成 WAV 后仍用它播
+        playSpeexDecoded(el, current, function () {})
+        return
+      }
+      el.setAttribute('src', current)
     }
     el.addEventListener('error', attempt)
     attempt()

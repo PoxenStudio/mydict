@@ -2,7 +2,6 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as dictApi from '../../api/admin/dictionaries'
-import { getSpxTranscodeStatus } from '../../api/admin/settings'
 import { resultNumber, useImportTask } from '../../composables/useImportTask'
 import DictionaryImportDialog from '../../components/admin/DictionaryImportDialog.vue'
 import DictionaryRenameDialog from '../../components/admin/DictionaryRenameDialog.vue'
@@ -26,9 +25,10 @@ async function loadDictionaries() {
   }
 }
 
+const { waitForImportTask } = useImportTask()
+
 onMounted(() => {
   loadDictionaries()
-  loadSpxStatus()
 })
 
 // --- 启用/禁用 ---
@@ -41,9 +41,8 @@ async function toggleStatus(item: DictionaryItem) {
   if (index !== -1) dictionaries.value[index] = updated
 }
 
-// --- 语种 tab 与「只看需转码」筛选 ---
+// --- 语种 tab 筛选 ---
 const activeLang = ref('all')
-const onlyNeedsTranscode = ref(false)
 
 /** tab 计数按**全量**统计——按过滤后的列表算，一点进去计数就归零了 */
 const langTabs = computed(() => {
@@ -65,21 +64,20 @@ const langTabs = computed(() => {
 const visibleDictionaries = computed(() =>
   dictionaries.value.filter(
     (item) =>
-      (activeLang.value === 'all' || langGroupOf(item.lang_from) === activeLang.value) &&
-      (!onlyNeedsTranscode.value || item.spx_pending_count > 0),
+      activeLang.value === 'all' || langGroupOf(item.lang_from) === activeLang.value,
   ),
 )
 
 // 换筛选条件就清空勾选，否则下一步的批量操作会作用到看不见的行上
-watch([activeLang, onlyNeedsTranscode], () => {
+watch([activeLang], () => {
   selectedIds.value = []
 })
 
-/** 只有「全部」视图且没开需转码筛选时才能拖拽排序。
+/** 只有「全部」视图才能拖拽排序。
 
     排序写的是**全量**顺序，而被过滤掉的行不在视野里——让它拖会把隐藏项的次序一起改乱，
     而「移到哪」在隐藏项存在时本来就没有明确语义。 */
-const draggable = computed(() => activeLang.value === 'all' && !onlyNeedsTranscode.value)
+const draggable = computed(() => activeLang.value === 'all')
 
 // --- 批量启用/停用 ---
 const selectedIds = ref<number[]>([])
@@ -207,38 +205,9 @@ async function onDrop(targetIndex: number) {
   dictionaries.value = await dictApi.reorderDictionaries(list.map((d) => d.id))
 }
 
-// --- 发音转码 ---
-const spxAvailable = ref(false)
-const spxRunning = ref(false)
-// 从源文件修复（附属资源 + 样式标记）——与发音无关，独立于 spxRunning 免得互相禁用
+// --- 从源文件修复（附属资源 + 样式标记）/ 重新解析（重灌词条）---
 const resourceRunning = ref(false)
-// 重新解析（重灌词条找回同名内容）——大词典要跑很久，与其它按钮互不干扰
 const reparseRunning = ref(false)
-
-/** 容器里有没有 ffmpeg。没有时「转码」按钮要禁用并说明原因，否则点了只会拿到 422 */
-async function loadSpxStatus() {
-  try {
-    spxAvailable.value = (await getSpxTranscodeStatus()).available
-  } catch {
-    spxAvailable.value = false
-  }
-}
-
-const { waitForImportTask } = useImportTask()
-
-/** 扫描发音资源、回填「待转码 .spx 数」；有勾选就只扫勾选的 */
-async function scanSpx() {
-  const ids = selectedIds.value.length ? [...selectedIds.value] : null
-  spxRunning.value = true
-  try {
-    const { task_id } = await dictApi.scanSpx(ids)
-    const task = await waitForImportTask(task_id, 30 * 60 * 1000)
-    await loadDictionaries()
-    ElMessage.success(`扫描完成，共发现 ${resultNumber(task, 'pending') ?? 0} 个待转发音`)
-  } finally {
-    spxRunning.value = false
-  }
-}
 
 /**
  * 从源文件修复：① 补源文件旁边的 CSS/字体/JS/图片；② 展开词条里的 `` `编号` `` 样式标记。
@@ -299,40 +268,6 @@ async function reparseDictionaries() {
   }
 }
 
-/** 批量转码（单部也走这里）。成功后后端会删掉原 .spx。 */
-async function transcodeSpx(ids: number[]) {
-  if (!ids.length) return
-  try {
-    await ElMessageBox.confirm(
-      `将把 ${ids.length} 部词典里缺少 mp3 的 .spx 发音转成 mp3，**转成功后删除原 .spx**` +
-        '（你的源词典文件另有备份，不会丢失）。转码在后端进行，可以关掉页面。',
-      '发音转码',
-      { type: 'warning', confirmButtonText: '开始转码' },
-    )
-  } catch {
-    return
-  }
-  spxRunning.value = true
-  try {
-    const { task_id } = await dictApi.transcodeSpx(ids)
-    // 转码是小时级任务（一部大词典可能有几十万个文件），轮询给足时间
-    const task = await waitForImportTask(task_id, 6 * 60 * 60 * 1000)
-    await loadDictionaries()
-    ElMessage.success(
-      `转码完成：成功 ${resultNumber(task, 'ok') ?? 0}、失败 ${resultNumber(task, 'failed') ?? 0}`,
-    )
-  } finally {
-    spxRunning.value = false
-  }
-}
-
-/** 批量栏只对「选中项里真的需要转码的」发起——选了一堆没有 .spx 的不该白跑一趟 */
-const transcodeTargetIds = computed(() =>
-  visibleDictionaries.value
-    .filter((item) => selectedIds.value.includes(item.id) && item.spx_pending_count > 0)
-    .map((item) => item.id),
-)
-
 // --- 导入弹窗 ---
 const importDialogVisible = ref(false)
 
@@ -365,7 +300,6 @@ async function runTestQuery() {
         <h1>词典管理</h1>
         <RefreshButton :loading="loading" @refresh="loadDictionaries" />
       </div>
-      <el-button :loading="spxRunning" @click="scanSpx">扫描发音资源</el-button>
       <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
       <el-button :loading="reparseRunning" @click="reparseDictionaries">重新解析</el-button>
       <el-button @click="renameDialogVisible = true">批量重命名</el-button>
@@ -385,10 +319,6 @@ async function runTestQuery() {
           {{ tab.label }}<span class="tab-count">{{ tab.count }}</span>
         </button>
       </div>
-      <label class="need-toggle">
-        <el-checkbox v-model="onlyNeedsTranscode" />
-        <span>只看需转码</span>
-      </label>
     </div>
 
     <div v-if="selectedIds.length" class="batch-bar">
@@ -398,17 +328,6 @@ async function runTestQuery() {
       </el-button>
       <el-button size="small" :loading="statusBatchRunning" @click="batchSetStatus('disabled')">
         批量停用
-      </el-button>
-      <el-button
-        size="small"
-        type="warning"
-        plain
-        :loading="spxRunning"
-        :disabled="!transcodeTargetIds.length"
-        :title="spxAvailable ? '' : '容器里没有 ffmpeg，见「系统设置 → 发音转码」'"
-        @click="transcodeSpx(transcodeTargetIds)"
-      >
-        批量转码（{{ transcodeTargetIds.length }}）
       </el-button>
       <el-button text size="small" :disabled="statusBatchRunning" @click="selectedIds = []">
         取消选择
@@ -459,14 +378,6 @@ async function runTestQuery() {
         >
         <span class="col-name">
           <span class="dict-name-text" :title="item.name">{{ item.name }}</span>
-          <el-tag
-            v-if="item.spx_pending_count > 0"
-            type="warning"
-            size="small"
-            :title="`还有 ${item.spx_pending_count} 个 .spx 发音没有转码`"
-          >
-            需转码
-          </el-tag>
         </span>
         <span class="col-format"
           ><el-tag size="small">{{ item.format }}</el-tag></span
@@ -486,17 +397,6 @@ async function runTestQuery() {
           <el-button text @click="openEdit(item)">编辑</el-button>
           <el-button text type="danger" @click="confirmDelete(item)">删除</el-button>
           <el-button text @click="openTestQuery(item)">测试查询</el-button>
-          <el-button
-            v-if="item.spx_pending_count > 0"
-            text
-            type="warning"
-            :loading="spxRunning"
-            :disabled="!spxAvailable"
-            :title="spxAvailable ? '' : '容器里没有 ffmpeg，见「系统设置 → 发音转码」'"
-            @click="transcodeSpx([item.id])"
-          >
-            转码
-          </el-button>
         </span>
       </div>
 
@@ -696,7 +596,7 @@ async function runTestQuery() {
 .dict-list-header,
 .dict-row {
   display: grid;
-  /* 名称列与操作列都放宽了：名称后面挂了「需转码」标签，操作列多了「转码」按钮 */
+  /* 名称列与操作列放宽：词典名可能很长，操作列要放得下三个按钮 */
   grid-template-columns:
     var(--size-control-md) var(--size-control-md)
     minmax(0, 2fr) 1fr 1fr 0.8fr 0.8fr minmax(220px, 1.8fr);

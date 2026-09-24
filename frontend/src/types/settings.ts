@@ -9,7 +9,6 @@ export interface PublicSettings {
 export interface SystemSettings {
   open_access: boolean
   allow_registration: boolean
-  spx_online_transcode: boolean
   token_default_daily_limit: number
   anonymous_ip_rate_limit_per_min: number
   user_ip_rate_limit_per_min: number
@@ -21,11 +20,3 @@ export interface SystemSettings {
 export type SystemSettingsUpdate = Partial<SystemSettings>
 
 /** 发音实时转码的运行状态。available 为 false 说明容器里没挂 ffmpeg，开关设了也没用 */
-export interface SpxTranscodeStatus {
-  available: boolean
-  ffmpeg_path: string | null
-  ffmpeg_version: string | null
-  converted: number
-  failed: number
-  max_concurrent: number
-}
