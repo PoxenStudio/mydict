@@ -41,7 +41,7 @@ def _selected_dictionaries(db, args: argparse.Namespace) -> list[Dictionary]:
 
 
 def repair_entry_links(args: argparse.Namespace) -> None:
-    """修复历史上被误改写的 entry:// / sound:// 链接（详见 definition_repair 模块注释）。"""
+    """修复历史上被误改写的 entry:// / sound:// / file:/// 链接（见 definition_repair）。"""
     db = SessionLocal()
     try:
         targets = _selected_dictionaries(db, args)
@@ -59,16 +59,18 @@ def repair_entry_links(args: argparse.Namespace) -> None:
         for dictionary in targets:
             # 先统计：既给 dry-run 用，也让真正执行时能跳过没有坏链接的词典
             # （避免为它们白扫一遍整部词典的 definition）。
-            entry_rows, sound_rows = definition_repair.count_legacy_links(db, dictionary.id)
-            if entry_rows == 0 and sound_rows == 0:
+            entry_rows, sound_rows, file_rows = definition_repair.count_legacy_links(
+                db, dictionary.id
+            )
+            if entry_rows == 0 and sound_rows == 0 and file_rows == 0:
                 continue
             touched += 1
             print(
                 f"  id={dictionary.id} {dictionary.name}："
-                f"entry {entry_rows} 行 / sound {sound_rows} 行"
+                f"entry {entry_rows} 行 / sound {sound_rows} 行 / file {file_rows} 行"
             )
             if args.dry_run:
-                total += entry_rows + sound_rows
+                total += entry_rows + sound_rows + file_rows
                 continue
             started = time.monotonic()
             repaired = definition_repair.repair_legacy_links(
@@ -150,7 +152,8 @@ def main() -> None:
     reset_parser.set_defaults(func=reset_admin_password)
 
     repair_parser = subparsers.add_parser(
-        "repair-entry-links", help="修复历史遗留的 entry:// / sound:// 坏链接"
+        "repair-entry-links",
+        help="修复历史遗留的坏链接（entry:// / sound:// / file:///）",
     )
     repair_parser.add_argument(
         "--dictionary-id", type=int, default=None, help="只修某部词典，省略则处理全部"

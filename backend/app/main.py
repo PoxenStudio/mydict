@@ -28,7 +28,12 @@ from app.core.logging import configure_logging
 from app.core.migrate import run_migrations
 from app.core.version import get_app_version
 from app.services import spx_transcode
-from app.services.resource_service import normalize_resource_path
+from app.services.resource_service import (
+    normalize_resource_path,
+    resolve_resource_file,
+    strip_legacy_file_prefix,
+)
+
 from app.services.settings_service import get_bool_setting
 from app.tasks.scheduler import start_scheduler
 
@@ -102,14 +107,22 @@ def dict_resource(
 
     少部分发音是 Speex（.spx），浏览器放不了；前端会先来要同名 .mp3，这里在它不存在时
     按需转一个（见 `_transcode_spx_on_demand`）。
+
+    路径解析交给 `resolve_resource_file`：它除了精确匹配，还会兼容历史坏链接里多出来的
+    `file:/` 前缀、并按大小写不敏感兜底（词典多在 Windows 上打包，引用常与 `.mdd` 里的
+    键大小写不一致）。
     """
     try:
         normalized = normalize_resource_path(resource_path)
     except ValueError:
         raise HTTPException(status_code=404) from None
-    target = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res" / normalized
-    if not target.is_file():
-        target = _transcode_spx_on_demand(db, target)
+    # 历史坏链接：早期改写把 file:///down/x.gif 拼成了 res/file:/down/x.gif
+    normalized = strip_legacy_file_prefix(normalized)
+    res_dir = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res"
+    target = resolve_resource_file(res_dir, normalized)
+    if target is None:
+        # 按需转码放在大小写兜底之后：转出来的文件名与请求完全一致，精确匹配即可命中
+        target = _transcode_spx_on_demand(db, res_dir / normalized)
         if target is None:
             raise HTTPException(status_code=404)
     return FileResponse(

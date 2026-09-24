@@ -5,7 +5,9 @@ import pytest
 from app.services.resource_service import (
     copy_sibling_resources,
     normalize_resource_path,
+    resolve_resource_file,
     rewrite_resource_refs,
+    strip_legacy_file_prefix,
     write_resource,
 )
 
@@ -167,6 +169,75 @@ def test_copy_sibling_resources_ignores_directories(tmp_path: Path) -> None:
     assert copy_sibling_resources(resource_dir, [mdx]) == 0
 
 
+# ------------------------------------------------- 资源请求的路径解析
+#
+# 词典多在 Windows 上打包，词条引用与 .mdd 里的键大小写常常不一致（实测汉典的图片引用
+# 全部是小写、实际键是混合大小写；新漢語林2 正好相反）。Windows 与 MDict 客户端都不区分
+# 大小写，Linux 上直接 404——表现为词条里的文字图片整片丢失。
+
+
+def test_strip_legacy_file_prefix() -> None:
+    # 早期改写把 file:///down/x.gif 拼成了 res/file:/down/x.gif
+    assert strip_legacy_file_prefix("file:/down/x.gif") == "down/x.gif"
+    assert strip_legacy_file_prefix("FILE:/down/x.gif") == "down/x.gif"
+    # 正常路径不受影响
+    assert strip_legacy_file_prefix("down/x.gif") == "down/x.gif"
+    # 只在开头剥，路径中间出现 file: 字样不动
+    assert strip_legacy_file_prefix("a/file:/b.gif") == "a/file:/b.gif"
+
+
+def test_resolve_resource_file_exact_hit(tmp_path: Path) -> None:
+    (tmp_path / "down" / "7").mkdir(parents=True)
+    target = tmp_path / "down" / "7" / "x.gif"
+    target.write_bytes(b"gif")
+    assert resolve_resource_file(tmp_path, "down/7/x.gif") == target
+
+
+def test_resolve_resource_file_matches_case_insensitively(tmp_path: Path) -> None:
+    """汉典的真实形态：引用全小写、实际键是混合大小写。"""
+    (tmp_path / "down" / "30").mkdir(parents=True)
+    real = tmp_path / "down" / "30" / "305626w1b7F8B.gif"
+    real.write_bytes(b"gif")
+
+    assert resolve_resource_file(tmp_path, "down/30/305626w1b7f8b.gif") == real
+
+
+def test_resolve_resource_file_matches_uppercase_reference(tmp_path: Path) -> None:
+    """新漢語林2 的真实形态：引用是大写、实际文件是小写。"""
+    (tmp_path / "gaiji").mkdir()
+    real = tmp_path / "gaiji" / "b245.png"
+    real.write_bytes(b"png")
+
+    assert resolve_resource_file(tmp_path, "gaiji/B245.png") == real
+
+
+def test_resolve_resource_file_matches_directory_component(tmp_path: Path) -> None:
+    (tmp_path / "gaiji").mkdir()
+    real = tmp_path / "gaiji" / "b245.png"
+    real.write_bytes(b"png")
+
+    assert resolve_resource_file(tmp_path, "Gaiji/B245.png") == real
+
+
+def test_resolve_resource_file_missing_returns_none(tmp_path: Path) -> None:
+    (tmp_path / "down").mkdir()
+    assert resolve_resource_file(tmp_path, "down/nope.gif") is None
+    assert resolve_resource_file(tmp_path, "") is None
+    # 中间目录不存在也不能抛异常
+    assert resolve_resource_file(tmp_path, "nodir/nope.gif") is None
+
+
+def test_resolve_resource_file_does_not_escape_root(tmp_path: Path) -> None:
+    """兜底查找只能在 res/ 里挑名字，不能顺着 .. 走出去。"""
+    outside = tmp_path.parent / "outside-secret.png"
+    outside.write_bytes(b"secret")
+    res_dir = tmp_path / "res"
+    res_dir.mkdir()
+
+    # normalize_resource_path 已经拒了这类路径，这里再确认兜底逻辑自己也不会越界
+    assert resolve_resource_file(res_dir, "../outside-secret.png") is None
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -193,6 +264,27 @@ def test_rewrite_resource_refs_rewrites_internal_resources(raw: str, expected: s
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # file:///… 是 MDict 里「词典资源根目录」的写法，斜杠数量与正反斜杠都有实例
+        ("file:///down/7/x.gif", "/dict-res/7/res/down/7/x.gif"),
+        ("file://media/a.jpg", "/dict-res/7/res/media/a.jpg"),
+        ("file:/img/40.jpg", "/dict-res/7/res/img/40.jpg"),
+        ("FILE:///Down/X.GIF", "/dict-res/7/res/Down/X.GIF"),
+        ("file:\\\\down\\\\7\\\\x.gif", "/dict-res/7/res/down/7/x.gif"),
+        # 指到词典外部的写法也改写成资源 URL：它是个 404，而原来的 file:// 在浏览器里
+        # 同样打不开，不存在「改坏了」
+        ("file:///etc/passwd", "/dict-res/7/res/etc/passwd"),
+    ],
+)
+def test_rewrite_resource_refs_rewrites_file_scheme_to_resource(
+    raw: str, expected: str
+) -> None:
+    result = rewrite_resource_refs(f'<img src="{raw}">', dictionary_id=7)
+    assert result == f'<img src="{expected}">'
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         # 词条内跳转：必须原样保留，由前端点击时拦截并发起新查询
@@ -213,7 +305,6 @@ def test_rewrite_resource_refs_rewrites_internal_resources(raw: str, expected: s
         "data:image/png;base64,AAA",
         # 危险协议：原样保留（前端会拦截点击），绝不改写成看似可执行的样子
         "javascript:alert(1)",
-        "file:///etc/passwd",
         # 未知协议保守不动
         "ws://example.com/socket",
         # 无扩展名的裸相对路径：MDX 里这种基本是词条链接，补成 /dict-res/ 只会 404

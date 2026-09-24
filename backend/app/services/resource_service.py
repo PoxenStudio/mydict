@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 from collections.abc import Iterable
+from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger("mydict.resource")
@@ -64,12 +65,22 @@ _RESOURCE_REF_RE = re.compile(
 
 # 这些前缀开头的引用原样保留。放在 lookahead 里比在回调里判断更快。
 _SKIP_PREFIX_RE = re.compile(
-    r"^(?:https?://|data:|entry://|#|//|www\.|mailto:|javascript:|file:|ftp://|blob:|tel:)",
+    r"^(?:https?://|data:|entry://|#|//|www\.|mailto:|javascript:|ftp://|blob:|tel:)",
     re.IGNORECASE,
 )
 
 # sound:// 是 MDict 的音频引用协议，指向 .mdd 里解包出来的音频文件，需要改写成可播放的 URL。
 _SOUND_PREFIX_RE = re.compile(r"^sound://", re.IGNORECASE)
+
+# file:///… 是 MDict 里「词典资源根目录」的写法，与 sound:// 同类，也要转成可访问的 URL。
+#
+# 必须放在下面的通用 scheme 判断**之前**：否则会被当成「未知协议」原样留下，而浏览器加载
+# `file:///down/7/x.gif` 只会失败。`file:` 后面跟两个还是三个斜杠、用正斜杠还是反斜杠都有
+# 实例（实测朗文 LDOCE5 是 `file://media/...`、汉典是 `file:///down/...`），一律吃掉。
+#
+# 指到词典外部的写法（`file:///etc/passwd`）会被改写成 /dict-res/{id}/res/etc/passwd ——
+# 那是个 404，但原本的 `file://` 在浏览器里同样打不开，不存在「改坏了」。
+_FILE_PREFIX_RE = re.compile(r"^file:[\\/]+", re.IGNORECASE)
 
 # 「带 scheme」的通用判据：字母开头 + 若干合法字符 + 冒号。
 # 放在 sound:// 之后判断，用来把其它未知协议（ws://、自定义协议等）保守地原样留下。
@@ -105,6 +116,78 @@ def _source_dirs(sources: Iterable[Path]) -> list[Path]:
         if directory not in dirs:
             dirs.append(directory)
     return dirs
+
+
+# 超过这个条目数就不建索引。实测会用到这里的两部词典（汉典 19499、新漢語林2 1890）都远
+# 在范围内；The little dict 的 res/ 顶层有 67.6 万个文件，建索引要几十 MB，不能让它得逞。
+# 超限时返回空索引且**结果照样被 lru_cache 记住**，所以代价只在第一次付出。
+_MAX_INDEXED_NAMES = 30_000
+
+
+@lru_cache(maxsize=16)
+def _directory_index(directory: str) -> dict[str, str]:
+    """目录项「小写名 → 真实名」，供大小写不敏感兜底查找用。
+
+    实测 19499 个文件的目录建一次索引约 4ms、约 300KB，所以缓存 16 个目录封顶几 MB；
+    只在精确路径不存在时才会被用到。目录内容后续只增不减（比如按需转码新落盘的 mp3），
+    而精确匹配始终先走文件系统，所以缓存过期不会影响正确性。
+    """
+    index: dict[str, str] = {}
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if len(index) >= _MAX_INDEXED_NAMES:
+                    return {}
+                index[entry.name.lower()] = entry.name
+    except OSError:
+        return {}
+    return index
+
+
+def _match_case_insensitively(root: Path, relative: str) -> Path | None:
+    """在 root 下逐段按大小写不敏感查找 relative；找到文件才返回。"""
+    current = root
+    for part in relative.split("/"):
+        candidate = current / part
+        if candidate.exists():
+            current = candidate
+            continue
+        real = _directory_index(str(current)).get(part.lower())
+        if real is None:
+            return None
+        current = current / real
+    return current if current.is_file() else None
+
+
+def strip_legacy_file_prefix(relative: str) -> str:
+    """去掉历史坏链接里多出来的一截 `file:/` 前缀。
+
+    早期改写把 `file:///down/x.gif` 拼成了 `/dict-res/7/res/file:/down/x.gif`，于是请求
+    路径里成了 `file:/down/x.gif`。新导入的词典不会再产生这种值（`_FILE_PREFIX_RE` 已经
+    接管改写），但已入库的行需要兼容——`definition_repair` 能就地清掉它们，跑之前和
+    没跑的部署都靠这里兜住。
+    """
+    return _FILE_PREFIX_RE.sub("", relative)
+
+
+def resolve_resource_file(res_dir: Path, relative: str) -> Path | None:
+    """把资源相对路径解析成 `res/` 下的真实文件，解析不到返回 None。
+
+    调用方需先用 `normalize_resource_path` 做过路径穿越校验、并用
+    `strip_legacy_file_prefix` 去掉历史坏链接的前缀。
+
+    这里多做一件事：**大小写不敏感兜底**。词典大多在 Windows 上打包，词条引用常与 `.mdd`
+    里的键大小写不一致——实测汉典的图片引用**全部**是小写、实际键却是混合大小写
+    （引用 `down/30/305626w1b7f8b.gif`、实际 `305626w1b7F8B.gif`，`down/0` 一个目录里就有
+    一万九千个这种文件），新漢語林2 的外字引用则相反（引用 `gaiji/B245.png`、实际小写）。
+    Windows 与 MDict 客户端都不区分大小写，Linux 上就是 404。逐段解析，每段仍优先精确匹配。
+    """
+    if not relative:
+        return None
+    target = res_dir / relative
+    if target.is_file():
+        return target
+    return _match_case_insensitively(res_dir, relative)
 
 
 def copy_sibling_resources(resource_dir: Path, sources: Iterable[Path]) -> int:
@@ -183,6 +266,11 @@ def _to_resource_url(raw: str, dictionary_id: int) -> str | None:
 
 def _rewrite_value(raw: str, dictionary_id: int) -> str:
     """单条属性值的改写规则；返回原值时表示「不改写」。"""
+    # file:///down/x.gif 指的是词典资源根目录下的 down/x.gif（实测汉典、千篇汉语词典、
+    # 说文解字段注、大辭海、朗文 LDOCE5、新世纪日汉双解等 7 部词典在用），与 sound:// 同类
+    if _FILE_PREFIX_RE.match(raw):
+        return _to_resource_url(_FILE_PREFIX_RE.sub("", raw), dictionary_id) or raw
+
     if _SKIP_PREFIX_RE.match(raw):
         return raw
 
@@ -207,7 +295,7 @@ def rewrite_resource_refs(html: str, dictionary_id: int) -> str:
     """把释义 HTML 中的相对资源引用改写为 /dict-res/{dictionary_id}/res/... 绝对 URL。
 
     entry:// 词条链接与外部链接原样保留：前者由前端点击时拦截并发起新查询，
-    后者本就该指向站外。
+    后者本就该指向站外；`sound://` 与 `file:///` 都是指向词典内部资源，一并改写。
     """
 
     def _replace(match: re.Match[str]) -> str:

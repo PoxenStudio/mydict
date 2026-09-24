@@ -1,8 +1,7 @@
 """一次性修复命令的用例。
 
 修复代码修好之后，正常的导入路径已经不会再产出坏链接了，所以这里**手工构造遗留行**
-（形如 /dict-res/{id}/res/entry:/... 与 /dict-res/{id}/res/sound:/...），
-模拟修复前入库的数据。
+（形如 /dict-res/{id}/res/entry:/... 、/sound:/... 与 /file:/...），模拟修复前入库的数据。
 """
 
 from sqlalchemy.orm import Session
@@ -45,6 +44,7 @@ def _legacy(dictionary_id: int, original: str) -> str:
     return (
         original.replace("entry://", base + "entry:/")
         .replace("sound://", base + "sound:/")
+        .replace('src="file:///', f'src="{base}file:/')
         .replace('src="pic/', f'src="{base}pic/')
     )
 
@@ -74,6 +74,28 @@ def test_repair_fixes_entry_and_sound_links(db_session: Session) -> None:
     assert "/res/sound:/" not in result
 
 
+def test_repair_fixes_file_scheme_links(db_session: Session) -> None:
+    """汉典、千篇汉语词典、说文解字段注、大辭海、朗文 LDOCE5 等 7 部词典的图片引用。
+
+    实测这类引用约 99 万行，全是 `<img src>`，指向 .mdd 里的图片——「恢复成资源 URL」是
+    正确的还原，不是把危险协议变成可执行内容。
+    """
+    did = _make_dictionary(db_session).id
+    entry = _add_entry(
+        db_session,
+        did,
+        "汉",
+        f'<img src="/dict-res/{did}/res/file:/down/7/78373w1b6c49.gif">',
+    )
+
+    assert count_legacy_links(db_session, did) == (0, 0, 1)
+    assert repair_legacy_links(db_session, did) == 1
+
+    result = _definition(db_session, entry.id)
+    assert result == f'<img src="/dict-res/{did}/res/down/7/78373w1b6c49.gif">'
+    assert "/res/file:/" not in result
+
+
 def test_repair_result_matches_new_import_output(db_session: Session) -> None:
     """修复后的值必须与新导入代码对同一份原始释义的产出一致。
 
@@ -85,6 +107,7 @@ def test_repair_result_matches_new_import_output(db_session: Session) -> None:
         '<a href="entry://苹果">苹果</a>'
         '<a href="sound://audio/guo.spx">🔊</a>'
         '<img src="pic/apple.png">'
+        '<img src="file:///down/7/x.gif">'
         '<a href="https://example.com">站外</a>'
         '<a href="#top">顶部</a>'
     )
@@ -93,6 +116,7 @@ def test_repair_result_matches_new_import_output(db_session: Session) -> None:
     repair_legacy_links(db_session, did)
 
     assert _definition(db_session, entry.id) == rewrite_resource_refs(original, did)
+
 
 
 def test_repair_is_idempotent(db_session: Session) -> None:
@@ -117,7 +141,13 @@ def test_dry_run_writes_nothing(db_session: Session) -> None:
 
 
 def test_repair_leaves_dangerous_urls_untouched(db_session: Session) -> None:
-    """javascript: / file: 不是被改写坏的，恢复它们等于重新引入可执行内容。"""
+    """javascript: 不是被改写坏的，恢复它等于重新引入可执行内容。
+
+    这里同时钉住一个**刻意的不对称**：没有被改写过的 `file:///etc/passwd` 原文不动。
+    它可能指向本机文件、也可能是词典内部资源，从文本上区分不了（要靠文件系统，那是
+    `/dict-res` 路由的活儿）；而新导入的词典会把它改写成 `/dict-res/{id}/res/etc/passwd`
+    ——一个 404，但原本的 `file://` 在浏览器里同样打不开，两种结果都不会更糟。
+    """
     did = _make_dictionary(db_session).id
     definition = (
         '<a href="javascript:alert(1)">x</a>'
@@ -180,14 +210,15 @@ def test_count_legacy_links_reports_per_scheme(db_session: Session) -> None:
         did,
         "b",
         f'<a href="/dict-res/{did}/res/entry:/b">b</a>'
-        f'<a href="/dict-res/{did}/res/sound:/b.spx">🔊</a>',
+        f'<a href="/dict-res/{did}/res/sound:/b.spx">🔊</a>'
+        f'<img src="/dict-res/{did}/res/file:/img/b.png">',
     )
     _add_entry(db_session, did, "c", "<p>无关</p>")
 
-    assert count_legacy_links(db_session, did) == (2, 1)
+    assert count_legacy_links(db_session, did) == (2, 1, 1)
 
 
 def test_repair_on_dictionary_without_entries(db_session: Session) -> None:
     did = _make_dictionary(db_session).id
     assert repair_legacy_links(db_session, did) == 0
-    assert count_legacy_links(db_session, did) == (0, 0)
+    assert count_legacy_links(db_session, did) == (0, 0, 0)

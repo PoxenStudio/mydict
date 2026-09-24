@@ -386,6 +386,58 @@ async def test_dict_res_sets_cors_header(
     assert "max-age" in resp.headers.get("cache-control", "")
 
 
+async def test_dict_res_matches_case_insensitively(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """词典多在 Windows 上打包，词条引用与 .mdd 里的键大小写常常不一致。
+
+    实测汉典的图片引用**全部**是小写、实际键是混合大小写（引用
+    `down/30/305626w1b7f8b.gif`、实际 `305626w1b7F8B.gif`），新漢語林2 正好相反。
+    Windows 与 MDict 客户端都不区分大小写，Linux 上就是 404——表现为整片文字图片丢失。
+    """
+    dict_id = await _make_dictionary(client, admin_headers, "大小写资源")
+    res_dir = Path(get_settings().dictionary_storage_path) / str(dict_id) / "res" / "down" / "30"
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (res_dir / "305626w1b7F8B.gif").write_bytes(b"GIF89a")
+
+    resp = await client.get(f"/dict-res/{dict_id}/res/down/30/305626w1b7f8b.gif")
+    assert resp.status_code == 200
+    assert resp.content == b"GIF89a"
+    # 目录分量同样不敏感
+    resp = await client.get(f"/dict-res/{dict_id}/res/Down/30/305626w1b7f8b.gif")
+    assert resp.status_code == 200
+
+
+async def test_dict_res_accepts_legacy_file_prefix(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """早期改写把 file:///down/x.gif 拼成了 res/file:/down/x.gif（实测 7 部词典约 99 万行）。
+
+    definition_repair 能就地清掉它们，但在跑修复之前（以及不跑修复的部署）也得能取到图。
+    """
+    dict_id = await _make_dictionary(client, admin_headers, "file 前缀资源")
+    res_dir = Path(get_settings().dictionary_storage_path) / str(dict_id) / "res" / "down"
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (res_dir / "x.gif").write_bytes(b"GIF89a")
+
+    resp = await client.get(f"/dict-res/{dict_id}/res/file:/down/x.gif")
+    assert resp.status_code == 200
+    assert resp.content == b"GIF89a"
+
+
+async def test_dict_res_missing_case_variant_still_404(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """兜底查找只解决大小写，不能把不存在的文件也变出来。"""
+    dict_id = await _make_dictionary(client, admin_headers, "大小写缺文件")
+    res_dir = Path(get_settings().dictionary_storage_path) / str(dict_id) / "res" / "down"
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (res_dir / "x.gif").write_bytes(b"GIF89a")
+
+    resp = await client.get(f"/dict-res/{dict_id}/res/down/nosuch.gif")
+    assert resp.status_code == 404
+
+
 async def test_dict_res_still_rejects_traversal(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
