@@ -103,6 +103,8 @@ def test_bootstrap_reports_clicked_images_to_the_parent() -> None:
     html = render_entry_document("<p>x</p>", dictionary_id=1)
     assert "IMAGE_MIN_SIZE" in html
     assert "send('image'" in html
+    # 同一词条有多张大图时要带整张表一起发，才能在查看器里翻上一张/下一张
+    assert "collectLargeImages" in html
     # 引导脚本里出现 </script 会提前截断整个 script 块（表现为词条白屏），
     # 所以取出它所在的那个 <script> 块单独确认一次
     start = html.index(BOOT_MARK)

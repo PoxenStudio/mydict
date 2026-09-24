@@ -420,6 +420,29 @@
   // 16px 当图标用，同样不该弹。
   var IMAGE_MIN_SIZE = 160
 
+  // 同一词条里可能有多张大图（扫描版词典常把连续几页放在一起），点开后要能在它们之间翻，
+  // 所以把「够大」的图按文档顺序收集成一张表一起发给父页。
+  function collectLargeImages() {
+    var urls = []
+    var seen = {}
+    var nodes
+    try {
+      nodes = document.querySelectorAll('img')
+    } catch (e) {
+      return urls
+    }
+    for (var i = 0; i < nodes.length; i++) {
+      var box = nodes[i].getBoundingClientRect()
+      if (box.width < IMAGE_MIN_SIZE && box.height < IMAGE_MIN_SIZE) continue
+      var url = nodes[i].currentSrc || nodes[i].src
+      // 同一张图在正文里出现多次时只留一个
+      if (!url || seen[url]) continue
+      seen[url] = 1
+      urls.push(url)
+    }
+    return urls
+  }
+
   document.addEventListener(
     'click',
     function (event) {
@@ -427,10 +450,25 @@
       var href = anchorEl ? anchorEl.getAttribute('href') : null
       // 包在 <a href> 里的图仍走链接逻辑（有些词典把图做成链接）
       if (!href && event.target && event.target.tagName === 'IMG') {
-        var box = event.target.getBoundingClientRect()
+        var clicked = event.target
+        var box = clicked.getBoundingClientRect()
         if (box.width >= IMAGE_MIN_SIZE || box.height >= IMAGE_MIN_SIZE) {
           event.preventDefault()
-          send('image', { src: event.target.currentSrc || event.target.src, alt: event.target.alt || '' })
+          var current = clicked.currentSrc || clicked.src
+          var urls = collectLargeImages()
+          var index = urls.indexOf(current)
+          // 理论上点中的这张一定在表里（它刚被判为「够大」）；万一因为还没布局出来而漏了，
+          // 退化成单张，总比翻到一张空白好
+          if (index < 0) {
+            urls = [current]
+            index = 0
+          }
+          send('image', {
+            src: current,
+            alt: clicked.alt || '',
+            urls: urls,
+            index: index
+          })
           return
         }
       }

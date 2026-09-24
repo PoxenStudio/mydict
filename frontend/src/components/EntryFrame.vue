@@ -41,9 +41,11 @@ const MESSAGE_WINDOW_MS = 1000
 
 const iframeRef = ref<HTMLIFrameElement | null>(null)
 const html = ref('')
-// 大图查看器：由 iframe 里的图片点击触发
+// 大图查看器：由 iframe 里的图片点击触发。同一词条有多张大图时带整张表，可以翻页
 const lightboxSrc = ref('')
 const lightboxAlt = ref('')
+const lightboxUrls = ref<string[]>([])
+const lightboxIndex = ref(0)
 const loading = ref(true)
 const failed = ref(false)
 const boxHeight = ref(MIN_HEIGHT)
@@ -149,6 +151,14 @@ function onMessage(event: MessageEvent) {
       if (typeof data.src === 'string' && data.src) {
         lightboxSrc.value = data.src
         lightboxAlt.value = typeof data.alt === 'string' ? data.alt : ''
+        lightboxUrls.value = Array.isArray(data.urls)
+          ? data.urls.filter((item): item is string => typeof item === 'string' && !!item)
+          : [data.src]
+        const index = Number(data.index)
+        lightboxIndex.value =
+          Number.isInteger(index) && index >= 0 && index < lightboxUrls.value.length
+            ? index
+            : Math.max(0, lightboxUrls.value.indexOf(data.src))
       }
       break
     case 'mydict:audio-error':
@@ -189,6 +199,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage)
   lightboxSrc.value = ''
+  lightboxUrls.value = []
   if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer)
 })
 </script>
@@ -217,8 +228,10 @@ onBeforeUnmount(() => {
     />
     <ImageLightbox
       v-if="lightboxSrc"
-      :src="lightboxSrc"
+      :images="lightboxUrls"
+      :index="lightboxIndex"
       :alt="lightboxAlt"
+      @navigate="lightboxIndex = $event"
       @close="lightboxSrc = ''"
     />
   </div>

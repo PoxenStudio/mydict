@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 /**
  * 词条里点大图后弹出的查看器：滚轮缩放、拖动平移，Esc 或点图片以外的区域退出。
@@ -10,8 +10,11 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
  * 用 `<Teleport to="body">` 而不是就地渲染：EntryFrame 的祖先链上可能有 transform/overflow，
  * 那会让 `position: fixed` 不再相对视口定位、也会被祖先裁剪掉。
  */
-const props = defineProps<{ src: string; alt?: string }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ images: string[]; index: number; alt?: string }>()
+const emit = defineEmits<{ close: []; navigate: [index: number] }>()
+
+const currentSrc = computed(() => props.images[props.index] ?? '')
+const hasSiblings = computed(() => props.images.length > 1)
 
 // 单次滚轮的缩放步长系数；deltaY 的量级跨设备差异很大，用指数保证手感一致
 const WHEEL_SENSITIVITY = 0.0015
@@ -77,6 +80,9 @@ function onWheel(event: WheelEvent) {
 }
 
 function onPointerDown(event: PointerEvent) {
+  // 翻页按钮上的按下不能开拖：setPointerCapture 会把后续指针事件转给遮罩，
+  // 那样按钮就收不到 click 了
+  if (event.target !== overlayRef.value && event.target !== imgRef.value) return
   dragging = true
   moved = 0
   pointerStartX = event.clientX
@@ -105,6 +111,13 @@ function onOverlayClick(event: MouseEvent) {
   if (event.target === overlayRef.value) emit('close')
 }
 
+function go(delta: number) {
+  if (!hasSiblings.value) return
+  const next = props.index + delta
+  if (next < 0 || next >= props.images.length) return
+  emit('navigate', next)
+}
+
 /**
  * 挡住查询页 ←/→ 切换词典的全局监听。
  *
@@ -121,9 +134,20 @@ function onKeydown(event: KeyboardEvent) {
   }
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     event.preventDefault()
+    // 同样要挡住查询页的全局监听（见上面的说明）；有相邻图时就地翻页
     event.stopImmediatePropagation()
+    go(event.key === 'ArrowLeft' ? -1 : 1)
   }
 }
+
+// 翻到另一张时把缩放与位移复位：每张的尺寸可能差很多，沿用上一张的变换会看不到东西
+watch(
+  () => props.index,
+  () => {
+    failed.value = false
+    fitToViewport()
+  },
+)
 
 onMounted(() => {
   previousBodyOverflow = document.body.style.overflow
@@ -156,7 +180,7 @@ onBeforeUnmount(() => {
         v-show="!failed"
         ref="imgRef"
         class="lightbox-img"
-        :src="props.src"
+        :src="currentSrc"
         :alt="props.alt ?? ''"
         draggable="false"
         :style="{
@@ -165,7 +189,32 @@ onBeforeUnmount(() => {
         @load="fitToViewport"
         @error="failed = true"
       />
-      <p class="lightbox-hint">滚轮缩放 · 拖动移动 · Esc 或点空白处退出</p>
+
+      <button
+        v-if="hasSiblings && props.index > 0"
+        type="button"
+        class="lightbox-nav lightbox-nav-prev"
+        title="上一张（←）"
+        @pointerdown.stop
+        @click.stop="go(-1)"
+      >
+        ‹
+      </button>
+      <button
+        v-if="hasSiblings && props.index < props.images.length - 1"
+        type="button"
+        class="lightbox-nav lightbox-nav-next"
+        title="下一张（→）"
+        @pointerdown.stop
+        @click.stop="go(1)"
+      >
+        ›
+      </button>
+
+      <p class="lightbox-hint">
+        <template v-if="hasSiblings">{{ props.index + 1 }} / {{ props.images.length }} · </template>
+        滚轮缩放 · 拖动移动<template v-if="hasSiblings"> · ← → 翻页</template> · Esc 或点空白处退出
+      </p>
     </div>
   </Teleport>
 </template>
@@ -195,6 +244,33 @@ onBeforeUnmount(() => {
   max-width: none;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 72px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: rgba(0, 0, 0, 0.5);
+  color: #f2f5f4;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightbox-nav:hover {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.lightbox-nav-prev {
+  left: var(--space-4);
+}
+
+.lightbox-nav-next {
+  right: var(--space-4);
 }
 
 .lightbox-hint {
