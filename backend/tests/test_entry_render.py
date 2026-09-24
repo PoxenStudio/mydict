@@ -508,3 +508,18 @@ async def test_lookup_menu_only_on_public_entry(
     )
     assert admin.status_code == 200, admin.text
     assert LOOKUP_STYLE_MARK not in admin.text
+
+
+def test_bootstrap_tames_light_backgrounds_in_dark_mode() -> None:
+    """暗色下光提亮文字不够：词典也常把背景写死成浅色（千篇汉语词典的 .mcon 是 #ebeee9），
+    浅底配被提亮的浅字等于什么都看不见。
+
+    与「提亮暗字」共用同一套运行时思路（读计算颜色按色相处理），因为写死的颜色值枚举不完。
+    """
+    html = render_entry_document("<p>x</p>", dictionary_id=1)
+    assert "tameLightBackgrounds" in html
+    assert "restoreBackgrounds" in html
+    # 压暗而不是改透明：透明会把靠背景色显示的 <hr> 分隔线一起弄没
+    assert "BG_TAME_LIGHTNESS" in html
+    # 词典常写 `background:#f2f3ee url(bg.jpg)` 这样的简写，只翻颜色的话底图还在
+    assert "background-image:none" in html

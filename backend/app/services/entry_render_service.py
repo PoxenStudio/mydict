@@ -40,8 +40,10 @@ _THEMES = frozenset({"light", "dark"})
 _THEME_STYLE = (
     "<style>"
     "html[data-mydict-theme='dark']{color-scheme:dark;background-color:transparent}"
-    # 正文默认色：词典没写颜色的文字继承这里，写了黑色的由下面两条覆盖
-    "html[data-mydict-theme='dark'] body{background-color:transparent;color:#eaf1ee}"
+    # 正文默认色：词典没写颜色的文字继承这里，写了黑色的由下面两条覆盖。
+    # background-image 也要一并清掉：词典常写 `background:#f2f3ee url(bg.jpg)` 这样的简写，
+    # 只翻 background-color 的话那张浅色底图还在，暗色下照样是浅底。
+    "html[data-mydict-theme='dark'] body{background-color:transparent;background-image:none;color:#eaf1ee}"
     # <font color> / bgcolor 这类表现属性本身优先级低于作者样式表，不必加 !important。
     # #000 与 #000000 是精确匹配，必须分别列出。
     "html[data-mydict-theme='dark'] [color='#000' i],"

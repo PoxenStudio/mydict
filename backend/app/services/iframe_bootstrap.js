@@ -58,6 +58,45 @@
     boostedText = []
   }
 
+  /* ------------------------------------- 暗色下过亮的背景自动压暗 */
+
+  // 与上面「提亮暗字」是对称的另一半：词典同样常把背景写死成浅色（千篇汉语词典的正文容器
+  // `.mcon` 就是 `#ebeee9`），暗色下文字被提亮成浅色，浅底配浅字等于什么都看不见。
+  //
+  // 和文字那边一样枚举不完，所以也走运行时读计算颜色这条路：**太亮就按同色相压暗**
+  // （浅绿底变深绿底），而不是直接改透明——直接透明会把 `<hr>` 这类本来就靠背景色显示的
+  // 分隔线一起弄没。
+  var BG_MAX_LUMINANCE = 0.75
+  var BG_TAME_LIGHTNESS = 18
+  var tamedBackgrounds = []
+
+  function restoreBackgrounds() {
+    for (var i = 0; i < tamedBackgrounds.length; i++) {
+      tamedBackgrounds[i][0].style.backgroundColor = tamedBackgrounds[i][1]
+    }
+    tamedBackgrounds = []
+  }
+
+  function tameLightBackgrounds() {
+    restoreBackgrounds()
+    if (document.documentElement.getAttribute('data-mydict-theme') !== 'dark') return
+    // 与提亮文字共用同一个能力判断：不支持相对颜色语法就整段跳过
+    if (!window.CSS || !CSS.supports || !CSS.supports('color', 'hsl(from red h s 50%)')) return
+    if (!document.body) return
+
+    var nodes = document.body.querySelectorAll('*')
+    var count = Math.min(nodes.length, TEXT_SCAN_LIMIT)
+    for (var i = 0; i < count; i++) {
+      var el = nodes[i]
+      var rgb = parseRgb(window.getComputedStyle(el).backgroundColor)
+      // 透明背景算出的 rgb 是 0,0,0，亮度最低，自然不会被判定为「过亮」
+      if (!rgb || relativeLuminance(rgb) <= BG_MAX_LUMINANCE) continue
+      tamedBackgrounds.push([el, el.style.backgroundColor])
+      el.style.backgroundColor =
+        'hsl(from rgb(' + rgb.join(',') + ') h s ' + BG_TAME_LIGHTNESS + '%)'
+    }
+  }
+
   function boostDarkText() {
     restoreTextColors()
     if (document.documentElement.getAttribute('data-mydict-theme') !== 'dark') return
@@ -93,8 +132,13 @@
     } catch (e) {
       /* 拿不到 documentElement 就算了，不值得为它打断整个引导脚本 */
     }
-    if (theme === 'dark') boostDarkText()
-    else restoreTextColors()
+    if (theme === 'dark') {
+      boostDarkText()
+      tameLightBackgrounds()
+    } else {
+      restoreTextColors()
+      restoreBackgrounds()
+    }
   }
 
   // 首屏兜底：文档里没有主题初值（调用方没带 theme 参数）时先跟随系统偏好，
