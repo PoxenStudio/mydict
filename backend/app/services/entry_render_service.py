@@ -11,9 +11,14 @@
 不透明源既保留了各词典自己的 CSS/JS，又拿不到父页面的任何东西。
 """
 
+import logging
 import re
+from collections.abc import Sequence
 from functools import lru_cache
+from html import escape
 from pathlib import Path
+
+logger = logging.getLogger("mydict.dictionary")
 
 # 只给 allow-scripts，与 iframe 的 sandbox 属性保持完全一致。
 # 它不额外限制任何子资源加载（所以不会把词典的图片/CSS/字体拦掉），
@@ -102,6 +107,29 @@ _LOOKUP_STYLE = (
     "</style>"
 )
 
+# 同一部词典里同一词头有多条时，用来把它们排成一列的小标题样式。
+#
+# 颜色值与 _THEME_STYLE 一样只能写字面量（iframe 读不到父页的 CSS 变量），深色走
+# data-mydict-theme 分支。序号是必要的：搜韵这类词典一个词头能有 82 条，没有序号就没法说
+# 「第几首」。
+_MULTI_ENTRY_STYLE = (
+    "<style>"
+    ".mydict-entry+.mydict-entry{margin-top:14px;padding-top:12px;"
+    "border-top:1px solid #dfe7e4}"
+    ".mydict-entry-head{margin:0 0 8px;font-size:13px;line-height:1.6;color:#5b6b66;"
+    "font-family:system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif}"
+    ".mydict-entry-index{display:inline-block;min-width:1.6em;margin-right:6px;"
+    "font-variant-numeric:tabular-nums;color:#8b9a95}"
+    ".mydict-entry-word{font-weight:600;font-size:15px;color:#12211d}"
+    ".mydict-entry-phonetic{margin-left:6px;color:#8b9a95}"
+    "[data-mydict-theme='dark'] .mydict-entry+.mydict-entry{border-top-color:#33443d}"
+    "[data-mydict-theme='dark'] .mydict-entry-head{color:#9fb0aa}"
+    "[data-mydict-theme='dark'] .mydict-entry-index{color:#7d8f89}"
+    "[data-mydict-theme='dark'] .mydict-entry-word{color:#eaf1ee}"
+    "[data-mydict-theme='dark'] .mydict-entry-phonetic{color:#7d8f89}"
+    "</style>"
+)
+
 _DOCTYPE_OR_HTML_RE = re.compile(r"^\s*<(?:!doctype|html)\b", re.IGNORECASE)
 _HEAD_OPEN_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
 _HTML_OPEN_RE = re.compile(r"<html\b[^>]*>", re.IGNORECASE)
@@ -124,7 +152,10 @@ def _theme_init_script(theme: str | None) -> str:
 
 
 def _head_snippet(
-    dictionary_id: int, theme: str | None = None, allow_lookup: bool = False
+    dictionary_id: int,
+    theme: str | None = None,
+    allow_lookup: bool = False,
+    multi_entry: bool = False,
 ) -> str:
     """要插进文档最前面的内容：编码/Referer 策略 + 主题初值 + 样式 + 引导脚本。
 
@@ -139,6 +170,7 @@ def _head_snippet(
         .replace("__MYDICT_LOOKUP__", "true" if allow_lookup else "false")
     )
     lookup_style = _LOOKUP_STYLE if allow_lookup else ""
+    multi_style = _MULTI_ENTRY_STYLE if multi_entry else ""
     return (
         '<meta charset="utf-8">'
         # 不把本站地址带给出站请求
@@ -147,6 +179,7 @@ def _head_snippet(
         f"{_theme_init_script(theme)}"
         f"{_THEME_STYLE}"
         f"{_NO_HSCROLL_STYLE}"
+        f"{multi_style}"
         f"{lookup_style}"
         f"<script>{bootstrap}</script>"
     )
@@ -159,35 +192,101 @@ def render_entry_document(
     theme: str | None = None,
     allow_lookup: bool = False,
 ) -> str:
-    """把释义渲染成一个完整 HTML 文档。
+    """把一条释义渲染成一个完整 HTML 文档。等价于 `render_entries_document` 传一条。"""
+    return render_entries_document(
+        [("", definition, None)],
+        dictionary_id=dictionary_id,
+        theme=theme,
+        allow_lookup=allow_lookup,
+    )
 
-    释义本身有可能是完整文档（部分词典的词条带 doctype/html 标签），
-    这时不能直接套壳——嵌套 html 会让浏览器进入怪异模式，也会破坏词典自带的 meta。
-    改为把引导内容插到它自己的 <head>（或 <html>）之后。
 
-    theme 为 'light'/'dark' 时把主题写死在文档里（首屏零闪变）；为 None 时交给子页
-    按系统偏好决定，父页之后仍可通过 mydict:cmd 下发纠正。
+def render_entries_document(
+    entries: Sequence[tuple[str, str, str | None]],
+    *,
+    dictionary_id: int,
+    theme: str | None = None,
+    allow_lookup: bool = False,
+) -> str:
+    """把一**组**词条渲染成一个完整 HTML 文档。
 
-    allow_lookup 只在**前台查询页**那条路径上传 True：选中文字弹【查词】需要有地方接住
-    这个查询（最后由 iframe 发 mydict:entry 消息、父页发起新查询）。生词本与管理端预览
-    没有查词框，传 False 让它们连菜单都不出现。
+    为什么要一次渲染多条：同一部词典里同一词头可以有多条内容不同的条目（MDict 允许，
+    搜韵诗词全文检索版的「毛泽东」有 82 条）。逐条各建一个 iframe 的话，展开那部词典就要
+    同时挂载 82 个沙箱文档；合成一个文档则只要一个 iframe，而且条与条之间有标题和分隔线，
+    比拼在一起的一坨好读。
+
+    每条是 `(word, definition, phonetic)`。**只传一条时的输出与旧的 `render_entry_document`
+    逐字节一致**——绝大多数词典都是这种情况，不能因为这次改动让它们变样。
+
+    释义本身有可能是完整文档（部分词典的词条带 doctype/html 标签），这时不能直接套壳——
+    嵌套 html 会让浏览器进入怪异模式，也会破坏词典自带的 meta。改为把引导内容插到它自己的
+    <head>（或 <html>）之后。多条时若**任何**一条是完整文档就没法合并（会嵌套 html），
+    只能退回渲染第一条。
+
+    theme 为 'light'/'dark' 时把主题写死在文档里（首屏零闪变）；为 None 时交给子页按系统
+    偏好决定，父页之后仍可通过 mydict:cmd 下发纠正。
+
+    allow_lookup 只在**前台查询页**那条路径上传 True：选中文字弹【查词】需要有地方接住这个
+    查询（最后由 iframe 发 mydict:entry 消息、父页发起新查询）。生词本与管理端预览没有查词
+    框，传 False 让它们连菜单都不出现。
     """
-    head = _head_snippet(dictionary_id, theme, allow_lookup)
+    if not entries:
+        return render_entry_document("", dictionary_id=dictionary_id, theme=theme)
 
-    if _DOCTYPE_OR_HTML_RE.match(definition or ""):
-        match = _HEAD_OPEN_RE.search(definition)
-        if match is None:
-            match = _HTML_OPEN_RE.search(definition)
-        if match is not None:
-            at = match.end()
-            return definition[:at] + head + definition[at:]
-        # 既没有 <head> 也没有 <html>，只能在最前面插
-        return head + definition
+    single = len(entries) == 1
+    # 完整文档型释义无法与别的条目合并（会嵌套 html）；实测 40 万条里 0 条是这种，
+    # 但代码要有个明确的出口而不是产出坏文档
+    if not single and any(_DOCTYPE_OR_HTML_RE.match(d or "") for _, d, _ in entries):
+        logger.warning(
+            "词典 %s 的同名词条里有完整文档型释义，无法合并，只渲染第一条", dictionary_id
+        )
+        first_word, first_definition, first_phonetic = entries[0]
+        return render_entry_document(
+            first_definition,
+            dictionary_id=dictionary_id,
+            theme=theme,
+            allow_lookup=allow_lookup,
+        )
+
+    head = _head_snippet(dictionary_id, theme, allow_lookup, multi_entry=not single)
+
+    if single:
+        definition = entries[0][1]
+        if _DOCTYPE_OR_HTML_RE.match(definition or ""):
+            match = _HEAD_OPEN_RE.search(definition)
+            if match is None:
+                match = _HTML_OPEN_RE.search(definition)
+            if match is not None:
+                at = match.end()
+                return definition[:at] + head + definition[at:]
+            # 既没有 <head> 也没有 <html>，只能在最前面插
+            return head + definition
+        body = definition
+    else:
+        total = len(entries)
+        blocks = []
+        for index, (word, definition, phonetic) in enumerate(entries, start=1):
+            # 词头是词典内容，必须转义
+            label = "".join(
+                [
+                    f'<span class="mydict-entry-index">{index}/{total}</span>',
+                    f'<span class="mydict-entry-word">{escape(word or "")}</span>',
+                ]
+            )
+            if phonetic:
+                label += f'<span class="mydict-entry-phonetic">[{escape(phonetic)}]</span>'
+            blocks.append(
+                f'<section class="mydict-entry">'
+                f'<div class="mydict-entry-head">{label}</div>'
+                f"{definition}"
+                f"</section>"
+            )
+        body = "".join(blocks)
 
     return (
         "<!DOCTYPE html>"
         '<html lang="zh">'
         f"<head>{head}</head>"
-        f"<body>{definition}</body>"
+        f"<body>{body}</body>"
         "</html>"
     )

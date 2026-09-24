@@ -4,6 +4,8 @@ from pydantic import BaseModel
 
 
 class QueryResultItem(BaseModel):
+    # 条目主键。同一部词典里可能有多条同名词条（MDict 允许），前端拿它做 key 与寻址
+    id: int
     dictionary_id: int
     dictionary_name: str
     word: str

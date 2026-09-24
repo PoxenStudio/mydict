@@ -19,16 +19,25 @@ export function listDictionaries() {
 }
 
 /**
- * 取单条词条渲染好的 HTML 文档，供隔离 iframe 用 srcdoc 加载。
+ * 取词条渲染好的 HTML 文档，供隔离 iframe 用 srcdoc 加载。
+ *
+ * 同一部词典里同一词头可以有多条内容不同的条目（MDict 允许），这时整组条目会聚合进
+ * **一个**文档返回——逐条各建 iframe 的话，搜韵这类词典展开一次就要挂载 82 个沙箱文档。
+ * `entryIds` 用来告诉后端这一组是哪些条目（查询结果里带回了 id），不传则后端按词的
+ * 变体集合取（兼容单条与旧调用）。
  *
  * 必须走 axios 取回再塞 srcdoc，而不是让 iframe 直接 src 到这个地址：
  * iframe 导航不会带 Authorization 头，端点就只能匿名开放，会绕过 Token 的
  * 「可用词典」限制。
  */
-export function getEntryHtml(dictionaryId: number, word: string) {
+export function getEntryHtml(dictionaryId: number, word: string, entryIds?: number[]) {
   // 带上主题：明暗直接写进文档，iframe 首屏就不会先白一下再变色
   return request.get<never, string>(`/dict/entry/${dictionaryId}`, {
-    params: { word, theme: currentTheme() },
+    params: {
+      word,
+      entry_ids: entryIds && entryIds.length > 1 ? entryIds.join(',') : undefined,
+      theme: currentTheme(),
+    },
     responseType: 'text',
   })
 }

@@ -546,6 +546,101 @@ def _run_spx_scan_in_background(task_id: int, dictionary_ids: list[int], setting
         db.close()
 
 
+def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Settings) -> int:
+    """登记「重新解析」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
+
+    修「同名词词条被去重丢掉」用的：早先的导入按 `UNIQUE(dictionary_id, word)` 只保留每个
+    词头的首条，在 63 部词典上静默丢了 1,445,181 条。约束去掉之后，**已入库的数据不会自动
+    长出缺失的那些行**，需要重读一遍源文件重新入库。
+
+    **原地**：词典 id 不变——Token/用户的「可用词典」白名单、生词本（存的是词典 id 加释义
+    快照，词典本身没动）、检索范围勾选全都不用重配。词条 id 会变，但没有任何数据引用它。
+
+    做法是「先清空这部词典的词条、再全量重灌」：
+    - 保证释义用的是**当前**的改写规则。此前有几轮改写修复（`@@@LINK=` 解引用是查询时的、
+      但资源引用改写与样式展开是导入时做的），老行是老规则产出的，只补缺失行会把新旧两种
+      格式混在同一部词典里。
+    - 失败了直接重跑一遍即可，没有半途状态要收拾（每次跑都从清空开始）。
+    """
+    targets = _spx_targets(db, dictionary_ids)
+    task = background_tasks.start("dictionary_reparse", "重新解析词典")
+    threading.Thread(
+        target=_run_reparse_in_background,
+        args=(task.id, [d.id for d in targets], settings),
+        daemon=True,
+    ).start()
+    return task.id
+
+
+def _run_reparse_in_background(
+    task_id: int, dictionary_ids: list[int], settings: Settings
+) -> None:
+    """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
+    db = SessionLocal()
+    try:
+        total = len(dictionary_ids)
+        reparsed = 0
+        skipped = 0
+        entries_total = 0
+        for index, dict_id in enumerate(dictionary_ids, start=1):
+            dictionary = db.get(Dictionary, dict_id)
+            if dictionary is None:  # 期间被删掉了
+                continue
+            paths = source_paths_for(dictionary)
+            if not paths:
+                # 源文件不在（导入后挪走了/删了）——这部词典没法重解析，跳过并计数
+                skipped += 1
+                background_tasks.update_progress(task_id, {"done": index, "total": total})
+                continue
+
+            parser = _PARSERS[dictionary.format]()
+            storage_root = Path(settings.dictionary_storage_path) / str(dict_id)
+            # 勾了「不导入发音/图片」的词典没有 res/，parse 的 resource_dir 传 None：
+            # 释义不做资源引用改写，与当初导入时的行为一致
+            resource_dir = storage_root / "res" if (storage_root / "res").is_dir() else None
+
+            db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).delete()
+            db.commit()
+
+            def on_progress(
+                done: int, _task_id: int = task_id, _index: int = index, _total: int = total
+            ) -> None:
+                # 里层的词条级进度对外展示成「词典 x / y · 已写入 n 条」，让用户知道没卡死
+                background_tasks.update_progress(
+                    _task_id, {"done": _index - 1, "total": _total, "entries": done}
+                )
+
+            try:
+                count = _batch_insert(
+                    db,
+                    dict_id,
+                    parser.parse(paths, dictionary_id=dict_id, resource_dir=resource_dir),
+                    on_progress=on_progress,
+                )
+            except Exception:
+                # 解析失败：这部词典的词条已经被清掉了。源文件还在，重跑一次本任务即可，
+                # 所以这里把错误如实报出去，不做半吊子的回滚。
+                db.rollback()
+                raise
+            dictionary.word_count = count
+            db.commit()
+            reparsed += 1
+            entries_total += count
+            background_tasks.update_progress(task_id, {"done": index, "total": total})
+
+        if entries_total:
+            # 词条整个换过一遍，进程内的查询结果缓存里全是旧快照
+            invalidate_query_cache()
+        background_tasks.succeed(
+            task_id, {"dictionaries": reparsed, "entries": entries_total, "skipped": skipped}
+        )
+    except Exception:
+        logger.exception("重新解析词典失败")
+        background_tasks.fail(task_id, "重新解析失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
 def start_source_repair(
     db: Session, dictionary_ids: list[int] | None, settings: Settings
 ) -> int:
@@ -861,13 +956,15 @@ def import_dictionary(
 
 
 def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) -> int:
+    """把解析出的词条写入 dict_entries，返回写入行数。
+
+    **同名词条全部保留**：MDict 允许同一词头有多条内容不同的条目（搜韵诗词全文检索版里
+    「毛泽东」有 82 条，是 82 首不同的诗词）。这里曾经按词头去重只留首条，结果在 63 部词典
+    上静默丢了 1,445,181 条内容——不报错，也不体现在 word_count 里。
+    """
     count = 0
     batch: list[DictEntry] = []
-    seen_words: set[str] = set()
     for entry in entries:
-        if entry.word in seen_words:
-            continue  # UNIQUE(dictionary_id, word)：同名词条（如 StarDict 别名冲突）仅保留首条
-        seen_words.add(entry.word)
         batch.append(
             DictEntry(
                 dictionary_id=dictionary_id,

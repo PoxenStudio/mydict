@@ -12,6 +12,7 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   dictionary_spx_scan: '发音资源扫描',
   dictionary_spx_transcode: '发音转码',
   dictionary_source_repair: '从源文件修复',
+  dictionary_reparse: '重新解析词典',
 }
 
 function taskLabel(task: BackgroundTask) {

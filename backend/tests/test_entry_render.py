@@ -13,7 +13,10 @@ import pytest
 from httpx import AsyncClient
 
 from app.core.config import get_settings
-from app.services.entry_render_service import render_entry_document
+from app.services.entry_render_service import (
+    render_entries_document,
+    render_entry_document,
+)
 from app.services.settings_service import set_setting
 from tests.conftest import import_dictionary
 
@@ -536,3 +539,49 @@ def test_document_clips_horizontal_bleed() -> None:
     html = render_entry_document("<p>x</p>", dictionary_id=1)
     # 用 clip 而不是 hidden：hidden 会让 html 变成滚动容器，连带影响 position:sticky
     assert "overflow-x:clip" in html
+
+
+def test_multi_entry_document_keeps_single_output_identical() -> None:
+    """只传一条时，聚合渲染的输出必须与旧的逐条渲染**逐字节一致**。
+
+    绝大多数词典一个词头只有一条，这次改动不能让它们变样。
+    """
+    definition = '<link href="/dict-res/1/res/a.css"><p>正文</p>'
+    assert (
+        render_entries_document([("词", definition, None)], dictionary_id=1)
+        == render_entry_document(definition, dictionary_id=1)
+    )
+
+
+def test_multi_entry_document_renders_numbered_sections() -> None:
+    """多条时每条有小标题（序号 + 词头 + 注音）、条间有分隔；词头必须转义。"""
+    html = render_entries_document(
+        [("毛泽东", "<p>第一首</p>", None), ("毛泽东", "<p>第二首</p>", "máo")],
+        dictionary_id=63,
+    )
+    assert html.count('<section class="mydict-entry">') == 2
+    assert "1/2" in html and "2/2" in html
+    assert "第一首" in html and "第二首" in html
+    assert "[máo]" in html
+    # 词头是词典内容，进 HTML 前必须转义；单条时不渲染词头（与旧行为一致），要用两条来验
+    escaped = render_entries_document(
+        [("<b>词</b>", "<p>x</p>", None), ("另一条", "<p>y</p>", None)], dictionary_id=1
+    )
+    assert "&lt;b&gt;词&lt;/b&gt;" in escaped
+
+
+def test_multi_entry_document_falls_back_to_first_on_full_document() -> None:
+    """完整文档型释义没法与别的条目合并（会嵌套 html），退回只渲染第一条。
+
+    实测 40 万条里 0 条是这种，但得有个明确出口而不是产出坏文档。
+    """
+    html = render_entries_document(
+        [
+            ("甲", "<!DOCTYPE html><html><head></head><body>A</body></html>", None),
+            ("乙", "<p>乙</p>", None),
+        ],
+        dictionary_id=1,
+    )
+    assert ">A<" in html
+    # 没有走聚合路径：只有第一条的内容
+    assert "mydict-entry" not in html

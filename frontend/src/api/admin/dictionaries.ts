@@ -108,6 +108,17 @@ export function repairFromSource(dictionaryIds?: number[] | null) {
   })
 }
 
+/**
+ * 重新解析：重读源文件、把词条整个重灌一遍（词典 id 不变）。
+ * 给「同名词词条曾被按词头去重丢掉」的存量词典找回内容——约束去掉后已入库的行不会自动
+ * 长出来。dictionaryIds 留空表示全部词典；源文件不在的会被跳过并计数。
+ */
+export function reparseDictionaries(dictionaryIds?: number[] | null) {
+  return request.post<never, { task_id: number }>('/admin/dictionaries/reparse', {
+    dictionary_ids: dictionaryIds && dictionaryIds.length ? dictionaryIds : null,
+  })
+}
+
 export function testQuery(id: number, word: string) {
   return request.get<never, TestQueryEntry[]>(`/admin/dictionaries/${id}/test-query`, {
     params: { word },

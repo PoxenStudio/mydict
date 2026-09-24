@@ -113,56 +113,52 @@ function isLoading(word: string) {
     </header>
 
     <div v-if="expanded" class="panel-body">
-      <article
-        v-for="(item, index) in entries"
-        :key="`${item.dictionary_id}-${item.word}`"
-        class="entry"
-      >
-        <header v-if="hasMultiple" class="entry-header">
-          <span class="head-word">{{ item.word }}</span>
-          <span v-if="item.phonetic" class="phonetic">[{{ item.phonetic }}]</span>
-          <FavoriteButton
-            :favorited="isFavorited(item.word)"
-            :loading="isLoading(item.word)"
-            @toggle="emit('toggleFavorite', item.word, item.dictionary_id)"
-          />
-        </header>
+      <!--
+        同一部词典命中多条（同名词条或繁简变体）时，整个词典只用一个 iframe：词条端点会把
+        这组词条聚合进一个文档，条与条之间有小标题和分隔线（见后端 render_entries_document）。
+        逐条各建一个 iframe 的话，搜韵诗词全文检索版这类词典展开一次就要挂载 82 个沙箱文档。
+      -->
+      <EntryFrame
+        v-if="hasMultiple && mounted"
+        :key="`${primary.dictionary_id}-${primary.word}`"
+        :loader="() => getEntryHtml(primary.dictionary_id, primary.word, entries.map((item) => item.id))"
+        @entry="emit('entry', $event)"
+        @unsupported-audio="emit('unsupportedAudio')"
+      />
 
-        <div
-          v-if="isOxford3000(item) || collinsStars(item) || tagBadges(item).length"
-          class="badges"
-        >
-          <span v-if="isOxford3000(item)" class="badge badge-brand">牛津3000</span>
-          <span v-if="collinsStars(item)" class="badge badge-brand">
-            柯林斯 {{ collinsStars(item) }} 星
+      <!--
+        单条：per-entry 的徽标（牛津3000 / 柯林斯星级 / extra 字段）只有 ECDICT 这类
+        词典才有，它们不会同名多义，保持原来的渲染即可。
+        释义只在首次展开时才去取、才建 iframe。留着已挂载的 iframe 而不是每次折叠就销毁，
+        这样音频播放位置与内部滚动不会丢。
+      -->
+      <article v-if="!hasMultiple" :key="`${primary.dictionary_id}-${primary.word}`" class="entry">
+        <div v-if="isOxford3000(primary) || collinsStars(primary) || tagBadges(primary).length" class="badges">
+          <span v-if="isOxford3000(primary)" class="badge badge-brand">牛津3000</span>
+          <span v-if="collinsStars(primary)" class="badge badge-brand">
+            柯林斯 {{ collinsStars(primary) }} 星
           </span>
-          <span v-for="t in tagBadges(item)" :key="t" class="badge badge-info">{{ t }}</span>
+          <span v-for="t in tagBadges(primary)" :key="t" class="badge badge-info">{{ t }}</span>
         </div>
 
-        <!--
-          释义只在首次展开时才去取、才建 iframe。留着已挂载的 iframe 而不是每次折叠就销毁，
-          这样音频播放位置与内部滚动不会丢。
-        -->
         <EntryFrame
           v-if="mounted"
-          :key="`${item.dictionary_id}-${item.word}`"
-          :loader="() => getEntryHtml(item.dictionary_id, item.word)"
+          :key="`${primary.dictionary_id}-${primary.word}`"
+          :loader="() => getEntryHtml(primary.dictionary_id, primary.word)"
           @entry="emit('entry', $event)"
           @unsupported-audio="emit('unsupportedAudio')"
         />
 
-        <ul v-if="arrayFields(item).length" class="extra-list">
-          <li v-for="field in arrayFields(item)" :key="field.label">
+        <ul v-if="arrayFields(primary).length" class="extra-list">
+          <li v-for="field in arrayFields(primary)" :key="field.label">
             <strong>{{ field.label }}：</strong>{{ field.values.join('、') }}
           </li>
         </ul>
-        <ul v-if="textFields(item).length" class="extra-list">
-          <li v-for="field in textFields(item)" :key="field.label">
+        <ul v-if="textFields(primary).length" class="extra-list">
+          <li v-for="field in textFields(primary)" :key="field.label">
             <strong>{{ field.label }}：</strong>{{ field.value }}
           </li>
         </ul>
-
-        <hr v-if="hasMultiple && index < entries.length - 1" class="divider" />
       </article>
     </div>
   </section>

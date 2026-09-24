@@ -212,6 +212,8 @@ const spxAvailable = ref(false)
 const spxRunning = ref(false)
 // 从源文件修复（附属资源 + 样式标记）——与发音无关，独立于 spxRunning 免得互相禁用
 const resourceRunning = ref(false)
+// 重新解析（重灌词条找回同名内容）——大词典要跑很久，与其它按钮互不干扰
+const reparseRunning = ref(false)
 
 /** 容器里有没有 ffmpeg。没有时「转码」按钮要禁用并说明原因，否则点了只会拿到 422 */
 async function loadSpxStatus() {
@@ -260,6 +262,40 @@ async function repairFromSource() {
     ElMessage.success(`修复完成：${parts.join('；')}`)
   } finally {
     resourceRunning.value = false
+  }
+}
+
+/**
+ * 重新解析：重读源文件、把词条整个重灌一遍（词典 id 不变）。
+ *
+ * 给「同名词词条曾被按词头去重丢掉」的存量词典找回内容。词条 id 会变（没有数据引用它），
+ * 生词本存的是释义快照与词典 id，不受影响。
+ */
+async function reparseDictionaries() {
+  const ids = selectedIds.value.length ? [...selectedIds.value] : null
+  try {
+    await ElMessageBox.confirm(
+      '将重读源文件、把所选词典的词条整个重灌一遍，找回当年被「同名去重」丢掉的内容。' +
+        '大词典要跑很久（搜韵 826 万条约几十分钟），期间这些词典的查询结果不完整。',
+      '重新解析',
+      { type: 'warning', confirmButtonText: '开始重新解析' },
+    )
+  } catch {
+    return
+  }
+  reparseRunning.value = true
+  try {
+    const { task_id } = await dictApi.reparseDictionaries(ids)
+    const task = await waitForImportTask(task_id, 6 * 60 * 60 * 1000)
+    ElMessage.success(
+      `重新解析完成：${resultNumber(task, 'dictionaries') ?? 0} 部词典共 ` +
+        `${(resultNumber(task, 'entries') ?? 0).toLocaleString()} 条` +
+        (resultNumber(task, 'skipped')
+          ? `，跳过 ${resultNumber(task, 'skipped')} 部（找不到源文件）`
+          : ''),
+    )
+  } finally {
+    reparseRunning.value = false
   }
 }
 
@@ -331,6 +367,7 @@ async function runTestQuery() {
       </div>
       <el-button :loading="spxRunning" @click="scanSpx">扫描发音资源</el-button>
       <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
+      <el-button :loading="reparseRunning" @click="reparseDictionaries">重新解析</el-button>
       <el-button @click="renameDialogVisible = true">批量重命名</el-button>
       <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
     </div>

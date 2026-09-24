@@ -29,7 +29,7 @@ from app.schemas.dictionary import (
     TestQueryEntryOut,
 )
 from app.services import dictionary_service, query_service
-from app.services.entry_render_service import render_entry_document
+from app.services.entry_render_service import render_entries_document
 
 router = APIRouter(prefix="/admin/dictionaries", tags=["admin-dictionaries"])
 
@@ -205,6 +205,24 @@ def repair_from_source(
     )
 
 
+@router.post("/reparse", response_model=DictionaryImportTaskOut)
+def reparse_dictionaries(
+    body: SpxScanRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _admin: Admin = Depends(require_admin),
+) -> DictionaryImportTaskOut:
+    """重新解析词典：重读源文件、把词条整个重灌一遍（词典 id 不变）。
+
+    给「同名词词条曾被按词头去重丢掉」的存量词典找回内容——约束去掉后已入库的行不会自动
+    长出来。词条 id 会变（没有数据引用它）；生词本存的是释义快照与词典 id，不受影响。
+    空 dictionary_ids 表示全部词典；源文件不在的词典会被跳过并计数。
+    """
+    return DictionaryImportTaskOut(
+        task_id=dictionary_service.start_reparse(db, body.dictionary_ids, settings)
+    )
+
+
 @router.post("/transcode-spx", response_model=DictionaryImportTaskOut)
 def transcode_spx(
     body: SpxTranscodeRequest,
@@ -311,9 +329,14 @@ def entry_document(
     """
     if db.get(Dictionary, dictionary_id) is None:
         raise NotFoundError("词典不存在")
-    entry = query_service.get_entry(db, dictionary_id, word)
-    if entry is None:
+    # 与前台一致：同一词头的多条聚合进一个文档（见 query_service.get_entries_for_document）
+    entries = query_service.get_entries_for_document(db, dictionary_id, word)
+    if not entries:
         raise NotFoundError("词条不存在")
     return HTMLResponse(
-        render_entry_document(entry.definition, dictionary_id=dictionary_id, theme=theme)
+        render_entries_document(
+            [(e.word, e.definition, e.phonetic) for e in entries],
+            dictionary_id=dictionary_id,
+            theme=theme,
+        )
     )

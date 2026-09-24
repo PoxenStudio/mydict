@@ -1,4 +1,6 @@
 export interface QueryResultItem {
+  /** 条目主键。同一部词典里可能有多条同名词条（MDict 允许），用它做 key 与寻址 */
+  id: number
   dictionary_id: number
   dictionary_name: string
   word: string

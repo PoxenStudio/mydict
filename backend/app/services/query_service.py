@@ -290,6 +290,9 @@ def search_word(
         resolved = _resolve_link(db, e)
         results.append(
             {
+                # 条目主键。同一部词典里可能有**多条同名词条**（MDict 允许），前端拿它做
+                # key 与寻址——只用 (dictionary_id, word) 会在这种情况下撞在一起。
+                "id": e.id,
                 "dictionary_id": e.dictionary_id,
                 "dictionary_name": by_id[e.dictionary_id].name,
                 "word": e.word,
@@ -319,6 +322,33 @@ def get_entry(db: Session, dictionary_id: int, word: str) -> DictEntry | None:
         .first()
     )
     return _resolve_link(db, entry) if entry is not None else None
+
+
+def get_entries_for_document(
+    db: Session,
+    dictionary_id: int,
+    word: str,
+    entry_ids: list[int] | None = None,
+) -> list[DictEntry]:
+    """取某部词典里与这个词匹配的**全部**词条，按条目 id 排序，供词条 HTML 渲染接口聚合。
+
+    同一部词典里同一词头可以有多条内容不同的条目（MDict 允许，搜韵诗词全文检索版的
+    「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
+
+    `entry_ids` 给了就按它取（限定属于这部词典）——前端把查询结果里那一组的条目 id 显式
+    传过来，保证 iframe 里的条数与「共 N 条」一致；按 word 再推一遍变体集合可能对不上
+    （查询用的是用户输入推的变体，而词头是词典自己的写法）。没给就按 `expand_word(word)`
+    的变体集合取。
+
+    释义是 `@@@LINK=` 的逐条解引用。
+    """
+    statement = db.query(DictEntry).filter(DictEntry.dictionary_id == dictionary_id)
+    if entry_ids:
+        statement = statement.filter(DictEntry.id.in_(entry_ids))
+    else:
+        statement = statement.filter(DictEntry.word_lower.in_(expand_word(word)))
+    entries = statement.order_by(DictEntry.id).all()
+    return [_resolve_link(db, entry) for entry in entries]
 
 
 def suggest_prefix(

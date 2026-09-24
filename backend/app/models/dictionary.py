@@ -4,10 +4,10 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -51,9 +51,20 @@ class Dictionary(Base):
 
 
 class DictEntry(Base):
+    """一部词典里的词条。
+
+    **同一部词典里允许存在多条同名词条**。MDict 就允许这样（搜韵诗词全文检索版里「毛泽东」
+    有 82 条，是 82 首不同的诗词）；早先按 `UNIQUE(dictionary_id, word)` 建表，导入时同名的
+    只留首条，于是在 63 部词典上静默丢了 1,445,181 条内容。
+
+    查询按 `dictionary_id` + `word_lower` 过滤，所以去掉唯一约束后要补一条复合索引顶上——
+    原来那条唯一索引建在 `(dictionary_id, word)` 上，用的是 word 而不是 word_lower，
+    对查询本来就使不上力。
+    """
+
     __tablename__ = "dict_entries"
     __table_args__ = (
-        UniqueConstraint("dictionary_id", "word", name="uq_dict_entries_dictionary_word"),
+        Index("ix_dict_entries_dict_word_lower", "dictionary_id", "word_lower"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

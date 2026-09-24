@@ -14,7 +14,7 @@ from app.models.dictionary import Dictionary
 from app.models.user import User
 from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, QueryResponse
 from app.services import query_log_service, query_service
-from app.services.entry_render_service import render_entry_document
+from app.services.entry_render_service import render_entries_document
 from app.services.settings_service import get_int_setting
 
 router = APIRouter(prefix="/dict", tags=["web-dict"])
@@ -90,10 +90,27 @@ def search(
     return QueryResponse(results=results)
 
 
+def _parse_entry_ids(raw: str | None) -> list[int] | None:
+    """把 `?entry_ids=12,34,56` 解析成 id 列表；空/非法时返回 None（走按词的路径）。
+
+    上限 200：一个词头的同名词条再多也不会超过这个数（实测最多 82），超了说明请求被伪造，
+    按 None 处理走按词路径即可。
+    """
+    if not raw:
+        return None
+    try:
+        ids = [int(part) for part in raw.split(",") if part.strip()]
+    except ValueError:
+        return None
+    ids = sorted({i for i in ids if i > 0})
+    return ids[:200] or None
+
+
 @router.get("/entry/{dictionary_id}", response_class=HTMLResponse)
 def entry_document(
     dictionary_id: int,
     word: str,
+    entry_ids: str | None = None,
     theme: Literal["light", "dark"] | None = None,
     caller: WebCaller = Depends(get_web_caller),
     db: Session = Depends(get_db),
@@ -121,14 +138,20 @@ def entry_document(
         # 未启用 / 不在授权范围内 / 不存在，统一 404，不泄漏词典是否存在
         raise NotFoundError("词条不存在")
 
-    entry = query_service.get_entry(db, dictionary_id, word)
-    if entry is None:
+    # 同一部词典里同一词头可以有多条内容不同的条目（MDict 允许），合成一个文档只要一个
+    # iframe——逐条各建一个的话，搜韵这类词典展开一次就要挂载 82 个沙箱文档。
+    # 前端把查询结果里这一组的条目 id 显式传过来，保证 iframe 里的条数与「共 N 条」一致
+    # （按 word 再推一遍变体集合可能对不上）；没传就走按词的旧路径（兼容 / 单条）。
+    entries = query_service.get_entries_for_document(
+        db, dictionary_id, word, entry_ids=_parse_entry_ids(entry_ids)
+    )
+    if not entries:
         raise NotFoundError("词条不存在")
 
     return HTMLResponse(
-        render_entry_document(
+        render_entries_document(
             # allow_lookup：只有前台查询页有查词框能接住「选中文字查词」这个动作
-            entry.definition,
+            [(e.word, e.definition, e.phonetic) for e in entries],
             dictionary_id=dictionary_id,
             theme=theme,
             allow_lookup=True,

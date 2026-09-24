@@ -1640,3 +1640,156 @@ async def test_repair_from_source_expands_style_markers_of_stored_entries(
         assert row.definition == "<b>不</b><br>"
     finally:
         db.close()
+
+
+def _build_mdx_with_duplicate_headword(tmp_path: Path) -> dict[str, bytes]:
+    """造一个「同一词头两条、内容不同」的迷你 MDict。
+
+    MDict 就允许这样（搜韵诗词全文检索版里「毛泽东」有 82 条）。曾经的导入按词头去重只留
+    首条，于是这类词典被静默丢掉一大半内容。
+    """
+    from mdict_utils import writer
+
+    src = tmp_path / "dup_src"
+    src.mkdir()
+    (src / "words.txt").write_text(
+        "毛泽东\n<p>第一首</p>\n</>\n"
+        "毛泽东\n<p>第二首</p>\n</>\n"
+        "沁园春\n<p>别的词头</p>\n</>\n",
+        encoding="utf-8",
+    )
+    mdx = tmp_path / "dup.mdx"
+    writer.pack(
+        str(mdx),
+        writer.pack_mdx_txt(str(src / "words.txt"), encoding="utf-8"),
+        title="Dup",
+        description="",
+        encoding="utf-8",
+    )
+    return {"dup.mdx": mdx.read_bytes()}
+
+
+async def test_import_keeps_duplicate_headwords(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """同名词条要全部入库，查询返回多条且各带自己的 id。"""
+    files = _build_mdx_with_duplicate_headword(tmp_path)
+    rel = _write_scratch("dup-headword", files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Dup Headword",
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    dict_id = dictionary["id"]
+    # 两条同名 + 一条不同名 = 3 行；曾经去重后只剩 2 行
+    assert dictionary["word_count"] == 3
+    await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
+
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry, Dictionary
+
+    # 查询端点要走通（测试环境默认不开放匿名访问）
+    set_setting(SessionLocal(), "open_access", "true")
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word == "毛泽东")
+            .all()
+        )
+        assert len(rows) == 2
+        assert {r.definition.strip() for r in rows} == {"<p>第一首</p>", "<p>第二首</p>"}
+    finally:
+        db.close()
+
+    # 查询返回两条、id 各不相同
+    resp = await client.get("/api/dict/search", params={"word": "毛泽东"})
+    assert resp.status_code == 200, resp.text
+    items = [r for r in resp.json()["results"] if r["dictionary_id"] == dict_id]
+    assert len(items) == 2
+    assert len({item["id"] for item in items}) == 2
+
+    # 词条端点按 ids 聚合成一个文档：两条都在、带序号小标题；id 不属于这部词典的被忽略
+    ids = ",".join(str(item["id"]) for item in items) + ",99999999"
+    doc = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东", "entry_ids": ids},
+    )
+    assert doc.status_code == 200, doc.text
+    assert doc.text.count('<section class="mydict-entry">') == 2
+    assert "1/2" in doc.text and "2/2" in doc.text
+    assert "第一首" in doc.text and "第二首" in doc.text  # trailing \n 由 pack 保留，断言用 in
+
+
+async def test_reparse_restores_lost_duplicate_headwords(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """存量词典靠「重新解析」找回被去重丢掉的词条——词典 id 不变。
+
+    模拟老数据：导入后手工删掉其中一条同名词（当年的导入就是这么丢的），重解析后两条都在。
+    """
+    files = _build_mdx_with_duplicate_headword(tmp_path)
+    rel = _write_scratch("reparse-dup", files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Reparse Dup",
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    dict_id = dictionary["id"]
+
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
+
+    db = SessionLocal()
+    try:
+        # 模拟旧导入的去重结果：只留首条
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word == "毛泽东")
+            .order_by(DictEntry.id)
+            .all()
+        )
+        db.delete(rows[1])
+        db.commit()
+        kept_before = {r.definition.strip() for r in db.query(DictEntry).filter(
+            DictEntry.dictionary_id == dict_id).all()}
+        assert kept_before == {"<p>第一首</p>", "<p>别的词头</p>"}
+    finally:
+        db.close()
+
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert task["result"] == {"dictionaries": 1, "entries": 3, "skipped": 0}
+
+    from app.models.dictionary import Dictionary as DictionaryModel
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word == "毛泽东")
+            .all()
+        )
+        assert {r.definition.strip() for r in rows} == {"<p>第一首</p>", "<p>第二首</p>"}
+        assert db.get(DictionaryModel, dict_id) is not None  # 词典 id 不变
+        assert db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).count() == 3
+    finally:
+        db.close()
