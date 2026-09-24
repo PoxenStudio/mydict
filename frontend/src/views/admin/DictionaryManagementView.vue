@@ -210,7 +210,7 @@ async function onDrop(targetIndex: number) {
 // --- 发音转码 ---
 const spxAvailable = ref(false)
 const spxRunning = ref(false)
-// 补齐附属资源（CSS/字体/脚本）——与发音无关，独立于 spxRunning 免得互相禁用
+// 从源文件修复（附属资源 + 样式标记）——与发音无关，独立于 spxRunning 免得互相禁用
 const resourceRunning = ref(false)
 
 /** 容器里有没有 ffmpeg。没有时「转码」按钮要禁用并说明原因，否则点了只会拿到 422 */
@@ -239,22 +239,25 @@ async function scanSpx() {
 }
 
 /**
- * 补齐附属资源：把源文件旁边的 CSS/字体/JS/图片补进各部词典的 res/。
+ * 从源文件修复：① 补源文件旁边的 CSS/字体/JS/图片；② 展开词条里的 `` `编号` `` 样式标记。
  *
- * 早先的导入代码只解包 .mdd，而 MDict 的样式表与字体按惯例放在 .mdx 同级目录，于是
- * 存量词典全都缺这些文件——词条以无样式渲染，图标回到原始像素、表格丢边框。
- * 这里不用重新导入任何词典；有勾选就只处理勾选的。
+ * 这两样都只存在于源文件里（MDict 把样式表放在 .mdx 同级目录、把标记规则放在 .mdx 头部的
+ * StyleSheet 字段），早先的导入都没读，于是存量词典要么缺样式文件、要么把标记原样显示成
+ * 排版错乱。这里不用重新导入任何词典；有勾选就只处理勾选的。
  */
-async function repairResources() {
+async function repairFromSource() {
   const ids = selectedIds.value.length ? [...selectedIds.value] : null
   resourceRunning.value = true
   try {
-    const { task_id } = await dictApi.repairResources(ids)
+    const { task_id } = await dictApi.repairFromSource(ids)
     const task = await waitForImportTask(task_id, 30 * 60 * 1000)
-    ElMessage.success(
-      `补齐完成：为 ${resultNumber(task, 'dictionaries') ?? 0} 部词典复制了 ` +
-        `${resultNumber(task, 'files') ?? 0} 个文件`,
-    )
+    const files = resultNumber(task, 'files') ?? 0
+    const styled = resultNumber(task, 'styled_entries') ?? 0
+    const parts = [`为 ${resultNumber(task, 'dictionaries') ?? 0} 部词典复制了 ${files} 个文件`]
+    if (styled) {
+      parts.push(`展开了 ${resultNumber(task, 'styled_dictionaries') ?? 0} 部词典的 ${styled.toLocaleString()} 条样式标记`)
+    }
+    ElMessage.success(`修复完成：${parts.join('；')}`)
   } finally {
     resourceRunning.value = false
   }
@@ -327,7 +330,7 @@ async function runTestQuery() {
         <RefreshButton :loading="loading" @refresh="loadDictionaries" />
       </div>
       <el-button :loading="spxRunning" @click="scanSpx">扫描发音资源</el-button>
-      <el-button :loading="resourceRunning" @click="repairResources">补齐附属资源</el-button>
+      <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
       <el-button @click="renameDialogVisible = true">批量重命名</el-button>
       <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
     </div>

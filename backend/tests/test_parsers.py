@@ -621,3 +621,79 @@ def test_mdict_sample_headwords_and_sample_share_one_open(tmp_path: Path, monkey
     assert [e.word for e in parser.sample([mdx_path], limit=10)] == ["apple"]
 
     assert len(opened) == 1
+
+
+class _FakeMdx:
+    """假 MDX，只为控制 header 与 items。
+
+    `mdict_utils.writer` 不支持写 `StyleSheet` 字段，造不出带样式表的真实 .mdx，所以这里
+    替换 `app.parsers.mdict.MDX`（上面的用例已经在用同样的手法）。
+    """
+
+    def __init__(self, stylesheet: str | None, entries: list[tuple[str, str]]) -> None:
+        self.header = {b"StyleSheet": stylesheet.encode("utf-8")} if stylesheet else {}
+        self._entries = entries
+
+    def items(self):
+        for word, definition in self._entries:
+            yield word.encode("utf-8"), definition.encode("utf-8")
+
+
+def _patch_mdx(monkeypatch, stylesheet: str | None, entries: list[tuple[str, str]]) -> None:
+    from app.parsers import mdict as mdict_module
+
+    monkeypatch.setattr(mdict_module, "MDX", lambda _path: _FakeMdx(stylesheet, entries))
+
+
+def test_mdict_parse_expands_style_markers_before_rewriting_resources(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """顺序必须是「先展开标记、再改写资源引用」。
+
+    样式表的开始标签里本身可能含 `src`（真实例子：`` `1` `` 的标签带 `<img>`），只有先展开，
+    这些 src 才会被一并改写成 /dict-res/…。
+    """
+    sheet = "\n".join(["1", '<b><img src="pic/head.png">', "</b>", "2", "<br>", ""])
+    _patch_mdx(monkeypatch, sheet, [("apple", '`1`apple`2`<img src="pic/apple.png">')])
+
+    parser = MDictParser()
+    entries = list(
+        parser.parse(
+            [tmp_path / "fake.mdx"], dictionary_id=7, resource_dir=tmp_path / "res"
+        )
+    )
+
+    assert len(entries) == 1
+    definition = entries[0].definition
+    # 两个 src（样式表里的、正文里的）都被改写了 —— 说明展开发生在改写之前
+    assert definition.count("/dict-res/7/res/") == 2
+    assert definition.startswith('<b><img src="/dict-res/7/res/pic/head.png">apple</b><br>')
+    # 标记已经不在了
+    assert "`" not in definition
+
+
+def test_mdict_parse_expands_markers_even_without_resource_dir(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """勾了「不导入发音/图片」时引用不改写，但样式标记照常展开——那是文字排版。"""
+    sheet = "\n".join(["1", "<b>", "</b>"])
+    _patch_mdx(monkeypatch, sheet, [("apple", "`1`apple")])
+
+    parser = MDictParser()
+    entries = list(parser.parse([tmp_path / "fake.mdx"], dictionary_id=7, resource_dir=None))
+
+    assert entries[0].definition == "<b>apple</b>"
+
+
+def test_mdict_parse_leaves_text_alone_without_stylesheet(monkeypatch, tmp_path: Path) -> None:
+    """没有 StyleSheet 的词典（含恰好带反引号数字的）绝不能被改写。"""
+    _patch_mdx(monkeypatch, None, [("apple", "<p>`1`apple</p>")])
+
+    parser = MDictParser()
+    entries = list(
+        parser.parse(
+            [tmp_path / "fake.mdx"], dictionary_id=7, resource_dir=tmp_path / "res"
+        )
+    )
+
+    assert entries[0].definition == "<p>`1`apple</p>"

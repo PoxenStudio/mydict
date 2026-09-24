@@ -7,7 +7,12 @@
 from sqlalchemy.orm import Session
 
 from app.models.dictionary import DictEntry, Dictionary
-from app.services.definition_repair import count_legacy_links, repair_legacy_links
+from app.services.definition_repair import (
+    count_legacy_links,
+    dictionaries_using_style_markers,
+    expand_stored_styles,
+    repair_legacy_links,
+)
 from app.services.resource_service import rewrite_resource_refs
 
 
@@ -222,3 +227,80 @@ def test_repair_on_dictionary_without_entries(db_session: Session) -> None:
     did = _make_dictionary(db_session).id
     assert repair_legacy_links(db_session, did) == 0
     assert count_legacy_links(db_session, did) == (0, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# 样式标记（`` `编号` ``）的存量展开
+# ---------------------------------------------------------------------------
+
+_STYLE_SHEET = {
+    "1": ("<b><center><font size=5 color=Green>", "</font></center></b><hr>"),
+    "2": ("<br>", ""),
+    "7": ("<font color=Red>", "</font>"),
+}
+
+
+def test_expand_stored_styles_rewrites_only_rows_with_markers(db_session: Session) -> None:
+    did = _make_dictionary(db_session).id
+    marked = _add_entry(db_session, did, "标记", "`1`不`2``7`◆不`2`")
+    plain = _add_entry(db_session, did, "普通", "<p>没有标记</p>")
+
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 1
+
+    assert _definition(db_session, marked.id) == (
+        "<b><center><font size=5 color=Green>不"
+        "</font></center></b><hr>"
+        "<br><font color=Red>◆不</font><br>"
+    )
+    # 不含标记的行不该被碰
+    assert _definition(db_session, plain.id) == "<p>没有标记</p>"
+
+
+def test_expand_stored_styles_is_idempotent(db_session: Session) -> None:
+    """展开过之后不再剩已定义的编号，第二次跑改动 0 行——存量修复能安全重复执行。"""
+    did = _make_dictionary(db_session).id
+    entry = _add_entry(db_session, did, "标记", "`1`不`2`")
+
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 1
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 0
+    # 内容也不该变
+    once = _definition(db_session, entry.id)
+    expand_stored_styles(db_session, did, _STYLE_SHEET)
+    assert _definition(db_session, entry.id) == once
+
+
+def test_expand_stored_styles_keeps_undefined_numbers(db_session: Session) -> None:
+    """编号不在样式表里时该行原样保留（同库里有词典的正文恰好含反引号数字但没有样式表）。"""
+    did = _make_dictionary(db_session).id
+    entry = _add_entry(db_session, did, "巧合", "<p>`99`苹果</p>")
+
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 0
+    assert _definition(db_session, entry.id) == "<p>`99`苹果</p>"
+
+
+def test_expand_stored_styles_spans_many_batches(db_session: Session) -> None:
+    """分批按主键区间推进，不能漏掉跨批的行。"""
+    did = _make_dictionary(db_session).id
+    rows = 25
+    ids = [_add_entry(db_session, did, f"w{index}", "`7`红`1`").id for index in range(rows)]
+
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, batch_size=4) == rows
+    for entry_id in ids:
+        definition = _definition(db_session, entry_id)
+        assert definition.startswith("<font color=Red>红")
+        assert definition.endswith("</font></center></b><hr>")
+
+
+def test_expand_stored_styles_on_empty_dictionary(db_session: Session) -> None:
+    did = _make_dictionary(db_session).id
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 0
+
+
+def test_dictionaries_using_style_markers_intersects_requested(db_session: Session) -> None:
+    a = _make_dictionary(db_session, "有标记").id
+    b = _make_dictionary(db_session, "没标记").id
+    _add_entry(db_session, a, "x", "`1`x")
+    _add_entry(db_session, b, "y", "<p>y</p>")
+
+    assert dictionaries_using_style_markers(db_session, {a, b}) == {a}
+    assert dictionaries_using_style_markers(db_session, {b}) == set()

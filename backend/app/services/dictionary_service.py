@@ -18,11 +18,15 @@ from app.models.audit import AuditLog
 from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
-from app.parsers.mdict import MDictParser
+from app.parsers.mdict import MDictParser, read_stylesheet
 from app.parsers.stardict import StarDictParser, parse_ifo
 from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
 from app.services.background_task_service import background_tasks
+from app.services.definition_repair import (
+    dictionaries_using_style_markers,
+    expand_stored_styles,
+)
 from app.services.language_detect import detect_language
 from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 from app.services.spx_transcode import count_pending_spx, ffmpeg_path, transcode_pending
@@ -542,27 +546,63 @@ def _run_spx_scan_in_background(task_id: int, dictionary_ids: list[int], setting
         db.close()
 
 
-def start_resource_repair(
+def start_source_repair(
     db: Session, dictionary_ids: list[int] | None, settings: Settings
 ) -> int:
-    """登记「补齐附属资源」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
+    """登记「从源文件修复」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
 
-    存量词典是在「导入时复制 .mdx 同级资源」这件事修好之前导入的，`res/` 里只有 `.mdd`
-    解包出来的内容，样式表/字体/脚本全都缺——于是图标按原始像素渲染（大辞泉的发音图标
-    75×74、岩波的派生語图标 387×150）、表格丢掉边框。这个任务把它们补进各自的 `res/`，
-    **不需要重新导入任何词典**。
+    修的是「导入时漏掉、只存在于源文件里的东西」，一次做两件事：
+
+    1. **补齐 `.mdx` 同级的附属资源**（CSS/字体/脚本/图片）。早期导入只解包 `.mdd`，
+       而这些文件按 MDict 惯例就躺在 `.mdx` 旁边，于是 63 部词典全部 404——图标按原始
+       像素渲染（大辞泉的发音图标 75×74、岩波的派生語图标 387×150）、表格丢掉边框。
+    2. **展开词条里的 `` `编号` `` 样式标记**。规则来自 `.mdx` 头部的 `StyleSheet` 字段，
+       此前完全没处理，于是 `` `1` `` `` `2` `` 直接显示出来（多功能汉语辞典全部 10 万条中招）。
+
+    两者都**不需要重新导入任何词典**。跑完会使查询结果缓存失效——释义被就地改写了，
+    缓存里还存着旧快照。
     """
     targets = _spx_targets(db, dictionary_ids)
-    task = background_tasks.start("dictionary_resource_repair", "补齐附属资源")
+    task = background_tasks.start("dictionary_source_repair", "从源文件修复")
     threading.Thread(
-        target=_run_resource_repair_in_background,
+        target=_run_source_repair_in_background,
         args=(task.id, [d.id for d in targets], settings),
         daemon=True,
     ).start()
     return task.id
 
 
-def _run_resource_repair_in_background(
+def _source_files(dictionary: Dictionary) -> list[Path]:
+    """`file_path` 里记录的那些源文件路径（`dicts_dir` 存文件列表、`upload` 存 source/ 目录）。"""
+    return [
+        Path(raw.strip()) for raw in (dictionary.file_path or "").split(";") if raw.strip()
+    ]
+
+
+def _source_stylesheet(sources: list[Path]) -> dict[str, tuple[str, str]]:
+    """从这部词典的 `.mdx` 里读 `StyleSheet`；读不到就返回空表。
+
+    调用方已经确认过这部词典的词条里真的含反引号，所以这里才敢打开 `.mdx`——打开会把整份
+    词头索引读进内存。源文件被删、或是不支持的压缩（LZO）导致打不开时，只记一条 warning
+    并返回空表：这类词典仍可正常查词，只是这条存量修复做不了。
+    """
+    for source in sources:
+        path = source
+        if path.is_dir():
+            found = sorted(path.glob("*.mdx"))
+            if not found:
+                continue
+            path = found[0]
+        if path.suffix.lower() != ".mdx" or not path.is_file():
+            continue
+        try:
+            return read_stylesheet(path)
+        except Exception:
+            logger.warning("读取 %s 的 StyleSheet 失败，跳过样式展开", path, exc_info=True)
+    return {}
+
+
+def _run_source_repair_in_background(
     task_id: int, dictionary_ids: list[int], settings: Settings
 ) -> None:
     """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
@@ -571,15 +611,15 @@ def _run_resource_repair_in_background(
         total = len(dictionary_ids)
         repaired = 0
         copied = 0
+        styled_dictionaries = 0
+        styled_entries = 0
+        # 先定位「词条里真的含反引号」的词典，只对这些打开 .mdx（见该函数的注释）
+        with_markers = dictionaries_using_style_markers(db, set(dictionary_ids))
         for index, dict_id in enumerate(dictionary_ids, start=1):
             dictionary = db.get(Dictionary, dict_id)
-            if dictionary is None:  # 补齐期间被删掉了
+            if dictionary is None:  # 修复期间被删掉了
                 continue
-            sources = [
-                Path(raw.strip())
-                for raw in (dictionary.file_path or "").split(";")
-                if raw.strip()
-            ]
+            sources = _source_files(dictionary)
             # 不检查 res/ 是否已存在——`copy_sibling_resources` 会按需建目录。
             # 曾经这里加过「没有 res/ 就跳过，说明用户当初勾了 skip_resources」，是错的：
             # 只有 .mdx 没有 .mdd 的词典（Weblio類語辞典、moji辞書、thesaurus近反义词…）
@@ -590,11 +630,32 @@ def _run_resource_repair_in_background(
             if count:
                 repaired += 1
             copied += count
+
+            if dict_id in with_markers:
+                stylesheet = _source_stylesheet(sources)
+                if stylesheet:
+                    changed = expand_stored_styles(db, dict_id, stylesheet)
+                    if changed:
+                        styled_dictionaries += 1
+                        styled_entries += changed
             background_tasks.update_progress(task_id, {"done": index, "total": total})
-        background_tasks.succeed(task_id, {"dictionaries": repaired, "files": copied})
+
+        if styled_entries:
+            # 释义被就地改写，进程内的查询结果缓存里还存着旧快照（TTL 300s）。
+            # 应用内后台任务能直接清掉它，不需要像 CLI 那样重启容器。
+            invalidate_query_cache()
+        background_tasks.succeed(
+            task_id,
+            {
+                "dictionaries": repaired,
+                "files": copied,
+                "styled_dictionaries": styled_dictionaries,
+                "styled_entries": styled_entries,
+            },
+        )
     except Exception:
-        logger.exception("补齐附属资源失败")
-        background_tasks.fail(task_id, "补齐失败：服务器内部错误，请查看后端日志")
+        logger.exception("从源文件修复失败")
+        background_tasks.fail(task_id, "修复失败：服务器内部错误，请查看后端日志")
     finally:
         db.close()
 

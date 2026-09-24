@@ -95,14 +95,15 @@ export function transcodeSpx(dictionaryIds: number[]) {
 }
 
 /**
- * 补齐附属资源：把词典源文件旁边的 CSS/字体/JS/图片补进各自的 res/。
+ * 从源文件修复：把「只存在于源文件里、导入时被漏掉的东西」补进已导入的词典。
  *
- * MDict 的样式表与字体放在 .mdx 同级目录而不是 .mdd 里，早先的导入代码只解包 .mdd，
- * 于是存量词典全都缺这些文件（图标按原始像素渲染、表格丢边框）。不需要重新导入。
- * dictionaryIds 留空表示全部词典。
+ * 两件事：① 补 .mdx 同级的 CSS/字体/JS/图片（MDict 按惯例把它们放在 .mdx 旁边而不是
+ * .mdd 里，早先的导入只解包 .mdd，于是存量词典全都缺——图标按原始像素渲染、表格丢边框）；
+ * ② 展开词条里的 `` `编号` `` 样式标记（规则来自 .mdx 头部的 StyleSheet，此前没处理，
+ * 标记原样显示看起来就是排版错乱）。都不需要重新导入。dictionaryIds 留空表示全部词典。
  */
-export function repairResources(dictionaryIds?: number[] | null) {
-  return request.post<never, { task_id: number }>('/admin/dictionaries/repair-resources', {
+export function repairFromSource(dictionaryIds?: number[] | null) {
+  return request.post<never, { task_id: number }>('/admin/dictionaries/repair-from-source', {
     dictionary_ids: dictionaryIds && dictionaryIds.length ? dictionaryIds : null,
   })
 }

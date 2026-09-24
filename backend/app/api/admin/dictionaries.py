@@ -181,21 +181,27 @@ def scan_spx(
     )
 
 
-@router.post("/repair-resources", response_model=DictionaryImportTaskOut)
-def repair_resources(
+@router.post("/repair-from-source", response_model=DictionaryImportTaskOut)
+def repair_from_source(
     body: SpxScanRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
 ) -> DictionaryImportTaskOut:
-    """把词典源文件旁边的附属资源（CSS/字体/JS/图片）补进各自的 res/。
+    """把「只存在于源文件里、导入时被漏掉的东西」补进已导入的词典。
 
-    MDict 的样式表与字体放在 .mdx 同级目录而不是 .mdd 里，早先的导入代码只解包 .mdd，
-    于是这些文件全部缺失——词条以无样式渲染，图标回到原始像素、表格丢边框。这个端点给
-    存量词典补上，**不需要重新导入**。空 dictionary_ids 表示全部词典。
+    一次做两件事，都**不需要重新导入**：
+
+    1. 补 `.mdx` 同级的附属资源（CSS/字体/脚本/图片）。MDict 的样式表与字体按惯例就躺在
+       `.mdx` 旁边而不是 `.mdd` 里，早先的导入代码只解包 `.mdd`，于是这些文件全部缺失——
+       词条以无样式渲染，图标回到原始像素、表格丢边框。
+    2. 展开词条里的 `` `编号` `` 样式标记（规则来自 `.mdx` 头部的 `StyleSheet`）。此前完全
+       没处理，标记原样显示，看起来就是排版错乱。
+
+    空 dictionary_ids 表示全部词典。
     """
     return DictionaryImportTaskOut(
-        task_id=dictionary_service.start_resource_repair(db, body.dictionary_ids, settings)
+        task_id=dictionary_service.start_source_repair(db, body.dictionary_ids, settings)
     )
 
 

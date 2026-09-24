@@ -1459,11 +1459,11 @@ async def test_upload_accepts_sibling_resources(
 
     storage = Path(settings.dictionary_storage_path) / str(dictionary["id"])
     assert (storage / "res" / "mini.css").read_bytes() == b"img.audio{height:1em}"
-    # 上传的文件归档到本应用管理的 source/（repair-resources 的源目录就是它）
+    # 上传的文件归档到本应用管理的 source/（repair-from-source 的源目录就是它）
     assert (storage / "source" / "mini.css").exists()
 
 
-async def test_repair_resources_backfills_existing_dictionary(
+async def test_repair_from_source_backfills_existing_dictionary(
     client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
 ) -> None:
     """存量词典靠这个端点补文件——不必重新导入（大辞泉有 95 万词条，重导代价太大）。"""
@@ -1488,28 +1488,29 @@ async def test_repair_resources_backfills_existing_dictionary(
     _write_scratch("repair-res", {"mini.css": b"img.audio{height:1em}"})
 
     resp = await client.post(
-        "/api/admin/dictionaries/repair-resources",
+        "/api/admin/dictionaries/repair-from-source",
         headers=admin_headers,
         json={"dictionary_ids": [dictionary["id"]]},
     )
     assert resp.status_code == 200, resp.text
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
     assert task["status"] == "success", task
-    assert task["result"] == {"dictionaries": 1, "files": 1}
+    # 结果里另有 styled_* 两个字段（样式展开），这里只钉住资源复制那部分
+    assert (task["result"]["dictionaries"], task["result"]["files"]) == (1, 1)
 
     assert (res / "mini.css").read_bytes() == b"img.audio{height:1em}"
 
     # 再跑一次：文件已在，不重复计数（幂等）
     resp = await client.post(
-        "/api/admin/dictionaries/repair-resources",
+        "/api/admin/dictionaries/repair-from-source",
         headers=admin_headers,
         json={"dictionary_ids": [dictionary["id"]]},
     )
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
-    assert task["result"] == {"dictionaries": 0, "files": 0}
+    assert (task["result"]["dictionaries"], task["result"]["files"]) == (0, 0)
 
 
-async def test_repair_resources_creates_res_dir_for_mdx_only_dictionary(
+async def test_repair_from_source_creates_res_dir_for_mdx_only_dictionary(
     client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
 ) -> None:
     """只有 .mdx 没有 .mdd 的词典也该补——它从来没有过 res/，但照样需要那个 css。
@@ -1540,27 +1541,102 @@ async def test_repair_resources_creates_res_dir_for_mdx_only_dictionary(
     _write_scratch("repair-mdx-only", {"mini.css": b"table{border:1px solid}"})
 
     resp = await client.post(
-        "/api/admin/dictionaries/repair-resources",
+        "/api/admin/dictionaries/repair-from-source",
         headers=admin_headers,
         json={"dictionary_ids": [dictionary["id"]]},
     )
     task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
     assert task["status"] == "success", task
-    assert task["result"] == {"dictionaries": 1, "files": 1}
+    # 结果里另有 styled_* 两个字段（样式展开），这里只钉住资源复制那部分
+    assert (task["result"]["dictionaries"], task["result"]["files"]) == (1, 1)
     assert (res / "mini.css").read_bytes() == b"table{border:1px solid}"
 
 
-async def test_repair_resources_rejects_unknown_dictionary(
+async def test_repair_from_source_rejects_unknown_dictionary(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
     resp = await client.post(
-        "/api/admin/dictionaries/repair-resources",
+        "/api/admin/dictionaries/repair-from-source",
         headers=admin_headers,
         json={"dictionary_ids": [999999]},
     )
     assert resp.status_code == 404
 
 
-async def test_repair_resources_requires_admin(client: AsyncClient) -> None:
-    resp = await client.post("/api/admin/dictionaries/repair-resources", json={})
+async def test_repair_from_source_requires_admin(client: AsyncClient) -> None:
+    resp = await client.post("/api/admin/dictionaries/repair-from-source", json={})
     assert resp.status_code == 401
+
+
+async def test_repair_from_source_expands_style_markers_of_stored_entries(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """存量词条里的 `` `编号` `` 由这个端点就地展开，不必重新导入。
+
+    造不出带 StyleSheet 的真实 .mdx（`mdict_utils.writer` 不支持写这个字段），所以替换
+    掉「读源文件样式表」这一步——被替换的是读文件的那一段，编排与写库走的都是生产代码。
+    """
+    from app.services import dictionary_service
+
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    rel = _write_scratch("repair-style", files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Repair Style",
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    dict_id = dictionary["id"]
+
+    # 模拟「标记没被展开就入了库」：mini.mdx 的词条是 apple，这里给同一部词典补一条带标记的
+    from app.models.dictionary import DictEntry
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.add(
+            DictEntry(
+                dictionary_id=dict_id,
+                word="不",
+                word_lower="不",
+                definition="`1`不`2`",
+                extra=None,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        dictionary_service,
+        "read_stylesheet",
+        lambda _path: {"1": ("<b>", "</b>"), "2": ("<br>", "")},
+    )
+
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-from-source",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    # 样式展开与资源复制是两个独立计数
+    assert (task["result"]["styled_dictionaries"], task["result"]["styled_entries"]) == (1, 1)
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word_lower == "不")
+            .first()
+        )
+        assert row.definition == "<b>不</b><br>"
+    finally:
+        db.close()

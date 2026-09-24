@@ -11,6 +11,7 @@ from app.parsers.base import (
     is_informative_headword,
     spread_downsample,
 )
+from app.parsers.mdict_stylesheet import expand_style_markers, stylesheet_of
 from app.services.resource_service import (
     copy_sibling_resources,
     rewrite_resource_refs,
@@ -30,15 +31,31 @@ def _open_mdict(factory, path: Path):
         raise
 
 
+def read_stylesheet(path: Path) -> dict[str, tuple[str, str]]:
+    """打开 `.mdx` 读它的 `StyleSheet` 字段，供「从源文件修复」展开存量词条用。
+
+    注意代价：`MDX.__init__` 会把**整份词头索引**读进内存（实测 The little dict 8.7 秒、
+    搜韵诗词 17.6 秒），所以调用方必须先确认这部词典真的需要展开，不能每部都调。
+    """
+    return stylesheet_of(_open_mdict(MDX, path))
+
+
 class MDictParser(DictionaryParser):
     def __init__(self) -> None:
         # 大 MDX 打开时要加载整份词头索引，采样与解析共用同一次打开
         self._mdx_cache: dict[Path, object] = {}
+        # 每份 .mdx 的样式表只解析一次
+        self._stylesheet_cache: dict[Path, dict[str, tuple[str, str]]] = {}
 
     def _open_mdx(self, path: Path):
         if path not in self._mdx_cache:
             self._mdx_cache[path] = _open_mdict(MDX, path)
         return self._mdx_cache[path]
+
+    def _stylesheet_for(self, mdx_path: Path) -> dict[str, tuple[str, str]]:
+        if mdx_path not in self._stylesheet_cache:
+            self._stylesheet_cache[mdx_path] = stylesheet_of(self._open_mdx(mdx_path))
+        return self._stylesheet_cache[mdx_path]
 
     def parse(
         self,
@@ -53,6 +70,7 @@ class MDictParser(DictionaryParser):
             raise ValueError("MDict 词典缺少 .mdx 文件")
 
         # resource_dir 为 None：不落盘 .mdd 资源，也不改写释义里的资源引用
+        # （样式标记仍然照常展开 —— 那是文字排版，与「不导入发音/图片」无关）
         if resource_dir is not None:
             for mdd_path in mdd_paths:
                 mdd = _open_mdict(MDD, mdd_path)
@@ -65,12 +83,15 @@ class MDictParser(DictionaryParser):
 
         for mdx_path in mdx_paths:
             mdx = self._open_mdx(mdx_path)
+            sheet = self._stylesheet_for(mdx_path)
             for key, value in mdx.items():
                 word = key.decode("utf-8", errors="replace")
                 html = value.decode("utf-8", errors="replace")
-                definition = (
-                    rewrite_resource_refs(html, dictionary_id) if resource_dir is not None else html
-                )
+                # 先展开 `` `编号` `` 样式标记、再改写资源引用：样式表的标签里本身可能
+                # 含 src/href（如 <img src=...>），这个顺序才能让它们一并被改写
+                definition = expand_style_markers(html, sheet)
+                if resource_dir is not None:
+                    definition = rewrite_resource_refs(definition, dictionary_id)
                 yield ParsedEntry(word=word, definition=definition)
 
     def sample(self, file_paths: list[Path], limit: int) -> list[ParsedEntry]:

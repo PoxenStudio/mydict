@@ -25,12 +25,13 @@
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import bindparam, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.dictionary import DictEntry
+from app.parsers.mdict_stylesheet import expand_style_markers
 
 logger = logging.getLogger("mydict.dictionary")
 
@@ -140,3 +141,86 @@ def repair_legacy_links(
             on_progress(repaired, cursor - lowest)
     logger.info("词典 %s 修复完成：改动 %s 行（扫了 %s 批）", dictionary_id, repaired, scanned)
     return repaired
+
+
+def expand_stored_styles(
+    db: Session,
+    dictionary_id: int,
+    stylesheet: Mapping[str, tuple[str, str]],
+    *,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """把已入库释义里的 `` `编号` `` 样式标记就地展开，返回实际改动的行数。
+
+    与 `repair_legacy_links` 的关键差别：**这次不能用 `func.replace` 表达**。展开时要记住
+    「上一个标记的结束标记」（见 `parsers/mdict_stylesheet.py` 里对规则的说明），是带状态的
+    扫描，只能在 Python 里逐条转换，所以分批策略变成「按主键区间取一批 → 转换 → 批量写回」。
+    写回用 `update(...).where(id == bindparam('row_id'))` 的 executemany 形式，一批一次往返。
+
+    幂等：编号没在样式表里定义时 `expand_style_markers` 原样返回，而展开过之后文本里已经不剩
+    定义过的编号了，所以第二次跑改动的行数为 0。
+
+    只挑含反引号的行走转换：绝大多数词典一条都不含，等于省掉整轮 Python 转换。
+    """
+    bounds = db.execute(
+        select(func.min(DictEntry.id), func.max(DictEntry.id)).where(
+            DictEntry.dictionary_id == dictionary_id
+        )
+    ).one()
+    lowest, highest = bounds
+    if lowest is None or highest is None:
+        return 0
+
+    # 用 Core 的 Table 而不是 ORM 实体：ORM 的 update() 在收到 executemany 参数时会走
+    # 「按主键批量更新」那条路，而这批参数里只有 id 与 definition、没有完整主键行，会直接报错
+    statement = (
+        update(DictEntry.__table__)
+        .where(DictEntry.__table__.c.id == bindparam("row_id"))
+        .values(definition=bindparam("new_definition"))
+    )
+
+    changed_total = 0
+    cursor = lowest - 1
+    while cursor < highest:
+        window_end = min(cursor + batch_size, highest)
+        # 只取列而不是 ORM 对象：不会往 identity map 里塞几万条记录
+        rows = db.execute(
+            select(DictEntry.id, DictEntry.definition).where(
+                DictEntry.id > cursor,
+                DictEntry.id <= window_end,
+                DictEntry.dictionary_id == dictionary_id,
+                DictEntry.definition.like("%`%"),
+            )
+        ).all()
+        updates = [
+            {"row_id": row_id, "new_definition": expanded}
+            for row_id, definition in rows
+            if (expanded := expand_style_markers(definition or "", stylesheet)) != definition
+        ]
+        if updates:
+            db.execute(statement, updates)
+            db.commit()
+            changed_total += len(updates)
+        cursor = window_end
+        if on_progress is not None:
+            on_progress(changed_total, cursor - lowest)
+    logger.info("词典 %s 样式展开完成：改动 %s 行", dictionary_id, changed_total)
+    return changed_total
+
+
+def dictionaries_using_style_markers(db: Session, dictionary_ids: set[int]) -> set[int]:
+    """一次扫描找出「词条里含反引号」的词典，返回与 `dictionary_ids` 的交集。
+
+    为什么要先做这一步：展开需要 `.mdx` 头部里的 `StyleSheet`，而打开一个 `.mdx` 会把整份
+    词头索引读进内存——实测 63 部全开要 60~80 秒（搜韵诗词 17.6s、The little dict 8.7s），
+    还有个别是 LZO 压缩根本打不开。所以先用一次 LIKE 扫描定位真正含标记的少数几部，
+    只对它们打开源文件。这次扫描本身要读一遍全部释义文本（几十秒），但只跑一次，
+    而它省下的是 60~80 秒的解析开销加几百 MB 的内存峰值。
+    """
+    rows = db.execute(
+        select(DictEntry.dictionary_id)
+        .where(DictEntry.definition.like("%`%"))
+        .group_by(DictEntry.dictionary_id)
+    ).all()
+    return {row[0] for row in rows if row[0] in dictionary_ids}
