@@ -149,7 +149,8 @@ async def test_update_dictionary_name_and_lang(
     dict_id = dictionary["id"]
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
-    # 改名+改语言方向后查询结果里的词典名要立刻是新的，不能因为查询结果有 5 分钟 TTL 缓存而看到旧名字
+    # 改名+改语言方向后查询结果里的词典名要立刻是新的，
+    # 不能因为查询结果有 5 分钟 TTL 缓存而看到旧名字
     # （lang_from 保持 en 不变，避免连带影响 "apple" 的自动语言路由，改 lang_to 已足够验证字段生效）
     await client.get("/api/dict/search", params={"word": "apple"})
     resp = await client.put(
@@ -1579,7 +1580,6 @@ async def test_repair_from_source_expands_style_markers_of_stored_entries(
     from app.services import dictionary_service
 
     files = _build_mdict_with_resource_bytes(tmp_path)
-    settings = get_settings()
     rel = _write_scratch("repair-style", files)
     dictionary = await import_from_dicts_dir(
         client,
@@ -1595,8 +1595,8 @@ async def test_repair_from_source_expands_style_markers_of_stored_entries(
     dict_id = dictionary["id"]
 
     # 模拟「标记没被展开就入了库」：mini.mdx 的词条是 apple，这里给同一部词典补一条带标记的
-    from app.models.dictionary import DictEntry
     from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
 
     db = SessionLocal()
     try:
@@ -1692,7 +1692,7 @@ async def test_import_keeps_duplicate_headwords(
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
     from app.core.db import SessionLocal
-    from app.models.dictionary import DictEntry, Dictionary
+    from app.models.dictionary import DictEntry
 
     # 查询端点要走通（测试环境默认不开放匿名访问）
     set_setting(SessionLocal(), "open_access", "true")

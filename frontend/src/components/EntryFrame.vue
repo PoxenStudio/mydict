@@ -111,10 +111,20 @@ function applyHeight(raw: number) {
   boxHeight.value = Math.max(MIN_HEIGHT, Math.ceil(raw))
 }
 
-/** 只放行 http(s)：postMessage 的内容一律当作不可信输入 */
-function openExternal(url: string) {
-  if (!/^https?:\/\//i.test(url)) return
-  window.open(url, '_blank', 'noopener,noreferrer')
+/**
+ * 打开词条里的外链。postMessage 的内容一律当作不可信输入，只认三种写法：
+ * http(s) 链接；词典里常见的 `www.` 裸域名（补成 https）；`mailto:`（交给邮件客户端，
+ * 用 location 而不是 window.open，否则会先弹出一个空白标签页）。
+ */
+function openExternal(raw: string) {
+  const url = raw.trim()
+  if (/^mailto:/i.test(url)) {
+    window.location.href = url
+    return
+  }
+  const normalized = /^www\./i.test(url) ? `https://${url}` : url
+  if (!/^https?:\/\//i.test(normalized)) return
+  window.open(normalized, '_blank', 'noopener,noreferrer')
 }
 
 /**

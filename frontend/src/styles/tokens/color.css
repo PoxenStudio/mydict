@@ -34,6 +34,12 @@
   --color-scrollbar-thumb: #c7d1cd;
   --color-scrollbar-thumb-hover: #8b9a94;
   --color-scrollbar-track: transparent;
+
+  /* 全屏遮罩（大图查看器）。刻意不随主题切换：看图时背景要压到接近全黑图片才看得清 */
+  --color-overlay-scrim: rgba(0, 0, 0, 0.86);
+  --color-overlay-control: rgba(0, 0, 0, 0.5);
+  --color-overlay-control-hover: rgba(0, 0, 0, 0.72);
+  --color-overlay-text: #f2f5f4;
 }
 
 :root[data-theme='dark'] {

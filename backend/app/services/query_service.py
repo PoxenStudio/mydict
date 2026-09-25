@@ -288,10 +288,16 @@ def search_word(
     # 不依赖数据库返回行的顺序。
     order = {d.id: index for index, d in enumerate(candidates.dictionaries)}
     results = []
+    seen_targets: set[tuple[int, int]] = set()
     for e in entries:
         # 释义是 @@@LINK= 时跟进到目标词条取内容；但词头仍显示用户查到的那个，
         # 否则标题行的词会突然变成另一个写法（如「中国」变成「中国【ちゅうごく①】」）
         resolved = _resolve_link(db, e)
+        # 同一部词典里几个变体（简繁、大小写）跳到同一个目标时只留一条，否则同一份释义重复出现
+        target = (e.dictionary_id, resolved.id)
+        if target in seen_targets:
+            continue
+        seen_targets.add(target)
         item = {
             # 条目主键。同一部词典里可能有**多条同名词条**（MDict 允许），前端拿它做
             # key 与寻址——只用 (dictionary_id, word) 会在这种情况下撞在一起。
@@ -359,7 +365,12 @@ def get_entries_for_document(
         entries = statement.filter(DictEntry.id.in_(entry_ids)).order_by(DictEntry.id).all()
     if not entries:
         entries = statement.order_by(DictEntry.id).all()
-    return [_resolve_link(db, entry) for entry in entries]
+    # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
+    resolved: dict[int, DictEntry] = {}
+    for entry in entries:
+        target = _resolve_link(db, entry)
+        resolved.setdefault(target.id, target)
+    return list(resolved.values())
 
 
 def suggest_prefix(

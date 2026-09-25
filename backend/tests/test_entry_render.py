@@ -645,6 +645,8 @@ def test_bootstrap_decodes_speex_in_the_browser() -> None:
     assert "/speex/bitstring.min.js" in html and "/speex/pcmdata.min.js" in html
     # 双声道采样率减半的经验修正（NHK 的 32kHz 双声道 spx 不减半会播放过快）
     assert "header.rate = header.rate / 2" in html
+    # 解码出的 WAV 用 blob URL 播放，换源时要释放上一份，否则每播一次泄漏一块内存
+    assert "URL.revokeObjectURL(el.__mydictBlobUrl)" in html
     # 内联脚本不能出现 </script
     start = html.index(BOOT_MARK)
     block = html[html.rindex("<script>", 0, start) : html.index("</script>", start)]

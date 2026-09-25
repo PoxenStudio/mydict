@@ -181,3 +181,28 @@ async def test_plain_definition_is_untouched(
     set_setting(db_session, "open_access", "true")
 
     assert (await _search(client, "普通词", dict_id))["definition"] == definition
+
+
+async def test_variants_redirecting_to_same_target_are_deduplicated(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """简繁两种写法都跳到同一个目标时，结果与词条文档里都只出现一份释义。"""
+    dict_id = await _make_dictionary(
+        client,
+        admin_headers,
+        "同目标跳转",
+        [
+            ("中国", "@@@LINK=中国【ちゅうごく】"),
+            ("中國", "@@@LINK=中国【ちゅうごく】"),
+            ("中国【ちゅうごく】", "<p>唯一的正文</p>"),
+        ],
+    )
+    set_setting(db_session, "open_access", "true")
+
+    resp = await client.get("/api/dict/search", params={"word": "中国", "dict": str(dict_id)})
+    results = resp.json()["results"]
+    assert len(results) == 1, results
+
+    resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "中国"})
+    assert resp.status_code == 200
+    assert resp.text.count("唯一的正文") == 1

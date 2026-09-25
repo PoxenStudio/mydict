@@ -169,6 +169,7 @@ onBeforeUnmount(() => {
 }
 
 .scroll-btn svg {
+  /* 一次性取值：箭头图标在 44px 圆按钮里取约三分之一，视觉上最均衡 */
   width: 15px;
   height: 15px;
   fill: currentColor;
