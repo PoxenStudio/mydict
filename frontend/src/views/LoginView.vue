@@ -36,6 +36,7 @@ async function onSubmit() {
       </el-button>
     </el-form>
     <p class="switch-link">还没有账号？<router-link to="/register">去注册</router-link></p>
+    <p class="switch-link back-home"><router-link to="/">返回首页</router-link></p>
   </AuthCard>
 </template>
 
@@ -45,5 +46,9 @@ async function onSubmit() {
   text-align: center;
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
+}
+
+.back-home {
+  margin-top: var(--space-2);
 }
 </style>

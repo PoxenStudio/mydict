@@ -1263,3 +1263,533 @@ async def test_batch_status_requires_admin(client: AsyncClient) -> None:
         json={"dictionary_ids": [1], "status": "enabled"},
     )
     assert resp.status_code == 401
+
+
+# --------------------------------------------------------------------- 批量重命名
+
+
+async def _import_named_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], name: str
+) -> int:
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
+        data={"name": name, "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+        files={"files": ("rename.csv", _ecdict_csv_bytes(), "text/csv")},
+    )
+    return dictionary["id"]
+
+
+async def _names(client: AsyncClient, admin_headers: dict[str, str]) -> dict[int, str]:
+    listing = await client.get("/api/admin/dictionaries", headers=admin_headers)
+    return {d["id"]: d["name"] for d in listing.json()}
+
+
+async def test_rename_preview_does_not_touch_names(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """dry_run 只回对照表：正则写错一次能改坏几十个名字，得先能看见结果再决定。"""
+    first = await _import_named_dictionary(client, admin_headers, "[中]汉典")
+    second = await _import_named_dictionary(client, admin_headers, "[日]大辞林")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": r"^\[[中英日]\]",
+            "replacement": "",
+            "dictionary_ids": [first, second],
+            "dry_run": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["applied"] is False
+    assert {item["new_name"] for item in body["items"]} == {"汉典", "大辞林"}
+
+    names = await _names(client, admin_headers)
+    assert names[first] == "[中]汉典"
+
+
+async def test_rename_applies_changes(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    dictionary_id = await _import_named_dictionary(client, admin_headers, "[英]牛津高阶")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": r"^\[英\]",
+            "replacement": "",
+            "dictionary_ids": [dictionary_id],
+            "dry_run": False,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["applied"] is True
+    assert (await _names(client, admin_headers))[dictionary_id] == "牛津高阶"
+
+
+async def test_rename_supports_backreferences(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """替换串支持 \\1 这类反向引用，方便只保留捕获到的分组。"""
+    dictionary_id = await _import_named_dictionary(client, admin_headers, "汉典（中华书局）")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": r"^(.+?)（.+）$",
+            "replacement": r"\1",
+            "dictionary_ids": [dictionary_id],
+            "dry_run": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["new_name"] == "汉典"
+
+
+async def test_rename_skips_names_that_would_become_empty(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """替换结果为空就跳过：留一个不可用的名字比不改更糟。"""
+    dictionary_id = await _import_named_dictionary(client, admin_headers, "词库")
+
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={
+            "pattern": "^.*$",
+            "replacement": "",
+            "dictionary_ids": [dictionary_id],
+            "dry_run": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"] == []
+
+
+async def test_rename_rejects_invalid_pattern(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        headers=admin_headers,
+        json={"pattern": "([", "replacement": "", "dry_run": True},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "validation_error"
+
+
+async def test_rename_requires_admin(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries/rename",
+        json={"pattern": "a", "replacement": "", "dry_run": True},
+    )
+    assert resp.status_code == 401
+
+
+# ------------------------------------------- MDict 同级附属资源（CSS/字体/脚本）
+#
+# MDict 的惯例是把样式表、字体、脚本放在 .mdx 同级目录，词条里的 <link href="oxbw.css">
+# 就指着它们（大辞泉、岩波、広辞苑、明镜、新世纪、Weblio 等 63 部全是这样，Weblio 甚至
+# 没有 .mdd）。早先只解包 .mdd，这些文件全部 404，于是图标按原始像素渲染、表格丢边框。
+
+
+async def test_import_from_dicts_dir_copies_sibling_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """导入时把 .mdx 同级的 CSS 一并复制进 res/，词典本体不进 res/。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    files["mini.css"] = b"img.audio{height:1em}"
+    settings = get_settings()
+
+    rel = _write_scratch("sibling-res", files)
+    resp = await client.post(
+        "/api/admin/dictionaries/import-from-dicts-dir",
+        headers=admin_headers,
+        json={
+            "name": "Sibling Res",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    dict_id = task["result"]["dictionary_id"]
+
+    res = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+    # 同级 css 被复制过来（这正是图标尺寸与表格边框的来源）
+    assert (res / "mini.css").read_bytes() == b"img.audio{height:1em}"
+    # .mdd 照常解包
+    assert (res / "pic" / "apple.png").exists()
+    # 词典本体不进 res/：词条已入库、.mdd 已解包，复制本体只会白占几十 MB
+    assert not (res / "mini.mdx").exists()
+    assert not (res / "mini.mdd").exists()
+
+
+async def test_upload_accepts_sibling_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """浏览器上传也允许带上配套的 CSS/字体：MDict 的白名单此前只收 .mdx/.mdd，
+    上传的词典注定丢样式。伪装成词典仍不可行——解析阶段没有 .mdx 会直接报错。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+
+    dictionary = await import_dictionary(
+        client,
+        admin_headers,
+        data={
+            "name": "Uploaded Sibling",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+        },
+        files=[
+            ("files", ("mini.mdx", files["mini.mdx"], "application/octet-stream")),
+            ("files", ("mini.mdd", files["mini.mdd"], "application/octet-stream")),
+            ("files", ("mini.css", b"img.audio{height:1em}", "text/css")),
+        ],
+    )
+
+    storage = Path(settings.dictionary_storage_path) / str(dictionary["id"])
+    assert (storage / "res" / "mini.css").read_bytes() == b"img.audio{height:1em}"
+    # 上传的文件归档到本应用管理的 source/（repair-from-source 的源目录就是它）
+    assert (storage / "source" / "mini.css").exists()
+
+
+async def test_repair_from_source_backfills_existing_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """存量词典靠这个端点补文件——不必重新导入（大辞泉有 95 万词条，重导代价太大）。"""
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    rel = _write_scratch("repair-res", files)
+
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Repair Res",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    res = Path(settings.dictionary_storage_path) / str(dictionary["id"]) / "res"
+    # 模拟「修好之前导入的存量词典」：res/ 里没有同级 css
+    assert not (res / "mini.css").exists()
+    _write_scratch("repair-res", {"mini.css": b"img.audio{height:1em}"})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-from-source",
+        headers=admin_headers,
+        json={"dictionary_ids": [dictionary["id"]]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    # 结果里另有 styled_* 两个字段（样式展开），这里只钉住资源复制那部分
+    assert (task["result"]["dictionaries"], task["result"]["files"]) == (1, 1)
+
+    assert (res / "mini.css").read_bytes() == b"img.audio{height:1em}"
+
+    # 再跑一次：文件已在，不重复计数（幂等）
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-from-source",
+        headers=admin_headers,
+        json={"dictionary_ids": [dictionary["id"]]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert (task["result"]["dictionaries"], task["result"]["files"]) == (0, 0)
+
+
+async def test_repair_from_source_creates_res_dir_for_mdx_only_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """只有 .mdx 没有 .mdd 的词典也该补——它从来没有过 res/，但照样需要那个 css。
+
+    第一版实现写的是「没有 res/ 就跳过，说明用户当初勾了 skip_resources」，把这一整类
+    都误判掉了：Weblio類語辞典、moji辞書、thesaurus近反义词、搜韵诗词等 19 部全都只有
+    .mdx，而它们的释义引用照常被改写成了 /dict-res/…，缺了 css 表格就看不出是表格。
+    """
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    # 只导入 .mdx：没有 .mdd 就没有资源可解包，导入时也不会建 res/
+    rel = _write_scratch("repair-mdx-only", {"mini.mdx": files["mini.mdx"]})
+
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Repair Mdx Only",
+            "format": "mdict",
+            "lang_from": "en",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/mini.mdx"],
+        },
+    )
+    res = Path(settings.dictionary_storage_path) / str(dictionary["id"]) / "res"
+    assert not res.exists()
+    # 同级 css 是这个词典本来就有的，只是早先的导入代码没复制它
+    _write_scratch("repair-mdx-only", {"mini.css": b"table{border:1px solid}"})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-from-source",
+        headers=admin_headers,
+        json={"dictionary_ids": [dictionary["id"]]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    # 结果里另有 styled_* 两个字段（样式展开），这里只钉住资源复制那部分
+    assert (task["result"]["dictionaries"], task["result"]["files"]) == (1, 1)
+    assert (res / "mini.css").read_bytes() == b"table{border:1px solid}"
+
+
+async def test_repair_from_source_rejects_unknown_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-from-source",
+        headers=admin_headers,
+        json={"dictionary_ids": [999999]},
+    )
+    assert resp.status_code == 404
+
+
+async def test_repair_from_source_requires_admin(client: AsyncClient) -> None:
+    resp = await client.post("/api/admin/dictionaries/repair-from-source", json={})
+    assert resp.status_code == 401
+
+
+async def test_repair_from_source_expands_style_markers_of_stored_entries(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """存量词条里的 `` `编号` `` 由这个端点就地展开，不必重新导入。
+
+    造不出带 StyleSheet 的真实 .mdx（`mdict_utils.writer` 不支持写这个字段），所以替换
+    掉「读源文件样式表」这一步——被替换的是读文件的那一段，编排与写库走的都是生产代码。
+    """
+    from app.services import dictionary_service
+
+    files = _build_mdict_with_resource_bytes(tmp_path)
+    settings = get_settings()
+    rel = _write_scratch("repair-style", files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Repair Style",
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    dict_id = dictionary["id"]
+
+    # 模拟「标记没被展开就入了库」：mini.mdx 的词条是 apple，这里给同一部词典补一条带标记的
+    from app.models.dictionary import DictEntry
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.add(
+            DictEntry(
+                dictionary_id=dict_id,
+                word="不",
+                word_lower="不",
+                definition="`1`不`2`",
+                extra=None,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        dictionary_service,
+        "read_stylesheet",
+        lambda _path: {"1": ("<b>", "</b>"), "2": ("<br>", "")},
+    )
+
+    resp = await client.post(
+        "/api/admin/dictionaries/repair-from-source",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    # 样式展开与资源复制是两个独立计数
+    assert (task["result"]["styled_dictionaries"], task["result"]["styled_entries"]) == (1, 1)
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word_lower == "不")
+            .first()
+        )
+        assert row.definition == "<b>不</b><br>"
+    finally:
+        db.close()
+
+
+def _build_mdx_with_duplicate_headword(tmp_path: Path) -> dict[str, bytes]:
+    """造一个「同一词头两条、内容不同」的迷你 MDict。
+
+    MDict 就允许这样（搜韵诗词全文检索版里「毛泽东」有 82 条）。曾经的导入按词头去重只留
+    首条，于是这类词典被静默丢掉一大半内容。
+    """
+    from mdict_utils import writer
+
+    src = tmp_path / "dup_src"
+    src.mkdir()
+    (src / "words.txt").write_text(
+        "毛泽东\n<p>第一首</p>\n</>\n"
+        "毛泽东\n<p>第二首</p>\n</>\n"
+        "沁园春\n<p>别的词头</p>\n</>\n",
+        encoding="utf-8",
+    )
+    mdx = tmp_path / "dup.mdx"
+    writer.pack(
+        str(mdx),
+        writer.pack_mdx_txt(str(src / "words.txt"), encoding="utf-8"),
+        title="Dup",
+        description="",
+        encoding="utf-8",
+    )
+    return {"dup.mdx": mdx.read_bytes()}
+
+
+async def test_import_keeps_duplicate_headwords(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """同名词条要全部入库，查询返回多条且各带自己的 id。"""
+    files = _build_mdx_with_duplicate_headword(tmp_path)
+    rel = _write_scratch("dup-headword", files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Dup Headword",
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    dict_id = dictionary["id"]
+    # 两条同名 + 一条不同名 = 3 行；曾经去重后只剩 2 行
+    assert dictionary["word_count"] == 3
+    await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
+
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry, Dictionary
+
+    # 查询端点要走通（测试环境默认不开放匿名访问）
+    set_setting(SessionLocal(), "open_access", "true")
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word == "毛泽东")
+            .all()
+        )
+        assert len(rows) == 2
+        assert {r.definition.strip() for r in rows} == {"<p>第一首</p>", "<p>第二首</p>"}
+    finally:
+        db.close()
+
+    # 查询返回两条、id 各不相同
+    resp = await client.get("/api/dict/search", params={"word": "毛泽东"})
+    assert resp.status_code == 200, resp.text
+    items = [r for r in resp.json()["results"] if r["dictionary_id"] == dict_id]
+    assert len(items) == 2
+    assert len({item["id"] for item in items}) == 2
+
+    # 词条端点按 ids 聚合成一个文档：两条都在、带序号小标题；id 不属于这部词典的被忽略
+    ids = ",".join(str(item["id"]) for item in items) + ",99999999"
+    doc = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东", "entry_ids": ids},
+    )
+    assert doc.status_code == 200, doc.text
+    assert doc.text.count('<section class="mydict-entry">') == 2
+    assert "1/2" in doc.text and "2/2" in doc.text
+    assert "第一首" in doc.text and "第二首" in doc.text  # trailing \n 由 pack 保留，断言用 in
+
+
+async def test_reparse_restores_lost_duplicate_headwords(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """存量词典靠「重新解析」找回被去重丢掉的词条——词典 id 不变。
+
+    模拟老数据：导入后手工删掉其中一条同名词（当年的导入就是这么丢的），重解析后两条都在。
+    """
+    files = _build_mdx_with_duplicate_headword(tmp_path)
+    rel = _write_scratch("reparse-dup", files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": "Reparse Dup",
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{name}" for name in files],
+        },
+    )
+    dict_id = dictionary["id"]
+
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
+
+    db = SessionLocal()
+    try:
+        # 模拟旧导入的去重结果：只留首条
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word == "毛泽东")
+            .order_by(DictEntry.id)
+            .all()
+        )
+        db.delete(rows[1])
+        db.commit()
+        kept_before = {r.definition.strip() for r in db.query(DictEntry).filter(
+            DictEntry.dictionary_id == dict_id).all()}
+        assert kept_before == {"<p>第一首</p>", "<p>别的词头</p>"}
+    finally:
+        db.close()
+
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert task["result"] == {"dictionaries": 1, "entries": 3, "skipped": 0}
+
+    from app.models.dictionary import Dictionary as DictionaryModel
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id, DictEntry.word == "毛泽东")
+            .all()
+        )
+        assert {r.definition.strip() for r in rows} == {"<p>第一首</p>", "<p>第二首</p>"}
+        assert db.get(DictionaryModel, dict_id) is not None  # 词典 id 不变
+        assert db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).count() == 3
+    finally:
+        db.close()

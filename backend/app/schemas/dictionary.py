@@ -98,6 +98,44 @@ class BatchStatusRequest(BaseModel):
     status: Literal["enabled", "disabled"]
 
 
+class RenameDictionariesRequest(BaseModel):
+    """按正则批量重命名词典。
+
+    pattern 用 Python re 语法，replacement 支持 `\\1` 这类反向引用。dictionary_ids 留空表示
+    对全部词典生效。dry_run 默认 True：先预览一遍再应用，正则写错一次就能改坏几十个名字。
+    """
+
+    pattern: str = Field(min_length=1, max_length=200)
+    replacement: str = Field(default="", max_length=255)
+    dictionary_ids: list[int] | None = None
+    dry_run: bool = True
+
+
+class RenamePreviewItemOut(BaseModel):
+    id: int
+    name: str
+    new_name: str
+
+
+class RenameDictionariesOut(BaseModel):
+    """只回会被改名的那些：一次正则可能扫过几百部词典，把没命中的也回给前端没有意义。"""
+
+    items: list[RenamePreviewItemOut]
+    applied: bool
+
+
+class SpxScanRequest(BaseModel):
+    """dictionary_ids 留空表示扫描全部词典。"""
+
+    dictionary_ids: list[int] | None = None
+
+
+class SpxTranscodeRequest(BaseModel):
+    """单部与批量共用：列表长度 1 就是单部。"""
+
+    dictionary_ids: list[int] = Field(min_length=1, max_length=500)
+
+
 class AllowedDictionaryIdsRequest(BaseModel):
     """Token/用户「可用词典」设置共用的请求体：dictionary_ids 为 None 表示不限制。"""
 

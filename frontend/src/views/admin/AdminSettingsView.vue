@@ -6,6 +6,7 @@ import RefreshButton from '../../components/admin/RefreshButton.vue'
 
 const loading = ref(true)
 const saving = ref(false)
+// 运行时状态而非配置：容器里有没有 ffmpeg、已经转了多少
 
 const form = reactive({
   open_access: false,
@@ -28,8 +29,7 @@ const vocabUnlimited = computed({
 async function load() {
   loading.value = true
   try {
-    const settings = await settingsApi.getSettings()
-    Object.assign(form, settings)
+    Object.assign(form, await settingsApi.getSettings())
   } finally {
     loading.value = false
   }
@@ -171,5 +171,54 @@ h1 {
   gap: var(--space-3);
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
+}
+
+.hint {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  color: var(--color-text-tertiary);
+}
+
+.hint code {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-secondary);
+}
+
+.intro {
+  margin: 0 0 var(--space-4);
+  line-height: var(--leading-body);
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.install-guide {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.step {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  color: var(--color-text-secondary);
+}
+
+.code {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-base);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  overflow-x: auto;
+  white-space: pre;
 }
 </style>

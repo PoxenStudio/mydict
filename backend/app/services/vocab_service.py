@@ -133,6 +133,16 @@ def list_owner_languages(db: Session, owner_kind: OwnerKind, owner_id: int) -> l
     return sorted({row[0] for row in rows})
 
 
+def get_vocab_item(db: Session, owner_kind: OwnerKind, owner_id: int, item_id: int) -> object:
+    """取单条生词（校验归属），供渲染收藏时的释义快照使用。"""
+    model_cls = _MODEL_BY_KIND[owner_kind]
+    owner_field = _OWNER_FIELD_BY_KIND[owner_kind]
+    item = db.get(model_cls, item_id)
+    if item is None or getattr(item, owner_field) != owner_id:
+        raise NotFoundError("生词不存在")
+    return item
+
+
 def delete_vocab_item(db: Session, owner_kind: OwnerKind, owner_id: int, item_id: int) -> None:
     model_cls = _MODEL_BY_KIND[owner_kind]
     owner_field = _OWNER_FIELD_BY_KIND[owner_kind]

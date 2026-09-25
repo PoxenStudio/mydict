@@ -80,3 +80,22 @@ export interface TestQueryEntry {
   definition: string
   extra: Record<string, unknown> | null
 }
+
+// 批量按正则重命名。dictionary_ids 留空表示对全部词典生效；dry_run 为 true 时只回对照表、不写库。
+export interface RenameDictionariesPayload {
+  pattern: string
+  replacement: string
+  dictionary_ids?: number[]
+  dry_run: boolean
+}
+
+export interface RenamePreviewItem {
+  id: number
+  name: string
+  new_name: string
+}
+
+export interface RenameDictionariesResult {
+  items: RenamePreviewItem[]
+  applied: boolean
+}

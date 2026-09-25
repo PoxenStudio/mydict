@@ -18,19 +18,27 @@ from app.models.audit import AuditLog
 from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
-from app.parsers.mdict import MDictParser
+from app.parsers.mdict import MDictParser, read_stylesheet
 from app.parsers.stardict import StarDictParser, parse_ifo
 from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
 from app.services.background_task_service import background_tasks
+from app.services.definition_repair import (
+    dictionaries_using_style_markers,
+    expand_stored_styles,
+)
 from app.services.language_detect import detect_language
+from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 
 logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
 
-# 语言识别采样条数
-_SAMPLE_LIMIT = 200
+# 语言识别采样条数。词头能做到跨整部词典均匀取样（MDict 的词头表在打开时就已全部读入
+# 内存，按下标取值是纯内存操作），所以多取一些几乎不花钱；释义只能顺序多读再过滤，
+# 取 200 条足够判断文字种类，再多只是浪费解析时间。
+_SAMPLE_HEADWORD_LIMIT = 500
+_SAMPLE_DEFINITION_LIMIT = 200
 
 # 识别不出语言时的兜底方向，与前端导入弹窗默认值一致
 _FALLBACK_LANG_FROM = "en"
@@ -44,8 +52,12 @@ _PARSERS: dict[str, type[DictionaryParser]] = {
 
 # 上传/目录导入时按声明的 format 做文件后缀白名单校验，防止内容与声明格式不符
 # （如把任意文件伪装成词典上传）；具体格式细节仍由各 Parser 在解析阶段兜底校验。
+#
+# mdict 额外允许 MDict 的附属资源（CSS/字体/JS/图片）——它们按惯例放在 .mdx 同级目录，
+# 词条里的 <link href="oxbw.css"> 就指着它们。只收 .mdx/.mdd 会让上传的词典丢样式。
+# 伪装成词典仍不可行：解析阶段没有 .mdx 会直接报错。
 _ALLOWED_EXTENSIONS: dict[str, set[str]] = {
-    "mdict": {".mdx", ".mdd"},
+    "mdict": {".mdx", ".mdd"} | SIBLING_RESOURCE_EXTENSIONS,
     "stardict": {".ifo", ".idx", ".dict", ".syn", ".dict.dz", ".idx.gz"},
     "ecdict": {".csv"},
 }
@@ -449,6 +461,7 @@ def _run_import_in_background(
             import_method=import_method,
             skip_resources=skip_resources,
         )
+        db.commit()
         background_tasks.succeed(
             task_id,
             {
@@ -456,6 +469,7 @@ def _run_import_in_background(
                 "word_count": dictionary.word_count,
                 "lang_from": dictionary.lang_from,
                 "lang_to": dictionary.lang_to,
+                "spx_pending_count": dictionary.spx_pending_count,
             },
         )
     except AppError as exc:
@@ -463,6 +477,228 @@ def _run_import_in_background(
     except Exception:
         logger.exception("词典导入后台任务失败：%s", name)
         background_tasks.fail(task_id, "导入失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
+def _spx_targets(db: Session, dictionary_ids: list[int] | None) -> list[Dictionary]:
+    """解析要处理的词典；传了 id 就按传入顺序返回，任一个不存在就整体拒绝。"""
+    query = db.query(Dictionary)
+    if not dictionary_ids:
+        return query.order_by(Dictionary.sort_order, Dictionary.id).all()
+    unique = list(dict.fromkeys(dictionary_ids))
+    found = {d.id: d for d in query.filter(Dictionary.id.in_(unique)).all()}
+    missing = [dict_id for dict_id in unique if dict_id not in found]
+    if missing:
+        raise NotFoundError(f"包含不存在的词典 ID：{missing}")
+    return [found[dict_id] for dict_id in unique]
+
+
+def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Settings) -> int:
+    """登记「重新解析」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
+
+    修「同名词词条被去重丢掉」用的：早先的导入按 `UNIQUE(dictionary_id, word)` 只保留每个
+    词头的首条，在 63 部词典上静默丢了 1,445,181 条。约束去掉之后，**已入库的数据不会自动
+    长出缺失的那些行**，需要重读一遍源文件重新入库。
+
+    **原地**：词典 id 不变——Token/用户的「可用词典」白名单、生词本（存的是词典 id 加释义
+    快照，词典本身没动）、检索范围勾选全都不用重配。词条 id 会变，但没有任何数据引用它。
+
+    做法是「先清空这部词典的词条、再全量重灌」：
+    - 保证释义用的是**当前**的改写规则。此前有几轮改写修复（`@@@LINK=` 解引用是查询时的、
+      但资源引用改写与样式展开是导入时做的），老行是老规则产出的，只补缺失行会把新旧两种
+      格式混在同一部词典里。
+    - 失败了直接重跑一遍即可，没有半途状态要收拾（每次跑都从清空开始）。
+    """
+    targets = _spx_targets(db, dictionary_ids)
+    task = background_tasks.start("dictionary_reparse", "重新解析词典")
+    threading.Thread(
+        target=_run_reparse_in_background,
+        args=(task.id, [d.id for d in targets], settings),
+        daemon=True,
+    ).start()
+    return task.id
+
+
+def _run_reparse_in_background(
+    task_id: int, dictionary_ids: list[int], settings: Settings
+) -> None:
+    """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
+    db = SessionLocal()
+    try:
+        total = len(dictionary_ids)
+        reparsed = 0
+        skipped = 0
+        entries_total = 0
+        for index, dict_id in enumerate(dictionary_ids, start=1):
+            dictionary = db.get(Dictionary, dict_id)
+            if dictionary is None:  # 期间被删掉了
+                continue
+            paths = source_paths_for(dictionary)
+            if not paths:
+                # 源文件不在（导入后挪走了/删了）——这部词典没法重解析，跳过并计数
+                skipped += 1
+                background_tasks.update_progress(task_id, {"done": index, "total": total})
+                continue
+
+            parser = _PARSERS[dictionary.format]()
+            storage_root = Path(settings.dictionary_storage_path) / str(dict_id)
+            # 勾了「不导入发音/图片」的词典没有 res/，parse 的 resource_dir 传 None：
+            # 释义不做资源引用改写，与当初导入时的行为一致
+            resource_dir = storage_root / "res" if (storage_root / "res").is_dir() else None
+
+            db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).delete()
+            db.commit()
+
+            def on_progress(
+                done: int, _task_id: int = task_id, _index: int = index, _total: int = total
+            ) -> None:
+                # 里层的词条级进度对外展示成「词典 x / y · 已写入 n 条」，让用户知道没卡死
+                background_tasks.update_progress(
+                    _task_id, {"done": _index - 1, "total": _total, "entries": done}
+                )
+
+            try:
+                count = _batch_insert(
+                    db,
+                    dict_id,
+                    parser.parse(paths, dictionary_id=dict_id, resource_dir=resource_dir),
+                    on_progress=on_progress,
+                )
+            except Exception:
+                # 解析失败：这部词典的词条已经被清掉了。源文件还在，重跑一次本任务即可，
+                # 所以这里把错误如实报出去，不做半吊子的回滚。
+                db.rollback()
+                raise
+            dictionary.word_count = count
+            db.commit()
+            reparsed += 1
+            entries_total += count
+            background_tasks.update_progress(task_id, {"done": index, "total": total})
+
+        if entries_total:
+            # 词条整个换过一遍，进程内的查询结果缓存里全是旧快照
+            invalidate_query_cache()
+        background_tasks.succeed(
+            task_id, {"dictionaries": reparsed, "entries": entries_total, "skipped": skipped}
+        )
+    except Exception:
+        logger.exception("重新解析词典失败")
+        background_tasks.fail(task_id, "重新解析失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
+def start_source_repair(
+    db: Session, dictionary_ids: list[int] | None, settings: Settings
+) -> int:
+    """登记「从源文件修复」后台任务，返回 task_id；dictionary_ids 为空表示全部词典。
+
+    修的是「导入时漏掉、只存在于源文件里的东西」，一次做两件事：
+
+    1. **补齐 `.mdx` 同级的附属资源**（CSS/字体/脚本/图片）。早期导入只解包 `.mdd`，
+       而这些文件按 MDict 惯例就躺在 `.mdx` 旁边，于是 63 部词典全部 404——图标按原始
+       像素渲染（大辞泉的发音图标 75×74、岩波的派生語图标 387×150）、表格丢掉边框。
+    2. **展开词条里的 `` `编号` `` 样式标记**。规则来自 `.mdx` 头部的 `StyleSheet` 字段，
+       此前完全没处理，于是 `` `1` `` `` `2` `` 直接显示出来（多功能汉语辞典全部 10 万条中招）。
+
+    两者都**不需要重新导入任何词典**。跑完会使查询结果缓存失效——释义被就地改写了，
+    缓存里还存着旧快照。
+    """
+    targets = _spx_targets(db, dictionary_ids)
+    task = background_tasks.start("dictionary_source_repair", "从源文件修复")
+    threading.Thread(
+        target=_run_source_repair_in_background,
+        args=(task.id, [d.id for d in targets], settings),
+        daemon=True,
+    ).start()
+    return task.id
+
+
+def _source_files(dictionary: Dictionary) -> list[Path]:
+    """`file_path` 里记录的那些源文件路径（`dicts_dir` 存文件列表、`upload` 存 source/ 目录）。"""
+    return [
+        Path(raw.strip()) for raw in (dictionary.file_path or "").split(";") if raw.strip()
+    ]
+
+
+def _source_stylesheet(sources: list[Path]) -> dict[str, tuple[str, str]]:
+    """从这部词典的 `.mdx` 里读 `StyleSheet`；读不到就返回空表。
+
+    调用方已经确认过这部词典的词条里真的含反引号，所以这里才敢打开 `.mdx`——打开会把整份
+    词头索引读进内存。源文件被删、或是不支持的压缩（LZO）导致打不开时，只记一条 warning
+    并返回空表：这类词典仍可正常查词，只是这条存量修复做不了。
+    """
+    for source in sources:
+        path = source
+        if path.is_dir():
+            found = sorted(path.glob("*.mdx"))
+            if not found:
+                continue
+            path = found[0]
+        if path.suffix.lower() != ".mdx" or not path.is_file():
+            continue
+        try:
+            return read_stylesheet(path)
+        except Exception:
+            logger.warning("读取 %s 的 StyleSheet 失败，跳过样式展开", path, exc_info=True)
+    return {}
+
+
+def _run_source_repair_in_background(
+    task_id: int, dictionary_ids: list[int], settings: Settings
+) -> None:
+    """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
+    db = SessionLocal()
+    try:
+        total = len(dictionary_ids)
+        repaired = 0
+        copied = 0
+        styled_dictionaries = 0
+        styled_entries = 0
+        # 先定位「词条里真的含反引号」的词典，只对这些打开 .mdx（见该函数的注释）
+        with_markers = dictionaries_using_style_markers(db, set(dictionary_ids))
+        for index, dict_id in enumerate(dictionary_ids, start=1):
+            dictionary = db.get(Dictionary, dict_id)
+            if dictionary is None:  # 修复期间被删掉了
+                continue
+            sources = _source_files(dictionary)
+            # 不检查 res/ 是否已存在——`copy_sibling_resources` 会按需建目录。
+            # 曾经这里加过「没有 res/ 就跳过，说明用户当初勾了 skip_resources」，是错的：
+            # 只有 .mdx 没有 .mdd 的词典（Weblio類語辞典、moji辞書、thesaurus近反义词…）
+            # 同样没有 res/，但它们的释义引用照常被改写成了 /dict-res/…，正需要这个文件。
+            count = copy_sibling_resources(
+                Path(settings.dictionary_storage_path) / str(dict_id) / "res", sources
+            )
+            if count:
+                repaired += 1
+            copied += count
+
+            if dict_id in with_markers:
+                stylesheet = _source_stylesheet(sources)
+                if stylesheet:
+                    changed = expand_stored_styles(db, dict_id, stylesheet)
+                    if changed:
+                        styled_dictionaries += 1
+                        styled_entries += changed
+            background_tasks.update_progress(task_id, {"done": index, "total": total})
+
+        if styled_entries:
+            # 释义被就地改写，进程内的查询结果缓存里还存着旧快照（TTL 300s）。
+            # 应用内后台任务能直接清掉它，不需要像 CLI 那样重启容器。
+            invalidate_query_cache()
+        background_tasks.succeed(
+            task_id,
+            {
+                "dictionaries": repaired,
+                "files": copied,
+                "styled_dictionaries": styled_dictionaries,
+                "styled_entries": styled_entries,
+            },
+        )
+    except Exception:
+        logger.exception("从源文件修复失败")
+        background_tasks.fail(task_id, "修复失败：服务器内部错误，请查看后端日志")
     finally:
         db.close()
 
@@ -477,7 +713,10 @@ def _resolve_languages(
     if lang_from is not None and lang_to is not None:
         return lang_from, lang_to
     try:
-        detected_from, detected_to = detect_language(parser.sample(staged_paths, _SAMPLE_LIMIT))
+        detected_from, detected_to = detect_language(
+            parser.sample_headwords(staged_paths, _SAMPLE_HEADWORD_LIMIT),
+            [entry.definition for entry in parser.sample(staged_paths, _SAMPLE_DEFINITION_LIMIT)],
+        )
     except Exception:
         # 采样失败不该连累整次导入，回落默认方向，导入后可手动改
         logger.warning("语言方向自动识别失败，回落到默认值", exc_info=True)
@@ -587,13 +826,15 @@ def import_dictionary(
 
 
 def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) -> int:
+    """把解析出的词条写入 dict_entries，返回写入行数。
+
+    **同名词条全部保留**：MDict 允许同一词头有多条内容不同的条目（搜韵诗词全文检索版里
+    「毛泽东」有 82 条，是 82 首不同的诗词）。这里曾经按词头去重只留首条，结果在 63 部词典
+    上静默丢了 1,445,181 条内容——不报错，也不体现在 word_count 里。
+    """
     count = 0
     batch: list[DictEntry] = []
-    seen_words: set[str] = set()
     for entry in entries:
-        if entry.word in seen_words:
-            continue  # UNIQUE(dictionary_id, word)：同名词条（如 StarDict 别名冲突）仅保留首条
-        seen_words.add(entry.word)
         batch.append(
             DictEntry(
                 dictionary_id=dictionary_id,
@@ -617,6 +858,60 @@ def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) ->
     if on_progress:
         on_progress(count)
     return count
+
+
+def source_paths_for(dictionary: Dictionary) -> list[Path]:
+    """取回重新解析这部词典所需的源文件路径。
+
+    两种导入方式的 `file_path` 语义不同：dicts_dir 存的是源文件绝对路径（分号分隔），
+    upload 存的是归档目录（文件被移进该目录，无扩展名区分，直接取目录内全部文件）。
+    """
+    raw = (dictionary.file_path or "").strip()
+    if not raw:
+        return []
+    if dictionary.import_method == "upload":
+        source_dir = Path(raw)
+        if not source_dir.is_dir():
+            return []
+        return sorted(path for path in source_dir.iterdir() if path.is_file())
+    paths: list[Path] = []
+    for part in raw.split(";"):
+        part = part.strip()
+        if part and Path(part).is_file():
+            paths.append(Path(part))
+    return paths
+
+
+def detect_dictionary_language(dictionary: Dictionary) -> tuple[str | None, str | None]:
+    """按当前采样逻辑重新识别一部词典的语言方向。
+
+    只读源文件，不写库——调用方决定是否落库（见 apply_detected_language）。
+    """
+    paths = source_paths_for(dictionary)
+    if not paths:
+        raise ValidationAppError(f"找不到「{dictionary.name}」的源文件，无法重新识别")
+    parser = _PARSERS[dictionary.format]()
+    headwords = parser.sample_headwords(paths, _SAMPLE_HEADWORD_LIMIT)
+    definitions = [entry.definition for entry in parser.sample(paths, _SAMPLE_DEFINITION_LIMIT)]
+    return detect_language(headwords, definitions)
+
+
+def apply_detected_language(
+    db: Session, dictionary: Dictionary, detected_from: str | None, detected_to: str | None
+) -> bool:
+    """把重新识别出的语言方向写回；只覆盖**识别出结论**的那一侧，返回是否有改动。"""
+    changed = False
+    if detected_from and dictionary.lang_from != detected_from:
+        dictionary.lang_from = detected_from
+        changed = True
+    if detected_to and dictionary.lang_to != detected_to:
+        dictionary.lang_to = detected_to
+        changed = True
+    if changed:
+        db.commit()
+        # lang_from 直接决定查询路由，缓存里带的是词典名的查询结果快照，必须整体失效
+        invalidate_query_cache()
+    return changed
 
 
 def set_dictionary_status(
@@ -695,6 +990,64 @@ def update_dictionary_metadata(
     invalidate_query_cache()
     db.refresh(dictionary)
     return dictionary
+
+
+def rename_dictionaries(
+    db: Session,
+    *,
+    pattern: str,
+    replacement: str,
+    dictionary_ids: list[int] | None,
+    dry_run: bool,
+    admin_id: int,
+) -> dict:
+    """按正则批量重命名词典。
+
+    pattern 用 Python re 语法，replacement 支持 ``\\1`` 这类反向引用；dictionary_ids 留空表示
+    对全部词典生效。只动 name——format 决定当初怎么解析入库、改名不会重新解析，语言方向另有
+    批量识别的入口。
+
+    先预览（dry_run=True）再应用是刻意的：正则是全局替换，一次写错就能改坏几十部词典名，
+    而名字是用户唯一认得出哪部是哪部的标识。
+    """
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        raise ValidationAppError(f"正则表达式无效：{exc}") from exc
+
+    query = db.query(Dictionary)
+    if dictionary_ids:
+        query = query.filter(Dictionary.id.in_(list(dict.fromkeys(dictionary_ids))))
+
+    items: list[dict] = []
+    for dictionary in query.order_by(Dictionary.sort_order, Dictionary.id).all():
+        new_name = compiled.sub(replacement, dictionary.name).strip()
+        # 改成空名或超长名的跳过：留一个不可用的名字比不改更糟
+        if not new_name or new_name == dictionary.name or len(new_name) > 255:
+            continue
+        items.append({"id": dictionary.id, "name": dictionary.name, "new_name": new_name})
+
+    if not dry_run and items:
+        try:
+            for item in items:
+                db.get(Dictionary, item["id"]).name = item["new_name"]
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        for item in items:
+            log_action(
+                db,
+                actor_type="admin",
+                actor_id=admin_id,
+                action="dictionary.rename",
+                target=str(item["id"]),
+                detail={"from": item["name"], "to": item["new_name"]},
+            )
+        # 查询结果的缓存里带着词典名称快照
+        invalidate_query_cache()
+
+    return {"items": items, "applied": not dry_run}
 
 
 def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: Settings) -> None:

@@ -1,8 +1,9 @@
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from starlette.responses import FileResponse
 
 from app.api.admin.auth import router as admin_auth_router
@@ -21,11 +22,18 @@ from app.api.web.dict import router as web_dict_router
 from app.api.web.public_settings import router as web_public_settings_router
 from app.api.web.vocab import router as web_vocab_router
 from app.core.config import get_settings
+from app.core.db import get_db
 from app.core.exceptions import AppError, RateLimitedError
 from app.core.logging import configure_logging
 from app.core.migrate import run_migrations
 from app.core.version import get_app_version
-from app.services.resource_service import normalize_resource_path
+from app.services.resource_service import (
+    normalize_resource_path,
+    resolve_resource_file,
+    strip_legacy_file_prefix,
+)
+
+from app.services.settings_service import get_bool_setting
 from app.tasks.scheduler import start_scheduler
 
 settings = get_settings()
@@ -69,16 +77,37 @@ app.include_router(web_public_settings_router, prefix="/api")
 
 
 @app.get("/dict-res/{dictionary_id}/res/{resource_path:path}")
-def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
-    """只读对外暴露词典 res/ 子目录；source/ 原始文件不经此路由可达。"""
+def dict_resource(
+    dictionary_id: int, resource_path: str, db: Session = Depends(get_db)
+) -> FileResponse:
+    """只读对外暴露词典 res/ 子目录；source/ 原始文件不经此路由可达。
+
+    必须带 Access-Control-Allow-Origin：词条 iframe 用 sandbox="allow-scripts"
+    （不含 allow-same-origin），它是不透明源，加载这里的 @font-face 与 XHR 都算跨域，
+    没有这个头会**静默失败** —— 表现为词典自带字体/样式无声失效。资源本身是公开只读的，
+    放开跨域没有问题。
+
+    路径解析交给 `resolve_resource_file`：它除了精确匹配，还会兼容历史坏链接里多出来的
+    `file:/` 前缀、并按大小写不敏感兜底（词典多在 Windows 上打包，引用常与 `.mdd` 里的
+    键大小写不一致）。
+    """
     try:
         normalized = normalize_resource_path(resource_path)
     except ValueError:
         raise HTTPException(status_code=404) from None
-    target = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res" / normalized
-    if not target.is_file():
+    # 历史坏链接：早期改写把 file:///down/x.gif 拼成了 res/file:/down/x.gif
+    normalized = strip_legacy_file_prefix(normalized)
+    res_dir = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res"
+    target = resolve_resource_file(res_dir, normalized)
+    if target is None:
         raise HTTPException(status_code=404)
-    return FileResponse(target)
+    return FileResponse(
+        target,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 
 static_dir = Path(__file__).parent / "static"

@@ -12,6 +12,21 @@ class SystemSettingsOut(BaseModel):
     search_hint_text: str
 
 
+class SpxTranscodeStatusOut(BaseModel):
+    """发音实时转码的运行状态。
+
+    available 为 false 表示容器里没有可用的 ffmpeg（它不随镜像分发，需要自行挂载），
+    此时无论开关怎么设都不会转码。
+    """
+
+    available: bool
+    ffmpeg_path: str | None
+    ffmpeg_version: str | None
+    converted: int
+    failed: int
+    max_concurrent: int
+
+
 class PublicSettingsOut(BaseModel):
     """匿名可见的系统设置子集，供前台页面决定是否展示登录墙、站点名称等。"""
 

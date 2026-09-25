@@ -1,5 +1,8 @@
 import request from '../request'
-import type { SystemSettings, SystemSettingsUpdate } from '../../types/settings'
+import type {
+  SystemSettings,
+  SystemSettingsUpdate,
+} from '../../types/settings'
 
 export function getSettings() {
   return request.get<never, SystemSettings>('/admin/settings')

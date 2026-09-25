@@ -6,5 +6,6 @@
 @import './tokens/shadow.css';
 @import './tokens/breakpoint.css';
 @import './base.css';
+@import './scrollbar.css';
 @import './element-plus-theme.css';
 @import './transition.css';

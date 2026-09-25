@@ -37,17 +37,6 @@ def _enforce_rate_limit(db: Session, caller: ApiCaller, settings: Settings, word
             )
 
 
-def _parse_dict_ids(dict_param: str | None) -> list[int] | None:
-    if not dict_param:
-        return None
-    ids = []
-    for part in dict_param.split(","):
-        part = part.strip()
-        if part.isdigit():
-            ids.append(int(part))
-    return ids or None
-
-
 @router.get("/query", response_model=QueryResponse)
 def query_word(
     word: str,
@@ -63,7 +52,9 @@ def query_word(
 
     allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
     started = time.perf_counter()
-    results = query_service.search_word(db, word, _parse_dict_ids(dict), from_, to, allowed_ids)
+    results = query_service.search_word(
+        db, word, query_service.parse_dict_ids(dict), from_, to, allowed_ids
+    )
     duration_ms = int((time.perf_counter() - started) * 1000)
 
     if not full_style:
@@ -95,7 +86,9 @@ def suggest(
 ) -> SuggestResponse:
     _enforce_rate_limit(db, caller, settings, prefix)
     allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
-    words = query_service.suggest_prefix(db, prefix, _parse_dict_ids(dict), min(limit, 50), allowed_ids)
+    words = query_service.suggest_prefix(
+        db, prefix, query_service.parse_dict_ids(dict), min(limit, 50), allowed_ids
+    )
     return SuggestResponse(words=words)
 
 

@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as dictApi from '../../api/admin/dictionaries'
+import { resultNumber, useImportTask } from '../../composables/useImportTask'
 import DictionaryImportDialog from '../../components/admin/DictionaryImportDialog.vue'
+import DictionaryRenameDialog from '../../components/admin/DictionaryRenameDialog.vue'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
-import { LANGUAGE_OPTIONS, langLabel } from '../../utils/language'
+import EntryFrame from '../../components/EntryFrame.vue'
+import { LANGUAGE_OPTIONS, langGroupLabel, langGroupOf, langLabel } from '../../utils/language'
 import type { DictionaryItem, DictionaryStatus, TestQueryEntry } from '../../types/dictionary'
 
 const dictionaries = ref<DictionaryItem[]>([])
 const loading = ref(false)
+const renameDialogVisible = ref(false)
 
 async function loadDictionaries() {
   loading.value = true
@@ -21,7 +25,11 @@ async function loadDictionaries() {
   }
 }
 
-onMounted(loadDictionaries)
+const { waitForImportTask } = useImportTask()
+
+onMounted(() => {
+  loadDictionaries()
+})
 
 // --- 启用/禁用 ---
 async function toggleStatus(item: DictionaryItem) {
@@ -33,15 +41,57 @@ async function toggleStatus(item: DictionaryItem) {
   if (index !== -1) dictionaries.value[index] = updated
 }
 
+// --- 语种 tab 筛选 ---
+const activeLang = ref('all')
+
+/** tab 计数按**全量**统计——按过滤后的列表算，一点进去计数就归零了 */
+const langTabs = computed(() => {
+  const counts = new Map<string, number>()
+  for (const item of dictionaries.value) {
+    const group = langGroupOf(item.lang_from)
+    counts.set(group, (counts.get(group) ?? 0) + 1)
+  }
+  return [
+    { value: 'all', label: '全部', count: dictionaries.value.length },
+    ...[...counts].map(([group, count]) => ({
+      value: group,
+      label: langGroupLabel(group),
+      count,
+    })),
+  ]
+})
+
+const visibleDictionaries = computed(() =>
+  dictionaries.value.filter(
+    (item) =>
+      activeLang.value === 'all' || langGroupOf(item.lang_from) === activeLang.value,
+  ),
+)
+
+// 换筛选条件就清空勾选，否则下一步的批量操作会作用到看不见的行上
+watch([activeLang], () => {
+  selectedIds.value = []
+})
+
+/** 只有「全部」视图才能拖拽排序。
+
+    排序写的是**全量**顺序，而被过滤掉的行不在视野里——让它拖会把隐藏项的次序一起改乱，
+    而「移到哪」在隐藏项存在时本来就没有明确语义。 */
+const draggable = computed(() => activeLang.value === 'all')
+
 // --- 批量启用/停用 ---
 const selectedIds = ref<number[]>([])
 const statusBatchRunning = ref(false)
 
 const allSelected = computed(
-  () => dictionaries.value.length > 0 && selectedIds.value.length === dictionaries.value.length,
+  () =>
+    visibleDictionaries.value.length > 0 &&
+    visibleDictionaries.value.every((item) => selectedIds.value.includes(item.id)),
 )
 const someSelected = computed(
-  () => selectedIds.value.length > 0 && selectedIds.value.length < dictionaries.value.length,
+  () =>
+    !allSelected.value &&
+    visibleDictionaries.value.some((item) => selectedIds.value.includes(item.id)),
 )
 
 function toggleSelect(id: number) {
@@ -51,7 +101,7 @@ function toggleSelect(id: number) {
 }
 
 function toggleSelectAll(checked: string | number | boolean) {
-  selectedIds.value = checked ? dictionaries.value.map((item) => item.id) : []
+  selectedIds.value = checked ? visibleDictionaries.value.map((item) => item.id) : []
 }
 
 async function batchSetStatus(status: DictionaryStatus) {
@@ -155,6 +205,69 @@ async function onDrop(targetIndex: number) {
   dictionaries.value = await dictApi.reorderDictionaries(list.map((d) => d.id))
 }
 
+// --- 从源文件修复（附属资源 + 样式标记）/ 重新解析（重灌词条）---
+const resourceRunning = ref(false)
+const reparseRunning = ref(false)
+
+/**
+ * 从源文件修复：① 补源文件旁边的 CSS/字体/JS/图片；② 展开词条里的 `` `编号` `` 样式标记。
+ *
+ * 这两样都只存在于源文件里（MDict 把样式表放在 .mdx 同级目录、把标记规则放在 .mdx 头部的
+ * StyleSheet 字段），早先的导入都没读，于是存量词典要么缺样式文件、要么把标记原样显示成
+ * 排版错乱。这里不用重新导入任何词典；有勾选就只处理勾选的。
+ */
+async function repairFromSource() {
+  const ids = selectedIds.value.length ? [...selectedIds.value] : null
+  resourceRunning.value = true
+  try {
+    const { task_id } = await dictApi.repairFromSource(ids)
+    const task = await waitForImportTask(task_id, 30 * 60 * 1000)
+    const files = resultNumber(task, 'files') ?? 0
+    const styled = resultNumber(task, 'styled_entries') ?? 0
+    const parts = [`为 ${resultNumber(task, 'dictionaries') ?? 0} 部词典复制了 ${files} 个文件`]
+    if (styled) {
+      parts.push(`展开了 ${resultNumber(task, 'styled_dictionaries') ?? 0} 部词典的 ${styled.toLocaleString()} 条样式标记`)
+    }
+    ElMessage.success(`修复完成：${parts.join('；')}`)
+  } finally {
+    resourceRunning.value = false
+  }
+}
+
+/**
+ * 重新解析：重读源文件、把词条整个重灌一遍（词典 id 不变）。
+ *
+ * 给「同名词词条曾被按词头去重丢掉」的存量词典找回内容。词条 id 会变（没有数据引用它），
+ * 生词本存的是释义快照与词典 id，不受影响。
+ */
+async function reparseDictionaries() {
+  const ids = selectedIds.value.length ? [...selectedIds.value] : null
+  try {
+    await ElMessageBox.confirm(
+      '将重读源文件、把所选词典的词条整个重灌一遍，找回当年被「同名去重」丢掉的内容。' +
+        '大词典要跑很久（搜韵 826 万条约几十分钟），期间这些词典的查询结果不完整。',
+      '重新解析',
+      { type: 'warning', confirmButtonText: '开始重新解析' },
+    )
+  } catch {
+    return
+  }
+  reparseRunning.value = true
+  try {
+    const { task_id } = await dictApi.reparseDictionaries(ids)
+    const task = await waitForImportTask(task_id, 6 * 60 * 60 * 1000)
+    ElMessage.success(
+      `重新解析完成：${resultNumber(task, 'dictionaries') ?? 0} 部词典共 ` +
+        `${(resultNumber(task, 'entries') ?? 0).toLocaleString()} 条` +
+        (resultNumber(task, 'skipped')
+          ? `，跳过 ${resultNumber(task, 'skipped')} 部（找不到源文件）`
+          : ''),
+    )
+  } finally {
+    reparseRunning.value = false
+  }
+}
+
 // --- 导入弹窗 ---
 const importDialogVisible = ref(false)
 
@@ -178,12 +291,6 @@ async function runTestQuery() {
     testQueryWord.value.trim(),
   )
 }
-
-// 部分 ECDICT 数据（含已导入的旧数据）把多行释义存成字面 "\n" 而非真换行，
-// 这里兜底转换一次，避免预览里直接显示出 \n 这两个字符。
-function definitionHtml(definition: string) {
-  return definition.replace(/\\n/g, '\n')
-}
 </script>
 
 <template>
@@ -193,7 +300,25 @@ function definitionHtml(definition: string) {
         <h1>词典管理</h1>
         <RefreshButton :loading="loading" @refresh="loadDictionaries" />
       </div>
+      <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
+      <el-button :loading="reparseRunning" @click="reparseDictionaries">重新解析</el-button>
+      <el-button @click="renameDialogVisible = true">批量重命名</el-button>
       <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
+    </div>
+
+    <div class="filter-bar">
+      <div class="lang-tabs">
+        <button
+          v-for="tab in langTabs"
+          :key="tab.value"
+          type="button"
+          class="lang-tab"
+          :class="{ active: activeLang === tab.value }"
+          @click="activeLang = tab.value"
+        >
+          {{ tab.label }}<span class="tab-count">{{ tab.count }}</span>
+        </button>
+      </div>
     </div>
 
     <div v-if="selectedIds.length" class="batch-bar">
@@ -229,11 +354,11 @@ function definitionHtml(definition: string) {
       </div>
 
       <div
-        v-for="(item, index) in dictionaries"
+        v-for="(item, index) in visibleDictionaries"
         :key="item.id"
         class="dict-row"
         :class="{ selected: selectedIds.includes(item.id) }"
-        draggable="true"
+        :draggable="draggable"
         @dragstart="onDragStart(index)"
         @dragover.prevent
         @drop="onDrop(index)"
@@ -245,8 +370,15 @@ function definitionHtml(definition: string) {
             @change="toggleSelect(item.id)"
           />
         </span>
-        <span class="col-drag" title="拖拽调整顺序">⠿</span>
-        <span class="col-name">{{ item.name }}</span>
+        <span
+          class="col-drag"
+          :class="{ disabled: !draggable }"
+          :title="draggable ? '拖拽调整顺序' : '筛选状态下不能排序——顺序是全局的'"
+          >⠿</span
+        >
+        <span class="col-name">
+          <span class="dict-name-text" :title="item.name">{{ item.name }}</span>
+        </span>
         <span class="col-format"
           ><el-tag size="small">{{ item.format }}</el-tag></span
         >
@@ -270,6 +402,9 @@ function definitionHtml(definition: string) {
 
       <div v-if="!loading && dictionaries.length === 0" class="empty-state">
         暂无词典，点击右上角「导入词典」开始导入。
+      </div>
+      <div v-else-if="!loading && visibleDictionaries.length === 0" class="empty-state">
+        当前筛选条件下没有词典。
       </div>
     </div>
 
@@ -309,6 +444,12 @@ function definitionHtml(definition: string) {
 
     <DictionaryImportDialog v-model="importDialogVisible" @imported="loadDictionaries" />
 
+    <DictionaryRenameDialog
+      v-model="renameDialogVisible"
+      :selected-ids="selectedIds"
+      @renamed="loadDictionaries"
+    />
+
     <el-dialog
       v-model="testQueryDialogVisible"
       :title="`测试查询 - ${testQueryTarget?.name ?? ''}`"
@@ -320,13 +461,26 @@ function definitionHtml(definition: string) {
             <el-button @click="runTestQuery">查询</el-button>
           </template>
         </el-input>
-        <div class="test-query-results">
-          <div v-for="(entry, i) in testQueryResults" :key="i" class="result-card">
+        <div class="test-query-results app-scrollbar">
+          <div
+            v-for="(entry, i) in testQueryResults"
+            :key="`${entry.word}-${i}`"
+            class="result-card"
+          >
             <div class="result-word">
               {{ entry.word }}
               <span v-if="entry.phonetic" class="result-phonetic">[{{ entry.phonetic }}]</span>
             </div>
-            <div class="result-definition" v-html="definitionHtml(entry.definition)"></div>
+            <!--
+              用隔离 iframe 而不是 v-html：管理端 token 也在 localStorage 里，直接注入
+              第三方词典的 HTML 等于把权限最高的凭证暴露出去（词典的 <style> 还会污染
+              整个后台界面）。
+            -->
+            <EntryFrame
+              v-if="testQueryTarget"
+              :key="`${entry.word}-${i}`"
+              :loader="() => dictApi.getEntryHtml(testQueryTarget!.id, entry.word)"
+            />
           </div>
           <p v-if="testQueryWord && testQueryResults.length === 0" class="hint">未查询到结果</p>
         </div>
@@ -337,7 +491,8 @@ function definitionHtml(definition: string) {
 
 <style scoped>
 .page {
-  max-width: var(--size-content-md);
+  /* 这个列表列最多（勾选/拖拽/名称/格式/语言/词条数/状态/操作），960px 太挤 */
+  max-width: var(--size-content-lg);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
@@ -365,7 +520,60 @@ function definitionHtml(definition: string) {
   background: var(--color-bg-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
-  overflow: hidden;
+  /* 窄窗口时横向滚动，而不是把 8 列压成不可读——行自己带 min-width */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.lang-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.lang-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.lang-tab:hover {
+  background: var(--color-hover-tint);
+}
+
+.lang-tab.active {
+  background: var(--color-brand-500);
+  color: #fff;
+}
+
+.tab-count {
+  font-size: var(--text-xs);
+  opacity: 0.75;
+}
+
+.need-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .batch-bar {
@@ -388,12 +596,14 @@ function definitionHtml(definition: string) {
 .dict-list-header,
 .dict-row {
   display: grid;
+  /* 名称列与操作列放宽：词典名可能很长，操作列要放得下三个按钮 */
   grid-template-columns:
     var(--size-control-md) var(--size-control-md)
-    2fr 1fr 1fr 0.8fr 0.8fr 1.4fr;
+    minmax(0, 2fr) 1fr 1fr 0.8fr 0.8fr minmax(220px, 1.8fr);
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
+  min-width: 980px;
 }
 
 .dict-list-header {
@@ -425,6 +635,24 @@ function definitionHtml(definition: string) {
 .col-drag {
   color: var(--color-text-tertiary);
   text-align: center;
+}
+
+.col-drag.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.col-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dict-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .col-actions {
@@ -482,12 +710,5 @@ function definitionHtml(definition: string) {
   font-weight: var(--font-weight-regular);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
-}
-
-.result-definition {
-  margin-top: var(--space-1);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  white-space: pre-wrap;
 }
 </style>

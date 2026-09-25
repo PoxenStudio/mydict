@@ -4,10 +4,10 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,6 +37,13 @@ class Dictionary(Base):
         String(16), default="dicts_dir", server_default="dicts_dir"
     )
     word_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 待转码的 .spx 发音数：同名同目录下没有非空 .mp3/.opus 产物的那些。
+    # 刻意不做实时扫描——The little dict 单部就有 67.6 万个资源文件，63 部逐个走一遍会让
+    # 列表接口卡死；改由「导入后检测 / 页面扫描发音资源 / 转码结束」三个时机写入。
+    spx_pending_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 上次检测时间；NULL 表示从未检测（存量数据）。用来把「扫过、无需转码」和「还没扫过」
+    # 区分开——这两种情况的 spx_pending_count 都是 0。
+    spx_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(16), default="disabled", server_default="disabled")
     imported_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -44,9 +51,20 @@ class Dictionary(Base):
 
 
 class DictEntry(Base):
+    """一部词典里的词条。
+
+    **同一部词典里允许存在多条同名词条**。MDict 就允许这样（搜韵诗词全文检索版里「毛泽东」
+    有 82 条，是 82 首不同的诗词）；早先按 `UNIQUE(dictionary_id, word)` 建表，导入时同名的
+    只留首条，于是在 63 部词典上静默丢了 1,445,181 条内容。
+
+    查询按 `dictionary_id` + `word_lower` 过滤，所以去掉唯一约束后要补一条复合索引顶上——
+    原来那条唯一索引建在 `(dictionary_id, word)` 上，用的是 word 而不是 word_lower，
+    对查询本来就使不上力。
+    """
+
     __tablename__ = "dict_entries"
     __table_args__ = (
-        UniqueConstraint("dictionary_id", "word", name="uq_dict_entries_dictionary_word"),
+        Index("ix_dict_entries_dict_word_lower", "dictionary_id", "word_lower"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

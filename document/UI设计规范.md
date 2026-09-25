@@ -1,7 +1,7 @@
 # MyDict UI 设计规范
 
-版本：v1.0
-日期：2026-09-10
+版本：v1.1
+日期：2026-09-21
 适用范围：前台查询/生词本页面 + 管理后台，共用同一套视觉系统
 
 ---
@@ -49,6 +49,16 @@
 | `--color-text-primary` | `#1A2420` | `#EAF1EE` | 正文 |
 | `--color-text-secondary` | `#5B6B65` | `#9DB0AA` | 次要文字 |
 | `--color-text-tertiary` | `#8B9A94` | `#71827C` | 占位符/禁用文字 |
+
+滚动条另有三个 Token，取值分别对齐 `--color-border-hover` 与 `--color-text-tertiary`，深浅两套主题都定义：
+
+| Token | 浅色主题 | 深色主题 | 用途 |
+|---|---|---|---|
+| `--color-scrollbar-thumb` | `#C7D1CD` | `#3C4850` | 滚动条滑块 |
+| `--color-scrollbar-thumb-hover` | `#8B9A94` | `#71827C` | 滑块 hover |
+| `--color-scrollbar-track` | `transparent` | `transparent` | 轨道，透明以彻底融进底色 |
+
+滚动条一律通过 `.app-scrollbar` 工具类（`styles/scrollbar.css`）套用，不要在各组件里各写一份 `::-webkit-scrollbar`：它是全局伪元素，写在 scoped 样式里编译后带上属性选择器就永远匹配不上。
 
 ### 2.3 语义色（Semantic）
 
@@ -104,6 +114,7 @@
 | Token | 取值 | 用途 |
 | --- | --- | --- |
 | `--size-content-md` | 960px | 管理后台列表页内容区最大宽度 |
+| `--size-content-lg` | 1220px | 列多的宽列表页（词典管理：勾选/拖拽/名称/格式/语言/词条数/状态/操作共 8 列） |
 | `--size-dialog-sm` | 420px | 表单较短的弹窗宽度 |
 | `--size-dialog-md` | 560px | 表单较长/含列表的弹窗宽度 |
 | `--size-popover-md` | 360px | 悬浮提示（文件清单等）宽度 |
@@ -111,6 +122,8 @@
 | `--size-scroll-sm` | 320px | 弹窗内可滚动列表的最大高度 |
 | `--size-scroll-md` | 360px | 弹窗内可滚动结果区的最大高度 |
 | `--size-control-md` | 32px | 与 Element Plus 默认控件同高的行/图标列宽度 |
+| `--size-control-lg` | 44px | 悬浮按钮（回到顶部/回到底部）的圆形直径，单指可稳妥点中 |
+| `--size-scrollbar-width` | 8px | 细滚动条宽度 |
 
 ## 6. 字体与排版
 
@@ -125,10 +138,11 @@
 
 ### 7.1 查询首页搜索框
 - 页面视觉焦点，采用较大尺寸（高度 ≥ 48px）、`--radius-full` 或 `--radius-lg` 圆角、`--shadow-elevation-1` 静态阴影，获得焦点时阴影升到 `--shadow-elevation-2` 并显示品牌色描边，体现"清新有质感"的首屏印象。
+- 页面布局为两列栅格：左列固定 240px 放检索范围（`position: sticky`，往下读词条时保持可见），右列上方是搜索框、下方是结果列表。搜索框左侧不留任何说明文字，站名、搜索提示语与部署版本号统一收在页面底部的页脚（`.site-footer`），让首屏只有"搜索框 + 结果"两件事。
 
 ### 7.2 词典释义卡片
 - 每部词典的释义作为一张独立卡片（`--shadow-elevation-1` + `--radius-lg`），卡片头部展示词典名称小标签，卡片内单词加粗、音标次要色、释义正文分词性分段；ECDICT 的标签（tag/collins/oxford/exchange）用 `--radius-full` 的 Pill 徽标，配合语义色区分（如考纲标签用 `--color-info` 浅底、词频/星级用 `--color-brand` 浅底）。
-- 多词典结果并列展示时，卡片间距取 `--space-4`，避免拥挤。
+- 多词典结果并列展示时，卡片间距取 `--space-2`；卡片头部（`.panel-header`）的垂直内边距取 `--space-1`，让折叠状态的标题行尽量矮——一次查询常命中十几部词典，标题行太高会把后续词典挤出屏幕。
 
 ### 7.3 按钮
 - 主按钮：`--color-brand-500` 填充，hover `--color-brand-600`，active `--color-brand-700`，`--radius-md`。
@@ -145,6 +159,19 @@
 - 空状态：居中图形（线性风格图标，非写实插画）+ 一句引导文案 + 可选操作按钮（如生词本为空时引导去查询页）。
 - 加载态：骨架屏（Skeleton）优先于 Loading 转圈，查询结果、统计图表、列表页统一使用骨架屏，减少"卡顿感"。
 - 错误态：区分"网络错误可重试"与"无结果"两种情况，前者给重试按钮，后者给友好文案（如"暂未收录该词，欢迎补充词典"）。
+
+### 7.7 悬浮滚动按钮（回到顶部 / 回到底部）
+- 形态：右下角竖排两个圆形按钮（直径 `--size-control-lg`、`--radius-full`），间距 `--space-2`，回到顶部在上、回到底部在下；图标是 `fill: currentColor` 的内联 SVG，随主题自动变色，不需要准备两套图标。
+- 底色：`color-mix(in srgb, var(--color-bg-surface-raised) 92%, transparent)` + `backdrop-filter: blur(6px)`，浮在词条正文上时不把内容整块切掉；hover 转为实底 `--color-bg-surface-raised`、阴影升到 `--shadow-elevation-2`，并轻微放大。
+- 显隐：滚动超过 200px 才整体出现（淡入淡出）；距底部不足 200px 时单独隐藏"回到底部"，只留"回到顶部"。
+- 层级：`z-index: 5`——高于页面内容，但低于移动端抽屉与 Element Plus 浮层，抽屉打开时自然被盖住。
+- 动效：300ms easeOutCubic 自行补间（不用 `behavior: 'smooth'`，便于统一降级）；系统开启"减少动态效果"时改为直接跳转。
+- 移动端（< 640px）缩到 38px 并更贴边。
+
+### 7.8 iframe 释义的暗色适配
+- 词典原文自带写死的颜色（白底黑字最常见），暗色主题下必须翻掉，否则是一整块刺眼的白。
+- 覆盖原则是**只翻明确写着黑/白的呈现**（`<font color="#000">`、内联 `style` 里的 `color:#000` / `background:#fff`），词典自带的红字、彩色表格等语义色一律保留。禁止用 `* { color: … !important }` 这类通配覆盖——那等于把词典排版一起改掉。
+- 实现上由后端在渲染词条时注入（见《技术方案设计.md》"词条渲染"），不改数据库里的释义，所以**新导入的词典自动适用**。
 
 ## 8. 主题切换
 

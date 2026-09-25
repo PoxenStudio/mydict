@@ -3,9 +3,11 @@ import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
+import EntryFrame from '../components/EntryFrame.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { deleteVocab, listVocab, listVocabLanguages } from '../api/vocab'
+import { getVocabEntryHtml } from '../api/dict'
 import { langLabel } from '../utils/language'
 import type { VocabItem } from '../types/vocab'
 
@@ -130,7 +132,18 @@ async function remove(item: VocabItem) {
               <span class="word">{{ item.word }}</span>
               <span v-if="item.phonetic" class="phonetic">[{{ item.phonetic }}]</span>
             </div>
-            <div class="definition" v-html="item.definition"></div>
+            <!--
+              释义用隔离 iframe 渲染：词典自带的 <style>/内联事件在应用源下会污染整个
+              界面、并让第三方词典脚本够到 localStorage 里的 token。
+              这里取的是**收藏当时的释义快照**（/vocab/{id}/entry），不是按词典实时取，
+              所以词典后来被删或改都不影响生词本。
+            -->
+            <EntryFrame
+              v-if="item.definition"
+              :key="item.id"
+              class="definition"
+              :loader="() => getVocabEntryHtml(item.id)"
+            />
             <p v-if="item.note" class="note">备注：{{ item.note }}</p>
           </div>
           <button type="button" class="remove-btn" aria-label="删除生词" @click="remove(item)">
@@ -240,10 +253,8 @@ async function remove(item: VocabItem) {
 }
 
 .definition {
+  display: block;
   margin-top: var(--space-2);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: var(--leading-body);
 }
 
 .note {
