@@ -101,6 +101,18 @@ docker exec -it mydict python -m app.cli reset-admin-password --username admin
 
 不会。`/data` 是独立的挂载卷，重新构建/替换镜像并用相同的 `-v` 挂载启动即可，容器启动时会自动执行数据库迁移。
 
+例外是**重型迁移**（会整表重建词条表）：词库较大时它不会在启动时自动跑：服务拒绝启动，`docker compose logs mydict` 里会看到提示（配置了 `restart: unless-stopped` 时容器会反复重启，属正常现象）。这时按下面的步骤手动执行：
+
+```bash
+docker compose stop mydict
+cp data/db/mydict.sqlite3 data/db/mydict.sqlite3.bak          # 先备份
+docker compose run --rm mydict python -m app.cli migrate          # 查看待执行的迁移与磁盘空间
+docker compose run --rm mydict python -m app.cli migrate --yes    # 执行（大库可能要几十分钟）
+docker compose up -d
+```
+
+重型迁移需要约与数据库文件同等大小的剩余磁盘空间；中途被打断可以直接重跑。想完全由自己掌控迁移时机，可以设置环境变量 `AUTO_MIGRATE=false`：有待执行的迁移时容器不启动，一律用上面的命令执行。
+
 **查询接口一直返回 401？**
 
 默认「开放使用」是关闭的，查询类接口必须携带有效 Token（或以登录用户身份访问网页版）；如需允许匿名查询，去后台「系统设置」打开「开放使用」。

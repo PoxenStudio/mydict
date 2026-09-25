@@ -5,6 +5,7 @@ import getpass
 import sys
 import time
 
+from app.core import migrate as migrations
 from app.core.db import SessionLocal
 from app.core.exceptions import AppError
 from app.core.security import hash_password
@@ -142,6 +143,49 @@ def redetect_languages(args: argparse.Namespace) -> None:
         db.close()
 
 
+def _format_size(num_bytes: int) -> str:
+    return f"{num_bytes / 1024**3:.1f}GB"
+
+
+def migrate(args: argparse.Namespace) -> None:
+    """手动执行数据库迁移。重型迁移不在启动时自动跑（见 app/core/migrate.py），走这里。
+
+    必须先停掉服务：迁移期间 SQLite 被独占，服务同时读写只会互相卡住。
+    """
+    pending = migrations.pending_migrations()
+    if not pending:
+        print("数据库已是最新版本，无需迁移")
+        return
+
+    print(f"待执行的迁移 {len(pending)} 个：")
+    for item in pending:
+        print(f"  {item.revision}  {item.title}{'  [重型：整表重建]' if item.heavy else ''}")
+
+    has_heavy = any(item.heavy for item in pending)
+    if has_heavy:
+        db_size, free = migrations.free_space_for_database()
+        print(
+            f"数据库文件 {_format_size(db_size)}，所在磁盘剩余 {_format_size(free)}。"
+            "重型迁移会整表重建，需要约与数据库同等大小的剩余空间，大库上要跑很久。"
+        )
+        if free < db_size:
+            print("剩余磁盘空间不足，已中止。请先腾出空间。", file=sys.stderr)
+            raise SystemExit(1)
+
+    if args.dry_run:
+        return
+    if not args.yes:
+        print(
+            "请先停止服务、备份数据库文件，确认后加 --yes 执行。中途被打断可以直接重跑。",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    started = time.monotonic()
+    migrations.upgrade_to_head()
+    print(f"迁移完成，用时 {time.monotonic() - started:.0f} 秒")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -174,6 +218,13 @@ def main() -> None:
     redetect_parser.add_argument("--dry-run", action="store_true", help="只识别不写入")
     redetect_parser.add_argument("--yes", action="store_true", help="确认执行写入")
     redetect_parser.set_defaults(func=redetect_languages)
+
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="手动执行数据库迁移（重型迁移不会在启动时自动执行）"
+    )
+    migrate_parser.add_argument("--dry-run", action="store_true", help="只列出待执行的迁移")
+    migrate_parser.add_argument("--yes", action="store_true", help="确认执行")
+    migrate_parser.set_defaults(func=migrate)
 
     args = parser.parse_args()
     args.func(args)
