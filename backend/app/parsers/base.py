@@ -87,6 +87,7 @@ class DictionaryParser(ABC):
         *,
         dictionary_id: int,
         resource_dir: Path | None,
+        overwrite_resources: bool = True,
     ) -> Iterator[ParsedEntry]:
         """流式解析词典文件，逐条 yield ParsedEntry。
 
@@ -95,6 +96,7 @@ class DictionaryParser(ABC):
         /dict-res/{dictionary_id}/res/... 绝对路径。
 
         resource_dir 为 None 表示不要资源：不落盘，也不改写 definition 里的资源引用。
+        overwrite_resources=False 时已存在的资源文件保持不动，只补缺失的（重新解析用）。
         """
         raise NotImplementedError
 

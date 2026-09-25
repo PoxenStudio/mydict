@@ -12,16 +12,23 @@ from app.core.deps import WebCaller, get_web_caller, require_user
 from app.core.exceptions import NotFoundError, RateLimitedError
 from app.models.dictionary import Dictionary
 from app.models.user import User
-from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, QueryResponse
+from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, WebQueryResponse
 from app.services import query_log_service, query_service
 from app.services.entry_render_service import render_entries_document
 from app.services.settings_service import get_int_setting
 
 router = APIRouter(prefix="/dict", tags=["web-dict"])
 
+# 词条文档的每分钟限额 = 查询限额 × 这个倍数。一次查询之后要展开多部词典、用 ←/→ 来回
+# 切换，每次都会取一次词条文档，所以给得比查询宽得多；但不能不限——否则它就成了绕过
+# 查询配额的抓取入口。
+_ENTRY_RATE_MULTIPLIER = 10
 
-def _enforce_web_rate_limit(db: Session, caller: WebCaller, settings: Settings, word: str) -> None:
-    """访客与匿名 API 调用共用同一套按 IP 限流规则；登录用户走单独的（通常更宽松的）按 IP
+
+def _ip_rate_limit(db: Session, caller: WebCaller, settings: Settings) -> tuple[str, int]:
+    """返回 (计数 key, 每分钟限额)。
+
+    访客与匿名 API 调用共用同一套按 IP 限流规则；登录用户走单独的（通常更宽松的）按 IP
     限流阈值。计数 key 按登录态区分前缀，避免同一 IP 下匿名与登录用户互相挤占对方的配额。
     """
     ip = caller.ip or "unknown"
@@ -29,12 +36,13 @@ def _enforce_web_rate_limit(db: Session, caller: WebCaller, settings: Settings, 
         limit = get_int_setting(
             db, "anonymous_ip_rate_limit_per_min", settings.anonymous_ip_rate_limit_per_min
         )
-        counter_key = f"anon:{ip}"
-    else:
-        limit = get_int_setting(
-            db, "user_ip_rate_limit_per_min", settings.user_ip_rate_limit_per_min
-        )
-        counter_key = f"user:{ip}"
+        return f"anon:{ip}", limit
+    limit = get_int_setting(db, "user_ip_rate_limit_per_min", settings.user_ip_rate_limit_per_min)
+    return f"user:{ip}", limit
+
+
+def _enforce_web_rate_limit(db: Session, caller: WebCaller, settings: Settings, word: str) -> None:
+    counter_key, limit = _ip_rate_limit(db, caller, settings)
     if rate_limiter.check_and_increment(counter_key, limit):
         return
     query_log_service.log_query(
@@ -58,7 +66,7 @@ def list_dictionaries(db: Session = Depends(get_db)) -> list[PublicDictionaryOut
     return query_service.list_public_dictionaries(db)
 
 
-@router.get("/search", response_model=QueryResponse)
+@router.get("/search", response_model=WebQueryResponse)
 def search(
     word: str,
     dict: str | None = None,  # noqa: A002 - 与 API 契约中的查询参数名保持一致
@@ -67,13 +75,19 @@ def search(
     caller: WebCaller = Depends(get_web_caller),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> QueryResponse:
+) -> WebQueryResponse:
     _enforce_web_rate_limit(db, caller, settings, word)
 
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
     started = time.perf_counter()
     results = query_service.search_word(
-        db, word, query_service.parse_dict_ids(dict), from_, to, allowed_ids
+        db,
+        word,
+        query_service.parse_dict_ids(dict),
+        from_,
+        to,
+        allowed_ids,
+        include_definitions=False,
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -87,7 +101,17 @@ def search(
         dictionary_id=results[0]["dictionary_id"] if results else None,
         ip=caller.ip,
     )
-    return QueryResponse(results=results)
+    return WebQueryResponse(results=results)
+
+
+def _enforce_entry_rate_limit(db: Session, caller: WebCaller, settings: Settings) -> None:
+    """词条文档单独计数，不占查询配额（见 _ENTRY_RATE_MULTIPLIER）。超限不写 query_logs：
+    它不是一次查词，记进去会污染查询统计。"""
+    counter_key, limit = _ip_rate_limit(db, caller, settings)
+    if not rate_limiter.check_and_increment(f"entry:{counter_key}", limit * _ENTRY_RATE_MULTIPLIER):
+        raise RateLimitedError(
+            "词条加载过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
+        )
 
 
 def _parse_entry_ids(raw: str | None) -> list[int] | None:
@@ -114,6 +138,7 @@ def entry_document(
     theme: Literal["light", "dark"] | None = None,
     caller: WebCaller = Depends(get_web_caller),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
     """把单条词条的释义渲染成独立 HTML 文档，供前端放进隔离 iframe。
 
@@ -121,13 +146,18 @@ def entry_document(
     iframe 导航不会带 Authorization 头，端点就只能匿名开放，会绕过 Token 的
     「可用词典」限制。
 
-    刻意**不**计入按 IP 的查询配额：它是一次已经计过配额的查询的子请求，按部计费会让
-    「展开 N 部词典」变成 N+1 次配额；而且它一次只返回一条词条，比 /search 一次返回
-    全部命中词典的释义暴露更少。
+    不计入按 IP 的**查询**配额：它是一次已经计过配额的查询的子请求，按部计费会让
+    「展开 N 部词典」变成 N+1 次配额。但它有自己的、宽得多的按 IP 限额，否则就成了绕过
+    查询配额的抓取入口。
+
+    `word` 必须是用户查询时输入的那个词：`entry_ids` 只在 `expand_word(word)` 的变体范围内
+    生效——与 /search 的匹配范围完全一致，所以正常请求不受影响，而伪造的 id 取不到别的词条。
 
     theme 由前端按当前主题带上：直接写进文档，iframe 首屏就是正确的明暗，不必等父页的
     postMessage 到达再变色（那会有一次肉眼可见的闪变）。
     """
+    _enforce_entry_rate_limit(db, caller, settings)
+
     dictionary = db.get(Dictionary, dictionary_id)
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
     if (

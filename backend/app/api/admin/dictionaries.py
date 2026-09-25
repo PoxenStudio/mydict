@@ -16,15 +16,15 @@ from app.models.admin import Admin
 from app.models.dictionary import Dictionary
 from app.schemas.dictionary import (
     BatchStatusRequest,
+    DictionaryIdsRequest,
     DictionaryImportTaskOut,
     DictionaryOut,
     DictionaryUpdateRequest,
     DictsDirListingOut,
     ImportFromDictsDirRequest,
-    ReorderRequest,
     RenameDictionariesOut,
     RenameDictionariesRequest,
-    SpxScanRequest,
+    ReorderRequest,
     TestQueryEntryOut,
 )
 from app.services import dictionary_service, query_service
@@ -165,7 +165,7 @@ def batch_status(
 
 @router.post("/repair-from-source", response_model=DictionaryImportTaskOut)
 def repair_from_source(
-    body: SpxScanRequest,
+    body: DictionaryIdsRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
@@ -189,7 +189,7 @@ def repair_from_source(
 
 @router.post("/reparse", response_model=DictionaryImportTaskOut)
 def reparse_dictionaries(
-    body: SpxScanRequest,
+    body: DictionaryIdsRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),

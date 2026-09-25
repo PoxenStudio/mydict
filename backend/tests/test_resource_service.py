@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,16 @@ def test_write_resource_creates_nested_dirs(tmp_path: Path) -> None:
 def test_write_resource_rejects_traversal(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         write_resource(tmp_path, "../../etc/passwd", b"evil")
+
+
+def test_write_resource_without_overwrite_keeps_existing_and_adds_missing(tmp_path: Path) -> None:
+    """重新解析给正在服务的词典补资源：已有文件不动，缺的补上，不留临时文件。"""
+    write_resource(tmp_path, "a/x.png", b"old")
+    write_resource(tmp_path, "a/x.png", b"new", overwrite=False)
+    write_resource(tmp_path, "a/y.png", b"added", overwrite=False)
+    assert (tmp_path / "a" / "x.png").read_bytes() == b"old"
+    assert (tmp_path / "a" / "y.png").read_bytes() == b"added"
+    assert sorted(p.name for p in (tmp_path / "a").iterdir()) == ["x.png", "y.png"]
 
 
 # ------------------------------------------------------- MDict 同级附属资源
@@ -193,6 +204,21 @@ def test_resolve_resource_file_exact_hit(tmp_path: Path) -> None:
     assert resolve_resource_file(tmp_path, "down/7/x.gif") == target
 
 
+
+def _filesystem_is_case_sensitive() -> bool:
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "probe").touch()
+        return not Path(directory, "PROBE").exists()
+
+
+# 大小写不敏感的文件系统（macOS 默认的 APFS）上精确匹配会直接命中，返回的是引用里的写法
+# 而不是磁盘上的真实文件名，这几条断言没有意义；生产环境（Linux 容器）照常跑
+case_sensitive_fs_only = pytest.mark.skipif(
+    not _filesystem_is_case_sensitive(), reason="文件系统不区分大小写"
+)
+
+
+@case_sensitive_fs_only
 def test_resolve_resource_file_matches_case_insensitively(tmp_path: Path) -> None:
     """汉典的真实形态：引用全小写、实际键是混合大小写。"""
     (tmp_path / "down" / "30").mkdir(parents=True)
@@ -202,6 +228,7 @@ def test_resolve_resource_file_matches_case_insensitively(tmp_path: Path) -> Non
     assert resolve_resource_file(tmp_path, "down/30/305626w1b7f8b.gif") == real
 
 
+@case_sensitive_fs_only
 def test_resolve_resource_file_matches_uppercase_reference(tmp_path: Path) -> None:
     """新漢語林2 的真实形态：引用是大写、实际文件是小写。"""
     (tmp_path / "gaiji").mkdir()
@@ -211,6 +238,7 @@ def test_resolve_resource_file_matches_uppercase_reference(tmp_path: Path) -> No
     assert resolve_resource_file(tmp_path, "gaiji/B245.png") == real
 
 
+@case_sensitive_fs_only
 def test_resolve_resource_file_matches_directory_component(tmp_path: Path) -> None:
     (tmp_path / "gaiji").mkdir()
     real = tmp_path / "gaiji" / "b245.png"

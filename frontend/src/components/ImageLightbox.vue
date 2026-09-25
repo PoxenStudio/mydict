@@ -223,9 +223,10 @@ onBeforeUnmount(() => {
 .lightbox {
   position: fixed;
   inset: 0;
+  /* 一次性取值：要盖过 Element Plus 的浮层（2000 起）与查询页的滚动按钮 */
   z-index: 3000;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.86);
+  background: var(--color-overlay-scrim);
   /* 扫描图上小字密集，放大后要尽量保持锐利 */
   touch-action: none;
   cursor: grab;
@@ -250,19 +251,20 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 44px;
+  width: var(--size-control-lg);
+  /* 一次性取值：翻页按钮做成竖长条，贴着屏幕两侧更好点，不挡图片中部 */
   height: 72px;
   border: none;
   border-radius: var(--radius-lg);
-  background: rgba(0, 0, 0, 0.5);
-  color: #f2f5f4;
-  font-size: 28px;
+  background: var(--color-overlay-control);
+  color: var(--color-overlay-text);
+  font-size: var(--text-3xl);
   line-height: 1;
   cursor: pointer;
 }
 
 .lightbox-nav:hover {
-  background: rgba(0, 0, 0, 0.72);
+  background: var(--color-overlay-control-hover);
 }
 
 .lightbox-nav-prev {
@@ -281,8 +283,8 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-lg);
-  background: rgba(0, 0, 0, 0.55);
-  color: #f2f5f4;
+  background: var(--color-overlay-control);
+  color: var(--color-overlay-text);
   font-size: var(--text-sm);
   pointer-events: none;
 }

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import ConflictError, NotFoundError
 from app.models.dictionary import DictEntry, Dictionary
 from app.models.vocab import TokenVocabItem, VocabItem
+from app.services.entry_scope import current_generation_only
 from app.services.query_service import resolve_dictionaries
 from app.services.settings_service import get_setting
 
@@ -28,7 +29,7 @@ def _find_entry(db: Session, word: str, dictionary_id: int | None) -> tuple[Dict
     word_lower = word.strip().lower()
     if dictionary_id is not None:
         entry = (
-            db.query(DictEntry)
+            current_generation_only(db.query(DictEntry))
             .filter(DictEntry.dictionary_id == dictionary_id, DictEntry.word_lower == word_lower)
             .first()
         )
@@ -38,7 +39,7 @@ def _find_entry(db: Session, word: str, dictionary_id: int | None) -> tuple[Dict
 
     for dictionary in resolve_dictionaries(db, word):
         entry = (
-            db.query(DictEntry)
+            current_generation_only(db.query(DictEntry))
             .filter(DictEntry.dictionary_id == dictionary.id, DictEntry.word_lower == word_lower)
             .first()
         )

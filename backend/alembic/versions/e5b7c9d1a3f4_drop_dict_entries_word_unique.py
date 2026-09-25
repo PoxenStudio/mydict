@@ -8,7 +8,8 @@ MDict 允许同一词头有多条内容不同的条目（搜韵诗词全文检�
 而原来那条唯一索引建在 `(dictionary_id, word)` 上（word 不是 word_lower），对查询使不上力。
 
 SQLite 上 `drop_constraint(type_="unique")` 会走 batch_alter_table 的整表重建——生产库
-（29GB / 2470 万行）要预留停机时间。
+（29GB / 2470 万行）要预留停机时间与同等大小的剩余磁盘，所以标记为重型迁移，不在启动时
+自动执行（见 app/core/migrate.py）。
 
 Revision ID: e5b7c9d1a3f4
 Revises: c8f1a2b3d4e5
@@ -25,18 +26,44 @@ down_revision: Union[str, None] = "c8f1a2b3d4e5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+heavy = True
+
+_TMP_TABLE = "_alembic_tmp_dict_entries"
+_UNIQUE_NAME = "uq_dict_entries_dictionary_word"
+
 
 def upgrade() -> None:
-    # SQLite 的 DDL 按 alembic 的假设是非事务性的：batch_alter_table 的「建临时表」这一步
-    # 会立即提交。所以上次运行若在拷数据途中被打断（进程被杀、断电），会留下一个空的
-    # `_alembic_tmp_dict_entries`，重跑时直接撞「table already exists」。先清掉它，
-    # 让迁移可以安全重试。
-    op.execute("DROP TABLE IF EXISTS _alembic_tmp_dict_entries")
-    with op.batch_alter_table("dict_entries") as batch_op:
-        batch_op.drop_constraint("uq_dict_entries_dictionary_word", type_="unique")
-        batch_op.create_index(
-            "ix_dict_entries_dict_word_lower", ["dictionary_id", "word_lower"], unique=False
-        )
+    """可在任意中断点之后安全重跑。
+
+    alembic 把 SQLite 的 DDL 当作非事务性的，batch 重建的每一步（建临时表 → 拷数据 →
+    删原表 → 临时表改名 → 建索引）都可能单独落盘。上次若在中途被打断，按现场分情况收拾：
+
+    - 原表还在：临时表只是半成品，删掉重来；
+    - 原表已删、临时表还在：说明拷贝已经完成（删原表在拷贝之后），数据全在临时表里——
+      **绝不能删它**，改名回来即可；
+    - 约束已经没了：重建那一步做完了，只需补齐索引。
+    """
+    bind = op.get_bind()
+    tables = set(sa.inspect(bind).get_table_names())
+    if "dict_entries" not in tables:
+        if _TMP_TABLE not in tables:
+            raise RuntimeError("dict_entries 与临时表都不存在，数据库状态异常，请从备份恢复")
+        op.rename_table(_TMP_TABLE, "dict_entries")
+    elif _TMP_TABLE in tables:
+        op.drop_table(_TMP_TABLE)
+
+    uniques = {item["name"] for item in sa.inspect(bind).get_unique_constraints("dict_entries")}
+    if _UNIQUE_NAME in uniques:
+        with op.batch_alter_table("dict_entries") as batch_op:
+            batch_op.drop_constraint(_UNIQUE_NAME, type_="unique")
+    # 改名回来的临时表没有索引（batch 在改名之后才建），两条都要按需补上
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_dict_entries_word_lower ON dict_entries (word_lower)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_dict_entries_dict_word_lower "
+        "ON dict_entries (dictionary_id, word_lower)"
+    )
 
 
 def downgrade() -> None:

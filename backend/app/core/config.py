@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     user_ip_rate_limit_per_min: int = 120
     max_upload_size_mb: int = 512
     enable_scheduler: bool = True
+    # false 时启动不做任何迁移，有待执行的迁移就拒绝启动，交给 `python -m app.cli migrate`
+    auto_migrate: bool = True
     # 「一天」的划分时区；留空或无效时回落系统时区
     timezone: str = ""
     version_file_path: str = "/version.txt"

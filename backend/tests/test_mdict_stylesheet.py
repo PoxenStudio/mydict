@@ -92,7 +92,9 @@ def test_expand_keeps_undefined_numbers_verbatim() -> None:
     """编号不在样式表里时原样保留：同库里有几部词典的正文恰好含反引号数字，但它们的
     mdx 没有 StyleSheet，是巧合文本，绝不能动。"""
     sheet = parse_stylesheet(RAW)
-    assert expand_style_markers("`99`未知`1`已知", sheet) == "`99`未知<b><center><font size=5 color=Green>已知</font></center></b><hr>"
+    assert expand_style_markers("`99`未知`1`已知", sheet) == (
+        "`99`未知<b><center><font size=5 color=Green>已知</font></center></b><hr>"
+    )
 
 
 def test_expand_returns_original_text_when_nothing_matches() -> None:

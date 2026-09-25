@@ -242,10 +242,12 @@ async function repairFromSource() {
  */
 async function reparseDictionaries() {
   const ids = selectedIds.value.length ? [...selectedIds.value] : null
+  const scope = ids ? `所选的 ${ids.length} 部词典` : `全部 ${dictionaries.value.length} 部词典（未勾选任何词典）`
   try {
     await ElMessageBox.confirm(
-      '将重读源文件、把所选词典的词条整个重灌一遍，找回当年被「同名去重」丢掉的内容。' +
-        '大词典要跑很久（搜韵 826 万条约几十分钟），期间这些词典的查询结果不完整。',
+      `将重读源文件，把${scope}的词条整个重灌一遍，找回当年被「同名去重」丢掉的内容。` +
+        '大词典要跑很久（搜韵 826 万条约几十分钟），解析期间旧词条照常可查，完成时一次性切换。' +
+        '过程中数据库文件会临时多占约一部词典的体积。',
       '重新解析',
       { type: 'warning', confirmButtonText: '开始重新解析' },
     )

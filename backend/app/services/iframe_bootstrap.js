@@ -415,6 +415,14 @@
     return new Blob([Speex.util.str2ab(wave)], { type: 'audio/wav' })
   }
 
+  // 每个 audio 元素只留一份解码结果：换源时释放上一份。不在 ended 时释放——词典自带的
+  // <audio controls> 还要能重播
+  function setDecodedSource(el, blob) {
+    if (el.__mydictBlobUrl) URL.revokeObjectURL(el.__mydictBlobUrl)
+    el.__mydictBlobUrl = URL.createObjectURL(blob)
+    el.src = el.__mydictBlobUrl
+  }
+
   /** 把 spx 解码成 WAV 并塞给 `el` 播放；失败走 `fail`。 */
   function playSpeexDecoded(el, spxUrl, fail) {
     loadSpeexDecoder()
@@ -425,7 +433,7 @@
         })
       })
       .then(function (buf) {
-        el.src = URL.createObjectURL(decodeSpeex(new Uint8Array(buf)))
+        setDecodedSource(el, decodeSpeex(new Uint8Array(buf)))
         var played = el.play()
         if (played && played.catch) played.catch(fail)
       })
@@ -456,17 +464,19 @@
       }
       var current = candidates[index++]
       var el = ensureAudioEl()
-      // 走到原 .spx 这一步：原生放不了，交给 JS 解码
+      el.onended = function () {
+        send('audio-ended', { url: url })
+      }
+      // 走到原 .spx 这一步：原生放不了，交给 JS 解码。先摘掉上一个候选挂的 onerror，
+      // 否则解码结果播放失败时会再触发一次 attempt，重复上报
       if (SPX_EXT_RE.test(current)) {
+        el.onerror = null
         playSpeexDecoded(el, current, fail)
         return
       }
-      audioEl.onerror = attempt
-      audioEl.onended = function () {
-        send('audio-ended', { url: url })
-      }
-      audioEl.src = current
-      var played = audioEl.play()
+      el.onerror = attempt
+      el.src = current
+      var played = el.play()
       if (played && played.catch) {
         played.catch(function () {
           attempt()

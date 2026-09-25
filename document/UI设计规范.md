@@ -58,6 +58,15 @@
 | `--color-scrollbar-thumb-hover` | `#8B9A94` | `#71827C` | 滑块 hover |
 | `--color-scrollbar-track` | `transparent` | `transparent` | 轨道，透明以彻底融进底色 |
 
+全屏遮罩（词条大图查看器）另有一组**不随主题切换**的 Token：看图时背景必须压到接近全黑，图片才看得清，浅色主题也不例外；浮在上面的按钮、提示条用半透明黑底 + 浅色字。
+
+| Token | 取值（深浅主题相同） | 用途 |
+|---|---|---|
+| `--color-overlay-scrim` | `rgba(0, 0, 0, 0.86)` | 全屏遮罩底色 |
+| `--color-overlay-control` | `rgba(0, 0, 0, 0.5)` | 遮罩上的按钮、提示条底色 |
+| `--color-overlay-control-hover` | `rgba(0, 0, 0, 0.72)` | 遮罩上按钮 hover |
+| `--color-overlay-text` | `#F2F5F4` | 遮罩上的文字与图标 |
+
 滚动条一律通过 `.app-scrollbar` 工具类（`styles/scrollbar.css`）套用，不要在各组件里各写一份 `::-webkit-scrollbar`：它是全局伪元素，写在 scoped 样式里编译后带上属性选择器就永远匹配不上。
 
 ### 2.3 语义色（Semantic）

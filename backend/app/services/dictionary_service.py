@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -27,12 +27,20 @@ from app.services.definition_repair import (
     dictionaries_using_style_markers,
     expand_stored_styles,
 )
+from app.services.entry_scope import current_generation_only, in_dictionary_for_id_window
 from app.services.language_detect import detect_language
 from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 
 logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
+
+# 重新解析删除上一代词条时每批的行数：每批一个短事务，不长时间占着 SQLite 的写锁
+_PURGE_BATCH_SIZE = 20_000
+
+# 正在重新解析的词典 id。同一部词典并发重解析会各自写一代、互相清掉对方的行
+_reparsing: set[int] = set()
+_reparsing_lock = threading.Lock()
 
 # 语言识别采样条数。词头能做到跨整部词典均匀取样（MDict 的词头表在打开时就已全部读入
 # 内存，按下标取值是纯内存操作），所以多取一些几乎不花钱；释义只能顺序多读再过滤，
@@ -469,7 +477,6 @@ def _run_import_in_background(
                 "word_count": dictionary.word_count,
                 "lang_from": dictionary.lang_from,
                 "lang_to": dictionary.lang_to,
-                "spx_pending_count": dictionary.spx_pending_count,
             },
         )
     except AppError as exc:
@@ -481,7 +488,7 @@ def _run_import_in_background(
         db.close()
 
 
-def _spx_targets(db: Session, dictionary_ids: list[int] | None) -> list[Dictionary]:
+def _resolve_target_dictionaries(db: Session, dictionary_ids: list[int] | None) -> list[Dictionary]:
     """解析要处理的词典；传了 id 就按传入顺序返回，任一个不存在就整体拒绝。"""
     query = db.query(Dictionary)
     if not dictionary_ids:
@@ -504,19 +511,29 @@ def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Setti
     **原地**：词典 id 不变——Token/用户的「可用词典」白名单、生词本（存的是词典 id 加释义
     快照，词典本身没动）、检索范围勾选全都不用重配。词条 id 会变，但没有任何数据引用它。
 
-    做法是「先清空这部词典的词条、再全量重灌」：
-    - 保证释义用的是**当前**的改写规则。此前有几轮改写修复（`@@@LINK=` 解引用是查询时的、
-      但资源引用改写与样式展开是导入时做的），老行是老规则产出的，只补缺失行会把新旧两种
-      格式混在同一部词典里。
-    - 失败了直接重跑一遍即可，没有半途状态要收拾（每次跑都从清空开始）。
+    全量重灌而不是只补缺失行：此前有几轮导入期改写修复，老行是老规则产出的，只补缺失会把
+    新旧两种格式混在同一部词典里。
+
+    新词条写成下一代，写完只改 `active_generation` 一行即完成切换，见 `_reparse_one`。
+    中途失败时旧词条原封不动，重跑即可。
     """
-    targets = _spx_targets(db, dictionary_ids)
-    task = background_tasks.start("dictionary_reparse", "重新解析词典")
-    threading.Thread(
-        target=_run_reparse_in_background,
-        args=(task.id, [d.id for d in targets], settings),
-        daemon=True,
-    ).start()
+    target_ids = [d.id for d in _resolve_target_dictionaries(db, dictionary_ids)]
+    with _reparsing_lock:
+        busy = _reparsing.intersection(target_ids)
+        if busy:
+            raise ConflictError(f"词典 {sorted(busy)} 正在重新解析，请等它结束")
+        _reparsing.update(target_ids)
+    try:
+        task = background_tasks.start("dictionary_reparse", "重新解析词典")
+        threading.Thread(
+            target=_run_reparse_in_background,
+            args=(task.id, target_ids, settings),
+            daemon=True,
+        ).start()
+    except Exception:
+        with _reparsing_lock:
+            _reparsing.difference_update(target_ids)
+        raise
     return task.id
 
 
@@ -541,15 +558,6 @@ def _run_reparse_in_background(
                 background_tasks.update_progress(task_id, {"done": index, "total": total})
                 continue
 
-            parser = _PARSERS[dictionary.format]()
-            storage_root = Path(settings.dictionary_storage_path) / str(dict_id)
-            # 勾了「不导入发音/图片」的词典没有 res/，parse 的 resource_dir 传 None：
-            # 释义不做资源引用改写，与当初导入时的行为一致
-            resource_dir = storage_root / "res" if (storage_root / "res").is_dir() else None
-
-            db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).delete()
-            db.commit()
-
             def on_progress(
                 done: int, _task_id: int = task_id, _index: int = index, _total: int = total
             ) -> None:
@@ -558,27 +566,11 @@ def _run_reparse_in_background(
                     _task_id, {"done": _index - 1, "total": _total, "entries": done}
                 )
 
-            try:
-                count = _batch_insert(
-                    db,
-                    dict_id,
-                    parser.parse(paths, dictionary_id=dict_id, resource_dir=resource_dir),
-                    on_progress=on_progress,
-                )
-            except Exception:
-                # 解析失败：这部词典的词条已经被清掉了。源文件还在，重跑一次本任务即可，
-                # 所以这里把错误如实报出去，不做半吊子的回滚。
-                db.rollback()
-                raise
-            dictionary.word_count = count
-            db.commit()
+            count = _reparse_one(db, dictionary, paths, settings, on_progress)
             reparsed += 1
             entries_total += count
             background_tasks.update_progress(task_id, {"done": index, "total": total})
 
-        if entries_total:
-            # 词条整个换过一遍，进程内的查询结果缓存里全是旧快照
-            invalidate_query_cache()
         background_tasks.succeed(
             task_id, {"dictionaries": reparsed, "entries": entries_total, "skipped": skipped}
         )
@@ -587,6 +579,86 @@ def _run_reparse_in_background(
         background_tasks.fail(task_id, "重新解析失败：服务器内部错误，请查看后端日志")
     finally:
         db.close()
+        with _reparsing_lock:
+            _reparsing.difference_update(dictionary_ids)
+
+
+def _reparse_one(
+    db: Session, dictionary: Dictionary, paths: list[Path], settings: Settings, on_progress
+) -> int:
+    """重新解析一部词典，返回新的词条数。
+
+    1. 解析并写入下一代（generation = active_generation + 1），每批提交。这一步最慢，
+       但新行对查询不可见，旧词条照常可查；写锁只在每批提交时短暂持有。
+    2. 切换：只改 `dictionaries.active_generation` 一行，查询从这一刻起只看新一代——
+       原子、瞬时，不存在新旧混杂的中间态。
+    3. 分批删掉旧一代（此时它们已不可见）。
+
+    资源按「只补缺失、不覆盖」处理：词典正在服务，覆盖已有文件会让并发请求读到半截内容，
+    而且大词典的 res/ 有几十万个文件，全量重写没有必要。
+    """
+    dict_id = dictionary.id
+    current = dictionary.active_generation
+    # 上次中断留下的半代
+    _purge_generations(db, dict_id, DictEntry.generation != current)
+
+    next_generation = current + 1
+    parser = _PARSERS[dictionary.format]()
+    res_dir = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+    # 勾了「不导入发音/图片」的词典没有 res/，parse 的 resource_dir 传 None：
+    # 释义不做资源引用改写，与当初导入时的行为一致
+    resource_dir = res_dir if res_dir.is_dir() else None
+    try:
+        count = _batch_insert(
+            db,
+            dict_id,
+            parser.parse(
+                paths,
+                dictionary_id=dict_id,
+                resource_dir=resource_dir,
+                overwrite_resources=False,
+            ),
+            on_progress=on_progress,
+            generation=next_generation,
+            commit_each_batch=True,
+        )
+    except Exception:
+        db.rollback()
+        _purge_generations(db, dict_id, DictEntry.generation == next_generation)
+        raise
+
+    dictionary.active_generation = next_generation
+    dictionary.word_count = count
+    db.commit()
+    # 缓存里的结果还是上一代的条目（条目 id 已换）
+    invalidate_query_cache()
+
+    _purge_generations(db, dict_id, DictEntry.generation != next_generation)
+    return count
+
+
+def _purge_generations(db: Session, dictionary_id: int, condition) -> None:
+    """按主键区间分批删掉这部词典里满足 condition 的词条，每批一个短事务。"""
+    lowest, highest = db.execute(
+        select(func.min(DictEntry.id), func.max(DictEntry.id)).where(
+            DictEntry.dictionary_id == dictionary_id, condition
+        )
+    ).one()
+    if lowest is None:
+        return
+    cursor = lowest - 1
+    while cursor < highest:
+        upper = min(cursor + _PURGE_BATCH_SIZE, highest)
+        db.execute(
+            delete(DictEntry).where(
+                in_dictionary_for_id_window(dictionary_id),
+                DictEntry.id > cursor,
+                DictEntry.id <= upper,
+                condition,
+            )
+        )
+        db.commit()
+        cursor = upper
 
 
 def start_source_repair(
@@ -605,7 +677,7 @@ def start_source_repair(
     两者都**不需要重新导入任何词典**。跑完会使查询结果缓存失效——释义被就地改写了，
     缓存里还存着旧快照。
     """
-    targets = _spx_targets(db, dictionary_ids)
+    targets = _resolve_target_dictionaries(db, dictionary_ids)
     task = background_tasks.start("dictionary_source_repair", "从源文件修复")
     threading.Thread(
         target=_run_source_repair_in_background,
@@ -825,8 +897,19 @@ def import_dictionary(
     return dictionary
 
 
-def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) -> int:
+def _batch_insert(
+    db: Session,
+    dictionary_id: int,
+    entries,
+    on_progress=None,
+    *,
+    generation: int = 0,
+    commit_each_batch: bool = False,
+) -> int:
     """把解析出的词条写入 dict_entries，返回写入行数。
+
+    导入时整部词典在一个事务里（失败整体清理）；重新解析写的是尚不可见的下一代，
+    commit_each_batch=True 每批提交，避免长时间占着写锁。
 
     **同名词条全部保留**：MDict 允许同一词头有多条内容不同的条目（搜韵诗词全文检索版里
     「毛泽东」有 82 条，是 82 首不同的诗词）。这里曾经按词头去重只留首条，结果在 63 部词典
@@ -843,18 +926,23 @@ def _batch_insert(db: Session, dictionary_id: int, entries, on_progress=None) ->
                 phonetic=entry.phonetic,
                 definition=entry.definition,
                 extra=json.dumps(entry.extra, ensure_ascii=False) if entry.extra else None,
+                generation=generation,
             )
         )
         count += 1
         if len(batch) >= BATCH_SIZE:
             db.bulk_save_objects(batch)
             db.flush()
+            if commit_each_batch:
+                db.commit()
             batch.clear()
             if on_progress:
                 on_progress(count)
     if batch:
         db.bulk_save_objects(batch)
         db.flush()
+        if commit_each_batch:
+            db.commit()
     if on_progress:
         on_progress(count)
     return count
@@ -1124,7 +1212,7 @@ def test_query(db: Session, dictionary_id: int, word: str, limit: int = 20) -> l
         raise NotFoundError("词典不存在")
     word_lower = word.strip().lower()
     return (
-        db.query(DictEntry)
+        current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id == dictionary_id, DictEntry.word_lower.like(f"{word_lower}%")
         )

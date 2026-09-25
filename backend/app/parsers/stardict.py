@@ -182,6 +182,7 @@ class StarDictParser(DictionaryParser):
         *,
         dictionary_id: int,
         resource_dir: Path | None,
+        overwrite_resources: bool = True,
     ) -> Iterator[ParsedEntry]:
         by_suffix = _index_by_suffix(file_paths)
 

@@ -45,13 +45,37 @@ async def _make_dictionary(
 
 
 async def _search(client: AsyncClient, word: str, dictionary_id: int) -> dict:
+    """走对外 API：前台 /dict/search 不带释义（释义另走 /dict/entry），这里要断言释义本身。"""
     resp = await client.get(
-        "/api/dict/search", params={"word": word, "dict": str(dictionary_id)}
+        "/api/v1/query",
+        params={"word": word, "dict": str(dictionary_id), "full_style": "true"},
     )
     assert resp.status_code == 200, resp.text
     results = resp.json()["results"]
     assert len(results) == 1, results
     return results[0]
+
+
+async def test_web_search_omits_definitions(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """前台结果不带释义（释义走 /dict/entry），对外 API 照常带。"""
+    dict_id = await _make_dictionary(
+        client,
+        admin_headers,
+        "前台无释义",
+        [("中国", "@@@LINK=中国【ちゅうごく①】"), ("中国【ちゅうごく①】", "中华人民共和国。")],
+    )
+    set_setting(db_session, "open_access", "true")
+
+    resp = await client.get("/api/dict/search", params={"word": "中国", "dict": str(dict_id)})
+    assert resp.status_code == 200, resp.text
+    (result,) = resp.json()["results"]
+    assert "definition" not in result
+    assert result["word"] == "中国" and result["id"] > 0
+
+    # 同一个词先走前台再走对外 API：缓存按「带不带释义」分开，对外 API 仍拿到释义
+    assert "中华人民共和国" in (await _search(client, "中国", dict_id))["definition"]
 
 
 async def test_search_follows_link_redirect(
@@ -157,3 +181,28 @@ async def test_plain_definition_is_untouched(
     set_setting(db_session, "open_access", "true")
 
     assert (await _search(client, "普通词", dict_id))["definition"] == definition
+
+
+async def test_variants_redirecting_to_same_target_are_deduplicated(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """简繁两种写法都跳到同一个目标时，结果与词条文档里都只出现一份释义。"""
+    dict_id = await _make_dictionary(
+        client,
+        admin_headers,
+        "同目标跳转",
+        [
+            ("中国", "@@@LINK=中国【ちゅうごく】"),
+            ("中國", "@@@LINK=中国【ちゅうごく】"),
+            ("中国【ちゅうごく】", "<p>唯一的正文</p>"),
+        ],
+    )
+    set_setting(db_session, "open_access", "true")
+
+    resp = await client.get("/api/dict/search", params={"word": "中国", "dict": str(dict_id)})
+    results = resp.json()["results"]
+    assert len(results) == 1, results
+
+    resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "中国"})
+    assert resp.status_code == 200
+    assert resp.text.count("唯一的正文") == 1

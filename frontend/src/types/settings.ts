@@ -18,5 +18,3 @@ export interface SystemSettings {
 }
 
 export type SystemSettingsUpdate = Partial<SystemSettings>
-
-/** 发音实时转码的运行状态。available 为 false 说明容器里没挂 ffmpeg，开关设了也没用 */

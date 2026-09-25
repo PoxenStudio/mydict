@@ -19,7 +19,7 @@ function taskLabel(task: BackgroundTask) {
 
 function taskProgressText(task: BackgroundTask) {
   const { done, total } = task.progress_data
-  // 扫描/转码按「已完成 / 总数」报进度；词典导入报的是已写入的词条数，没有总数
+  // 修复/重新解析按「已完成 / 总数」报进度；词典导入报的是已写入的词条数，没有总数
   if (typeof done === 'number' && typeof total === 'number' && total > 0) {
     return `已处理 ${done.toLocaleString()} / ${total.toLocaleString()}`
   }

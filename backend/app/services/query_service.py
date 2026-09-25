@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core import query_cache
 from app.models.dictionary import DictEntry, Dictionary
+from app.services.entry_scope import current_generation_only
 from app.services.query_expand import EXPANSION_VERSION, expand_word
 
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}
@@ -84,7 +85,7 @@ def _resolve_link(db: Session, entry: DictEntry) -> DictEntry:
             return current
         seen.add(key)
         following = (
-            db.query(DictEntry)
+            current_generation_only(db.query(DictEntry))
             .filter(DictEntry.dictionary_id == entry.dictionary_id, DictEntry.word_lower == key)
             .first()
         )
@@ -234,7 +235,7 @@ def _query_entries(
     if not dictionary_ids or not words_lower:
         return []
     return (
-        db.query(DictEntry)
+        current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id.in_(dictionary_ids),
             DictEntry.word_lower.in_(words_lower),
@@ -250,7 +251,10 @@ def search_word(
     lang_from: str | None = None,
     lang_to: str | None = None,
     allowed_ids: list[int] | None = None,
+    *,
+    include_definitions: bool = True,
 ) -> list[dict]:
+    """查词。include_definitions=False 时结果里不带释义（前台用：释义另走 /dict/entry）。"""
     candidates = resolve_candidates(db, word, dict_ids, lang_from, lang_to, allowed_ids)
     if not candidates.dictionaries:
         return []
@@ -260,11 +264,11 @@ def search_word(
     variants = expand_word(word)
     # 缓存 key 必须用**完整候选集**：若只按「优先语言」那批做 key，「优先语言没命中」这个
     # 空结果会被缓存住，兜底路径就永远走不到了。expansion 版本号也要带上，否则改扩展规则后
-    # 新结果会被旧缓存挡住。
+    # 新结果会被旧缓存挡住。带不带释义是两份不同的结果，也要区分开。
     cache_key = query_cache.make_key(
         word_lower,
         tuple(d.id for d in candidates.dictionaries),
-        f"x{EXPANSION_VERSION}",
+        f"x{EXPANSION_VERSION}|d{int(include_definitions)}",
     )
     cached = query_cache.get(cache_key)
     if cached is not None:
@@ -284,24 +288,30 @@ def search_word(
     # 不依赖数据库返回行的顺序。
     order = {d.id: index for index, d in enumerate(candidates.dictionaries)}
     results = []
+    seen_targets: set[tuple[int, int]] = set()
     for e in entries:
         # 释义是 @@@LINK= 时跟进到目标词条取内容；但词头仍显示用户查到的那个，
         # 否则标题行的词会突然变成另一个写法（如「中国」变成「中国【ちゅうごく①】」）
         resolved = _resolve_link(db, e)
-        results.append(
-            {
-                # 条目主键。同一部词典里可能有**多条同名词条**（MDict 允许），前端拿它做
-                # key 与寻址——只用 (dictionary_id, word) 会在这种情况下撞在一起。
-                "id": e.id,
-                "dictionary_id": e.dictionary_id,
-                "dictionary_name": by_id[e.dictionary_id].name,
-                "word": e.word,
-                "phonetic": resolved.phonetic,
-                "definition": resolved.definition,
-                "extra": json.loads(e.extra) if e.extra else None,
-                "lang_match": e.dictionary_id in candidates.preferred_ids,
-            }
-        )
+        # 同一部词典里几个变体（简繁、大小写）跳到同一个目标时只留一条，否则同一份释义重复出现
+        target = (e.dictionary_id, resolved.id)
+        if target in seen_targets:
+            continue
+        seen_targets.add(target)
+        item = {
+            # 条目主键。同一部词典里可能有**多条同名词条**（MDict 允许），前端拿它做
+            # key 与寻址——只用 (dictionary_id, word) 会在这种情况下撞在一起。
+            "id": e.id,
+            "dictionary_id": e.dictionary_id,
+            "dictionary_name": by_id[e.dictionary_id].name,
+            "word": e.word,
+            "phonetic": resolved.phonetic,
+            "extra": json.loads(e.extra) if e.extra else None,
+            "lang_match": e.dictionary_id in candidates.preferred_ids,
+        }
+        if include_definitions:
+            item["definition"] = resolved.definition
+        results.append(item)
     results.sort(key=lambda item: order[item["dictionary_id"]])
     query_cache.set(cache_key, results)
     return results
@@ -314,7 +324,7 @@ def get_entry(db: Session, dictionary_id: int, word: str) -> DictEntry | None:
     这正是查询结果卡片里的那一对。释义是 `@@@LINK=` 时会跟进到目标词条（见 `_resolve_link`）。
     """
     entry = (
-        db.query(DictEntry)
+        current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id == dictionary_id,
             DictEntry.word_lower == word.strip().lower(),
@@ -335,20 +345,32 @@ def get_entries_for_document(
     同一部词典里同一词头可以有多条内容不同的条目（MDict 允许，搜韵诗词全文检索版的
     「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
 
-    `entry_ids` 给了就按它取（限定属于这部词典）——前端把查询结果里那一组的条目 id 显式
-    传过来，保证 iframe 里的条数与「共 N 条」一致；按 word 再推一遍变体集合可能对不上
-    （查询用的是用户输入推的变体，而词头是词典自己的写法）。没给就按 `expand_word(word)`
-    的变体集合取。
+    `entry_ids` 给了就按它取——前端把查询结果里那一组的条目 id 显式传过来，保证 iframe 里
+    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里的
+    条目（与 search_word 的匹配范围一致）：`entry_ids` 是客户端输入，不加这层约束的话
+    随便填 id 就能逐段拉走整部词典，绕过查询配额。
+
+    `entry_ids` 一条都对不上时退回按词取：词典被重新解析后条目 id 整体换新，页面上还开着的
+    旧查询结果带的是旧 id，不该因此显示「词条不存在」。
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
-    statement = db.query(DictEntry).filter(DictEntry.dictionary_id == dictionary_id)
+    statement = (
+        current_generation_only(db.query(DictEntry))
+        .filter(DictEntry.dictionary_id == dictionary_id)
+        .filter(DictEntry.word_lower.in_(expand_word(word)))
+    )
+    entries: list[DictEntry] = []
     if entry_ids:
-        statement = statement.filter(DictEntry.id.in_(entry_ids))
-    else:
-        statement = statement.filter(DictEntry.word_lower.in_(expand_word(word)))
-    entries = statement.order_by(DictEntry.id).all()
-    return [_resolve_link(db, entry) for entry in entries]
+        entries = statement.filter(DictEntry.id.in_(entry_ids)).order_by(DictEntry.id).all()
+    if not entries:
+        entries = statement.order_by(DictEntry.id).all()
+    # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
+    resolved: dict[int, DictEntry] = {}
+    for entry in entries:
+        target = _resolve_link(db, entry)
+        resolved.setdefault(target.id, target)
+    return list(resolved.values())
 
 
 def suggest_prefix(
@@ -363,7 +385,7 @@ def suggest_prefix(
         return []
     prefix_lower = prefix.strip().lower()
     rows = (
-        db.query(DictEntry.word)
+        current_generation_only(db.query(DictEntry.word))
         .filter(
             DictEntry.dictionary_id.in_([d.id for d in dictionaries]),
             DictEntry.word_lower.like(f"{prefix_lower}%"),

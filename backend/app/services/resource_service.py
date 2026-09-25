@@ -51,6 +51,58 @@ SIBLING_RESOURCE_EXTENSIONS = frozenset(
     }
 )
 
+# /dict-res 响应的 Content-Type。不交给 mimetypes 猜：容器里常常没有 /etc/mime.types，
+# 内置表不认 .woff2/.otf/.ogg/.webp/.spx 等，Starlette 会退成 text/plain；而响应带了
+# nosniff，Chrome 的 ORB 会拦掉 <img>/<audio> 拿到的 text/plain，资源就静默失效了。
+_RESOURCE_MEDIA_TYPES = {
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+    ".cur": "image/x-icon",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".eot": "application/vnd.ms-fontobject",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".spx": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".txt": "text/plain",
+    ".json": "application/json",
+    ".xml": "text/xml",
+}
+
+
+def resource_media_type(path: Path) -> str:
+    """词典资源的 Content-Type；不认识的一律 application/octet-stream，交给浏览器按内容识别。
+
+    .mdd 里常有无扩展名或扩展名写错的图片，octet-stream 能被 ORB 按内容嗅探放行，
+    text/plain 则会被直接拦掉。
+    """
+    return _RESOURCE_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
 # 匹配 HTML 中 src="..." / href="..." 属性值。
 # 负向前瞻一口气跳过所有「不该改写」的引用，避免每条外部链接都要进一次 Python 回调——
 # 释义里绝大多数资源引用都是 http(s)/data:，这个跳过是热路径上的主要优化。
@@ -96,12 +148,29 @@ def normalize_resource_path(raw_path: str) -> str:
     return "/".join(parts)
 
 
-def write_resource(resource_dir: Path, relative_path: str, content: bytes) -> None:
-    """将资源内容写入 resource_dir/relative_path，自动创建父目录。"""
+def write_resource(
+    resource_dir: Path, relative_path: str, content: bytes, *, overwrite: bool = True
+) -> None:
+    """将资源内容写入 resource_dir/relative_path，自动创建父目录。
+
+    overwrite=False 用于给**正在服务**的词典补文件：已存在的跳过，新文件走「临时文件 +
+    os.replace」，不让并发请求读到半截内容。
+    """
     normalized = normalize_resource_path(relative_path)
     target = resource_dir / normalized
+    if not overwrite and target.exists():
+        return
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    if overwrite:
+        target.write_bytes(content)
+        return
+    temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, target)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _source_dirs(sources: Iterable[Path]) -> list[Path]:
@@ -129,8 +198,8 @@ def _directory_index(directory: str) -> dict[str, str]:
     """目录项「小写名 → 真实名」，供大小写不敏感兜底查找用。
 
     实测 19499 个文件的目录建一次索引约 4ms、约 300KB，所以缓存 16 个目录封顶几 MB；
-    只在精确路径不存在时才会被用到。目录内容后续只增不减（比如按需转码新落盘的 mp3），
-    而精确匹配始终先走文件系统，所以缓存过期不会影响正确性。
+    只在精确路径不存在时才会被用到。精确匹配始终先走文件系统，缓存过期只会让「大小写
+    不一致且是新落盘」的文件暂时 404，直到该目录的索引被 LRU 淘汰。
     """
     index: dict[str, str] = {}
     try:

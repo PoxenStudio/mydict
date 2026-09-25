@@ -149,7 +149,8 @@ async def test_update_dictionary_name_and_lang(
     dict_id = dictionary["id"]
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
-    # 改名+改语言方向后查询结果里的词典名要立刻是新的，不能因为查询结果有 5 分钟 TTL 缓存而看到旧名字
+    # 改名+改语言方向后查询结果里的词典名要立刻是新的，
+    # 不能因为查询结果有 5 分钟 TTL 缓存而看到旧名字
     # （lang_from 保持 en 不变，避免连带影响 "apple" 的自动语言路由，改 lang_to 已足够验证字段生效）
     await client.get("/api/dict/search", params={"word": "apple"})
     resp = await client.put(
@@ -1579,7 +1580,6 @@ async def test_repair_from_source_expands_style_markers_of_stored_entries(
     from app.services import dictionary_service
 
     files = _build_mdict_with_resource_bytes(tmp_path)
-    settings = get_settings()
     rel = _write_scratch("repair-style", files)
     dictionary = await import_from_dicts_dir(
         client,
@@ -1595,8 +1595,8 @@ async def test_repair_from_source_expands_style_markers_of_stored_entries(
     dict_id = dictionary["id"]
 
     # 模拟「标记没被展开就入了库」：mini.mdx 的词条是 apple，这里给同一部词典补一条带标记的
-    from app.models.dictionary import DictEntry
     from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
 
     db = SessionLocal()
     try:
@@ -1692,7 +1692,7 @@ async def test_import_keeps_duplicate_headwords(
     await client.put(f"/api/admin/dictionaries/{dict_id}/enable", headers=admin_headers)
 
     from app.core.db import SessionLocal
-    from app.models.dictionary import DictEntry, Dictionary
+    from app.models.dictionary import DictEntry
 
     # 查询端点要走通（测试环境默认不开放匿名访问）
     set_setting(SessionLocal(), "open_access", "true")
@@ -1793,3 +1793,339 @@ async def test_reparse_restores_lost_duplicate_headwords(
         assert db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).count() == 3
     finally:
         db.close()
+
+
+
+def _entries_by_generation(dict_id: int) -> dict[int, int]:
+    from sqlalchemy import func
+
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DictEntry.generation, func.count())
+            .filter(DictEntry.dictionary_id == dict_id)
+            .group_by(DictEntry.generation)
+            .all()
+        )
+        return dict(rows)
+    finally:
+        db.close()
+
+
+def _active_generation(dict_id: int) -> int:
+    from app.core.db import SessionLocal
+    from app.models.dictionary import Dictionary as DictionaryModel
+
+    db = SessionLocal()
+    try:
+        return db.get(DictionaryModel, dict_id).active_generation
+    finally:
+        db.close()
+
+
+async def _import_duplicate_headword_dict(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, name: str
+) -> int:
+    files = _build_mdx_with_duplicate_headword(tmp_path)
+    rel = _write_scratch(name, files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": name,
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{file_name}" for file_name in files],
+        },
+    )
+    await client.put(f"/api/admin/dictionaries/{dictionary['id']}/enable", headers=admin_headers)
+    return dictionary["id"]
+
+
+async def _reparse(client: AsyncClient, admin_headers: dict[str, str], dict_id: int) -> dict:
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    return await wait_for_task(client, admin_headers, resp.json()["task_id"])
+
+
+async def test_reparse_switches_generation_and_purges_old(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """切换只改 active_generation；切换后旧一代被删光，新一代保持源文件顺序。"""
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-ok")
+    assert _active_generation(dict_id) == 0
+    assert _entries_by_generation(dict_id) == {0: 3}
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert _active_generation(dict_id) == 1
+    assert _entries_by_generation(dict_id) == {1: 3}
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert _active_generation(dict_id) == 2
+    assert _entries_by_generation(dict_id) == {2: 3}
+
+
+async def test_reparse_failure_keeps_old_generation(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """解析中途抛错：旧一代原封不动、写了一半的新一代被清掉，不再有「先删后灌」留下的空词典。"""
+    from app.parsers.base import ParsedEntry
+    from app.parsers.mdict import MDictParser
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-fail")
+
+    def broken_parse(self, file_paths, **kwargs):
+        yield ParsedEntry(word="半截", definition="<p>已经提交的一条</p>")
+        raise RuntimeError("源文件损坏")
+
+    monkeypatch.setattr(MDictParser, "parse", broken_parse)
+    monkeypatch.setattr("app.services.dictionary_service.BATCH_SIZE", 1)
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "error", task
+    assert _active_generation(dict_id) == 0
+    assert _entries_by_generation(dict_id) == {0: 3}
+
+
+async def test_pending_generation_is_invisible_to_every_read_path(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """重新解析写到一半时（下一代已入库、尚未切换），任何查询都不能看到它。"""
+    from app.core.db import SessionLocal
+    from app.core.query_cache import invalidate
+    from app.models.dictionary import DictEntry
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-hidden")
+    db = SessionLocal()
+    try:
+        # 查询端点要走通（测试环境默认不开放匿名访问）
+        set_setting(db, "open_access", "true")
+        db.add(
+            DictEntry(
+                dictionary_id=dict_id,
+                word="毛泽东",
+                word_lower="毛泽东",
+                definition="<p>未切换的新一代</p>",
+                generation=1,
+            )
+        )
+        db.add(
+            DictEntry(
+                dictionary_id=dict_id,
+                word="毛泽东选集",
+                word_lower="毛泽东选集",
+                definition="<p>只在新一代里</p>",
+                generation=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    invalidate()
+
+    resp = await client.get(
+        "/api/dict/search", params={"word": "毛泽东", "dict": str(dict_id)}
+    )
+    results = resp.json()["results"]
+    assert len(results) == 2
+    assert "未切换的新一代" not in resp.text
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}", params={"word": "毛泽东"}
+    )
+    assert "未切换的新一代" not in resp.text
+    assert resp.text.count('<section class="mydict-entry">') == 2
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东选集"},
+    )
+    assert resp.status_code == 404
+
+    resp = await client.get(
+        f"/api/admin/dictionaries/{dict_id}/test-query",
+        params={"word": "毛泽东"},
+        headers=admin_headers,
+    )
+    assert {item["word"] for item in resp.json()} == {"毛泽东"}
+    assert len(resp.json()) == 2
+
+
+async def test_reparse_does_not_overwrite_existing_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """重新解析只补缺失的资源：词典正在服务，覆盖已有文件会让并发请求读到半截内容。"""
+    from app.services import dictionary_service
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-res")
+    seen: list[bool] = []
+    original_parse = dictionary_service.MDictParser.parse
+
+    def spy_parse(self, file_paths, **kwargs):
+        seen.append(kwargs.get("overwrite_resources", True))
+        return original_parse(self, file_paths, **kwargs)
+
+    monkeypatch.setattr(dictionary_service.MDictParser, "parse", spy_parse)
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert seen == [False]
+
+
+async def test_reparse_rejects_concurrent_run_on_same_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """同一部词典并发重解析会各写一代、互相清掉对方的行，第二个请求直接拒绝。"""
+    from app.services import dictionary_service
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-busy")
+    monkeypatch.setattr(dictionary_service, "_reparsing", {dict_id})
+
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 409, resp.text
+
+
+def _entry_ids_by_word(dict_id: int) -> dict[str, list[int]]:
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
+
+    db = SessionLocal()
+    try:
+        ids: dict[str, list[int]] = {}
+        for row in (
+            db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).order_by(DictEntry.id)
+        ):
+            ids.setdefault(row.word, []).append(row.id)
+        return ids
+    finally:
+        db.close()
+
+
+async def test_entry_ids_are_limited_to_the_queried_word(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """entry_ids 是客户端输入：只在 word 的变体范围内生效，伪造的 id 取不到别的词条。"""
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "ids-scope")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+    finally:
+        db.close()
+    ids = _entry_ids_by_word(dict_id)
+    all_ids = ",".join(str(i) for group in ids.values() for i in group)
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}", params={"word": "毛泽东", "entry_ids": all_ids}
+    )
+    assert resp.status_code == 200
+    assert resp.text.count('<section class="mydict-entry">') == 2
+    assert "别的词头" not in resp.text
+
+    # 只给别的词的 id：一条都对不上 → 退回按「毛泽东」取，仍然拿不到沁园春的内容
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东", "entry_ids": str(ids["沁园春"][0])},
+    )
+    assert resp.status_code == 200
+    assert resp.text.count('<section class="mydict-entry">') == 2
+    assert "别的词头" not in resp.text
+
+
+async def test_stale_entry_ids_fall_back_to_word_after_reparse(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """重新解析后条目 id 整体换新，页面上旧查询结果带着旧 id 来取，不该显示「词条不存在」。"""
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "ids-stale")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+    finally:
+        db.close()
+    old_ids = _entry_ids_by_word(dict_id)["毛泽东"]
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert not set(old_ids) & set(_entry_ids_by_word(dict_id)["毛泽东"])
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东", "entry_ids": ",".join(str(i) for i in old_ids)},
+    )
+    assert resp.status_code == 200
+    assert resp.text.count('<section class="mydict-entry">') == 2
+
+
+async def test_single_entry_ids_render_exactly_that_entry(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """单条也传 entry_ids：同名多条时只渲染被点开的那一条，不再按词把整组都拉出来。"""
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "ids-one")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+    finally:
+        db.close()
+    first, second = _entry_ids_by_word(dict_id)["毛泽东"]
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}", params={"word": "毛泽东", "entry_ids": str(second)}
+    )
+    assert resp.status_code == 200
+    assert "第二首" in resp.text and "第一首" not in resp.text
+
+
+async def test_entry_document_has_its_own_rate_limit(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """词条文档不占查询配额，但有自己的限额（查询限额 × 10），不能被当成无限抓取入口。"""
+    from app.core import rate_limiter
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "entry-rl")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+        set_setting(db, "anonymous_ip_rate_limit_per_min", "1")
+    finally:
+        db.close()
+    rate_limiter.reset()
+    try:
+        for _ in range(10):
+            resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
+            assert resp.status_code == 200
+        resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
+        assert resp.status_code == 429
+        assert "Retry-After" in resp.headers
+
+        # 取了 11 次词条文档，查询配额（1 次/分钟）仍然没被动过
+        resp = await client.get(
+            "/api/dict/search", params={"word": "沁园春", "dict": str(dict_id)}
+        )
+        assert resp.status_code == 200
+    finally:
+        db = SessionLocal()
+        try:
+            set_setting(db, "anonymous_ip_rate_limit_per_min", "60")
+        finally:
+            db.close()
+        rate_limiter.reset()

@@ -101,6 +101,18 @@ docker exec -it mydict python -m app.cli reset-admin-password --username admin
 
 不会。`/data` 是独立的挂载卷，重新构建/替换镜像并用相同的 `-v` 挂载启动即可，容器启动时会自动执行数据库迁移。
 
+例外是**重型迁移**（会整表重建词条表）：词库较大时它不会在启动时自动跑：服务拒绝启动，`docker compose logs mydict` 里会看到提示（配置了 `restart: unless-stopped` 时容器会反复重启，属正常现象）。这时按下面的步骤手动执行：
+
+```bash
+docker compose stop mydict
+cp data/db/mydict.sqlite3 data/db/mydict.sqlite3.bak          # 先备份
+docker compose run --rm mydict python -m app.cli migrate          # 查看待执行的迁移与磁盘空间
+docker compose run --rm mydict python -m app.cli migrate --yes    # 执行（大库可能要几十分钟）
+docker compose up -d
+```
+
+重型迁移需要约与数据库文件同等大小的剩余磁盘空间；中途被打断可以直接重跑。想完全由自己掌控迁移时机，可以设置环境变量 `AUTO_MIGRATE=false`：有待执行的迁移时容器不启动，一律用上面的命令执行。
+
 **查询接口一直返回 401？**
 
 默认「开放使用」是关闭的，查询类接口必须携带有效 Token（或以登录用户身份访问网页版）；如需允许匿名查询，去后台「系统设置」打开「开放使用」。
@@ -184,21 +196,13 @@ docker restart mydict
 中心）、拖动平移，按 Esc 或点图片以外的区域退出。只有渲染尺寸够大的图才响应——正文里
 那些 16px 的小图标（发音按钮、词性括号等）点了不会弹。
 
-**发音点了提示「不支持的格式」？**
+**Speex（`.spx`）发音能直接播吗？**
 
-这类发音是 Speex（`.spx`）编码，**所有浏览器都不支持**，需要转成 mp3。两条路，按需选：
+能，**不需要转码、也不需要 ffmpeg**。浏览器没有原生的 Speex 解码器，所以词条里第一次点到 `.spx` 发音时，页面会加载一个约 320KB 的 JS 解码器（之后缓存），在浏览器里解码后播放。同名的 `.mp3`/`.opus` 存在时优先直接播放它们。
 
-- **按需自动转**：往容器里挂一个静态 `ffmpeg` 后，播放时若同名 mp3 不存在就现场转一个落盘（实测单次约 60ms），下次直接命中。挂载方式见后台「系统设置 → 发音转码」里的说明。
-- **后台批量转**：「词典管理」→「扫描发音资源」→ 勾选（或表头全选）→「批量转码」，转成功后删掉原 `.spx`（源词典文件另有备份）。
+点了仍提示「这条发音不存在或解码失败」：多半是资源文件本身缺失——在浏览器开发者工具的「网络」面板里看那条 `/dict-res/...` 请求是不是 404；若是，对该词典执行「词典管理 → 重新解析」即可从源文件补回缺失的资源（已有文件不会被覆盖）。
 
-也可以离线批转：
-
-```bash
-python3 scripts/transcode_spx.py --root /宿主机上的词典资源目录 --dry-run   # 先看工作量
-python3 scripts/transcode_spx.py --root /宿主机上的词典资源目录 --jobs 8
-```
-
-需要宿主机装了 `ffmpeg`（它不随镜像分发——发行版构建通常是 GPL/LGPL，与本项目 MIT 授权不兼容）。脚本在每个 `.spx` 旁边生成同名 `.mp3`，前端优先取转码后的文件；可以分批跑，跑过的会跳过。实测单个文件约 0.055 秒、产物约为原始体积的 1.4 倍。三条路互不冲突：转好的文件都会被直接命中，不会重复转。
+早期版本提供过服务端 ffmpeg 转码（后台「批量转码」、`scripts/transcode_spx.py`），现已移除；之前转好的 mp3 会继续被优先使用，`docker-compose.yml` 里为 ffmpeg 加的挂载可以删掉。
 
 ## License
 

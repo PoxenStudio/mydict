@@ -63,6 +63,7 @@ class MDictParser(DictionaryParser):
         *,
         dictionary_id: int,
         resource_dir: Path | None,
+        overwrite_resources: bool = True,
     ) -> Iterator[ParsedEntry]:
         mdx_paths = [p for p in file_paths if p.suffix.lower() == ".mdx"]
         mdd_paths = [p for p in file_paths if p.suffix.lower() == ".mdd"]
@@ -76,7 +77,9 @@ class MDictParser(DictionaryParser):
                 mdd = _open_mdict(MDD, mdd_path)
                 for key, content in mdd.items():
                     relative_path = key.decode("utf-8", errors="replace")
-                    write_resource(resource_dir, relative_path, content)
+                    write_resource(
+                        resource_dir, relative_path, content, overwrite=overwrite_resources
+                    )
             # 样式表/字体/脚本不在 .mdd 里，而是躺在 .mdx 同级目录；见
             # copy_sibling_resources 的说明
             copy_sibling_resources(resource_dir, file_paths)
