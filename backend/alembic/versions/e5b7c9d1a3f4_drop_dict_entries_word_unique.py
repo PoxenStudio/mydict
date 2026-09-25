@@ -8,8 +8,8 @@ MDict 允许同一词头有多条内容不同的条目（搜韵诗词全文检�
 而原来那条唯一索引建在 `(dictionary_id, word)` 上（word 不是 word_lower），对查询使不上力。
 
 SQLite 上 `drop_constraint(type_="unique")` 会走 batch_alter_table 的整表重建——生产库
-（29GB / 2470 万行）要预留停机时间与同等大小的剩余磁盘，所以标记为重型迁移，不在启动时
-自动执行（见 app/core/migrate.py）。
+（29GB / 2470 万行）要跑几十分钟、需要同等大小的剩余磁盘，所以标记为重型迁移：启动时
+先检查磁盘空间再执行。
 
 Revision ID: e5b7c9d1a3f4
 Revises: c8f1a2b3d4e5

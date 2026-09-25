@@ -118,24 +118,25 @@ def test_pending_migrations_marks_heavy(scratch_db: Path) -> None:
     assert pending[-1].revision == head
 
 
-def test_startup_refuses_heavy_migration_on_large_database(
-    scratch_db: Path, monkeypatch
-) -> None:
-    _upgrade(_BEFORE_HEAVY)
-    _seed_entries(scratch_db)
-    monkeypatch.setattr(migrate, "HEAVY_MIGRATION_ROW_THRESHOLD", 1)
-
-    with pytest.raises(SystemExit, match="app.cli migrate"):
-        migrate.run_migrations()
-    assert _state(scratch_db)["version"] == _BEFORE_HEAVY
-
-
-def test_startup_runs_heavy_migration_on_small_database(scratch_db: Path) -> None:
-    """新装或数据很少的库照常自动迁移，不给小部署添麻烦。"""
+def test_startup_runs_heavy_migration_automatically(scratch_db: Path, capsys) -> None:
     _upgrade(_BEFORE_HEAVY)
     _seed_entries(scratch_db)
     migrate.run_migrations()
     assert migrate.pending_migrations() == []
+    assert _HEAVY in capsys.readouterr().err
+    _assert_migrated(scratch_db)
+
+
+def test_startup_refuses_heavy_migration_without_enough_disk(
+    scratch_db: Path, monkeypatch
+) -> None:
+    _upgrade(_BEFORE_HEAVY)
+    _seed_entries(scratch_db)
+    monkeypatch.setattr(migrate, "free_space_for_database", lambda: (10, 1))
+
+    with pytest.raises(SystemExit, match="磁盘空间"):
+        migrate.run_migrations()
+    assert _state(scratch_db)["version"] == _BEFORE_HEAVY
 
 
 def test_startup_refuses_any_pending_migration_when_auto_migrate_disabled(
