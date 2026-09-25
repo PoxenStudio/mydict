@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
+import SystemTaskBanner from '../components/SystemTaskBanner.vue'
 import DictionarySidebar from '../components/DictionarySidebar.vue'
 import EntryPanel from '../components/EntryPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
@@ -55,6 +56,18 @@ const showLoginGate = computed(
   () => settingsStore.loaded && !settingsStore.openAccess && !authStore.isLoggedIn,
 )
 
+// 检索范围只给登录用户：列出的是其「可用词典」，访客（开放使用）直接查全部已启用词典
+const showSidebar = computed(() => authStore.isLoggedIn)
+
+// 在「词典选择」里改了可用词典后，检索范围跟着换成新的列表
+watch(
+  () => (authStore.profile ? (authStore.profile.allowed_dictionary_ids ?? []).join(',') : null),
+  (current, previous) => {
+    // previous 为 null 是个人资料刚加载完，不是用户改了设置
+    if (showSidebar.value && previous !== null && current !== previous) loadDictionaryFilter()
+  },
+)
+
 const favoritedWords = computed(() => new Set(favoriteMap.value.keys()))
 
 interface DictionaryGroup {
@@ -100,7 +113,10 @@ onMounted(async () => {
   // 这里是裸 Promise.all 的话，loadFavorites 在未登录等场景下一 reject，
   // runFromUrl() 就永远不执行——表现为打开 /?q=词 输入框空着、毫无反应，
   // 而且异常发生在 async 回调里，只会变成一条 unhandled rejection，很难查。
-  await Promise.all([loadFavorites().catch(() => undefined), loadDictionaryFilter()])
+  await Promise.all([
+    loadFavorites().catch(() => undefined),
+    authStore.isLoggedIn ? loadDictionaryFilter() : undefined,
+  ])
   // 词典列表与登录态都就绪了，这时才处理地址栏里的 ?q=（外链直达）
   await runFromUrl()
 })
@@ -241,7 +257,7 @@ async function runSearch(query?: string) {
   status.value = 'loading'
   submittedWord.value = q
   try {
-    const resp = await searchWord(q, filterIds.value)
+    const resp = await searchWord(q, showSidebar.value ? filterIds.value : undefined)
     results.value = resp.results
     status.value = 'ok'
     // 结果出来后把词同步进地址栏，链接才能分享、刷新才能复现
@@ -308,8 +324,9 @@ function onUnsupportedAudio() {
 <template>
   <div class="page">
     <NavBar />
+    <SystemTaskBanner />
 
-    <main class="search-page">
+    <main class="search-page" :class="{ 'no-sidebar': !showSidebar }">
       <section class="search-head">
         <form class="search-box" :class="{ disabled: showLoginGate }" @submit.prevent="runSearch()">
           <input
@@ -322,7 +339,7 @@ function onUnsupportedAudio() {
         </form>
       </section>
 
-      <div class="sidebar-slot">
+      <div v-if="showSidebar" class="sidebar-slot">
         <button type="button" class="sidebar-toggle" @click="mobileOpen = true">
           检索范围（{{ checkedIds.size }}/{{ allIds.length }}）
         </button>
@@ -332,8 +349,8 @@ function onUnsupportedAudio() {
           :loading="dictLoading"
           :is-filtering="isFiltering"
           :mobile-open="mobileOpen"
-            @toggle="toggleDictionary"
-            @select-all="selectAllOrClear"
+          @toggle="toggleDictionary"
+          @select-all="selectAllOrClear"
           @select-language="selectLanguage"
           @close-mobile="mobileOpen = false"
         />
@@ -440,6 +457,16 @@ function onUnsupportedAudio() {
 
 .sidebar-toggle {
   display: none;
+}
+
+.search-page.no-sidebar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.search-page.no-sidebar .search-head,
+.search-page.no-sidebar .layout {
+  grid-column: 1;
+  grid-row: 2;
 }
 
 .content {

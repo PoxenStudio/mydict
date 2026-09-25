@@ -1,47 +1,9 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
-import { getRunningTasks } from '../../api/admin/tasks'
-import type { BackgroundTask } from '../../types/backgroundTask'
+import { useRunningTasks } from '../../composables/useRunningTasks'
+import { taskLabel, taskProgressText } from '../../utils/backgroundTask'
 
-const tasks = ref<BackgroundTask[]>([])
-let timer: ReturnType<typeof setInterval> | undefined
-
-const TASK_TYPE_LABELS: Record<string, string> = {
-  dictionary_import: '词典导入',
-  dictionary_source_repair: '从源文件修复',
-  dictionary_reparse: '重新解析词典',
-}
-
-function taskLabel(task: BackgroundTask) {
-  return TASK_TYPE_LABELS[task.task_type] ?? task.task_type
-}
-
-function taskProgressText(task: BackgroundTask) {
-  const { done, total } = task.progress_data
-  // 修复/重新解析按「已完成 / 总数」报进度；词典导入报的是已写入的词条数，没有总数
-  if (typeof done === 'number' && typeof total === 'number' && total > 0) {
-    return `已处理 ${done.toLocaleString()} / ${total.toLocaleString()}`
-  }
-  return typeof done === 'number' ? `已处理 ${done.toLocaleString()} 条` : '处理中…'
-}
-
-async function poll() {
-  try {
-    tasks.value = await getRunningTasks()
-  } catch {
-    // 轮询失败不打扰用户，下一轮再试
-  }
-}
-
-onMounted(() => {
-  poll()
-  timer = setInterval(poll, 5000)
-})
-
-onUnmounted(() => {
-  clearInterval(timer)
-})
+const { tasks } = useRunningTasks()
 </script>
 
 <template>

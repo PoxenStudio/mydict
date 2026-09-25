@@ -187,8 +187,13 @@ async def test_user_self_service_allowed_dictionaries(
     ids = {r["dictionary_id"] for r in resp.json()["results"]}
     assert ids == {dict_a}
 
-    # 「词典选择」弹窗用来展示可选项的接口不应该被用户自己已设的限制过滤掉
-    resp = await client.get("/api/dict/dictionaries")
+    # 检索范围面板只列用户能用的词典
+    resp = await client.get("/api/dict/dictionaries", headers=user_headers)
+    assert {d["id"] for d in resp.json()} == {dict_a}
+    # 「词典选择」弹窗用来展示可选项，不应该被用户自己已设的限制过滤掉
+    resp = await client.get(
+        "/api/dict/dictionaries", params={"scope": "all"}, headers=user_headers
+    )
     assert {d["id"] for d in resp.json()} >= {dict_a, dict_b}
 
     # 清空限制恢复成不限制
@@ -199,3 +204,17 @@ async def test_user_self_service_allowed_dictionaries(
     resp = await client.get("/api/dict/search", params={"word": "uword"}, headers=user_headers)
     ids = {r["dictionary_id"] for r in resp.json()["results"]}
     assert ids == {dict_a, dict_b}
+    resp = await client.get("/api/dict/dictionaries", headers=user_headers)
+    assert {d["id"] for d in resp.json()} >= {dict_a, dict_b}
+
+
+async def test_dictionary_list_requires_login(client: AsyncClient, db_session) -> None:
+    # 即使开放使用，词典列表也只给登录用户：访客不显示检索范围面板，直接查全部已启用词典
+    set_setting(db_session, "open_access", "true")
+    try:
+        resp = await client.get("/api/dict/dictionaries")
+        assert resp.status_code == 401
+        resp = await client.get("/api/dict/dictionaries", params={"scope": "all"})
+        assert resp.status_code == 401
+    finally:
+        set_setting(db_session, "open_access", "false")

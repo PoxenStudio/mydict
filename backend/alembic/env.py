@@ -12,7 +12,7 @@ from app.core.db import Base
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and not config.attributes.get("keep_app_logging"):
     # disable_existing_loggers 默认 True 会把应用自己已创建的 logger（如 mydict.auth）
     # 标记为 disabled，导致迁移跑完之后这些 logger 永久失效，改成 False 避免误伤
     fileConfig(config.config_file_name, disable_existing_loggers=False)

@@ -10,6 +10,7 @@ def test_start_update_succeed_lifecycle() -> None:
             "id": task.id,
             "task_type": "dictionary_import",
             "title": "测试词典",
+            "public": False,
             "status": "running",
             "progress_data": {},
             "result": None,

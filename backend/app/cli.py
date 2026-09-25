@@ -148,7 +148,7 @@ def _format_size(num_bytes: int) -> str:
 
 
 def migrate(args: argparse.Namespace) -> None:
-    """手动执行数据库迁移（启动时也会自动执行，这里用于想自己掌控时机或 AUTO_MIGRATE=false）。
+    """手动执行数据库迁移（服务启动时会自动执行，这里是自动迁移失败后的兜底）。
 
     必须先停掉服务：迁移期间 SQLite 被独占，服务同时读写只会互相卡住。
     """
