@@ -30,8 +30,9 @@ from collections.abc import Callable, Mapping
 from sqlalchemy import bindparam, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.models.dictionary import DictEntry
+from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.mdict_stylesheet import expand_style_markers
+from app.services.entry_scope import in_dictionary_for_id_window
 
 logger = logging.getLogger("mydict.dictionary")
 
@@ -123,6 +124,8 @@ def repair_legacy_links(
         result = db.execute(
             update(DictEntry)
             .where(
+                # 主键区间里可能夹着别的词典的行（导入/重新解析交错写入），必须按词典过滤
+                in_dictionary_for_id_window(dictionary_id),
                 DictEntry.id > cursor,
                 DictEntry.id <= window_end,
                 or_(
@@ -189,7 +192,7 @@ def expand_stored_styles(
             select(DictEntry.id, DictEntry.definition).where(
                 DictEntry.id > cursor,
                 DictEntry.id <= window_end,
-                DictEntry.dictionary_id == dictionary_id,
+                in_dictionary_for_id_window(dictionary_id),
                 DictEntry.definition.like("%`%"),
             )
         ).all()
@@ -210,17 +213,30 @@ def expand_stored_styles(
 
 
 def dictionaries_using_style_markers(db: Session, dictionary_ids: set[int]) -> set[int]:
-    """一次扫描找出「词条里含反引号」的词典，返回与 `dictionary_ids` 的交集。
+    """在 `dictionary_ids` 里找出「词条里含反引号」的 MDict 词典。
 
     为什么要先做这一步：展开需要 `.mdx` 头部里的 `StyleSheet`，而打开一个 `.mdx` 会把整份
     词头索引读进内存——实测 63 部全开要 60~80 秒（搜韵诗词 17.6s、The little dict 8.7s），
-    还有个别是 LZO 压缩根本打不开。所以先用一次 LIKE 扫描定位真正含标记的少数几部，
-    只对它们打开源文件。这次扫描本身要读一遍全部释义文本（几十秒），但只跑一次，
-    而它省下的是 60~80 秒的解析开销加几百 MB 的内存峰值。
+    还有个别是 LZO 压缩根本打不开。所以先定位真正含标记的少数几部，只对它们打开源文件。
+
+    逐部用 `EXISTS … LIMIT 1` 判断，而不是对整张表 LIKE + GROUP BY：只看调用方要修的那几部
+    （管理员只勾一部时不该扫 29GB）、只看 MDict（StyleSheet 只存在于 `.mdx`），且命中第一条就停。
+    最坏情况（一部都不含）是把选中词典的释义各读一遍，不会比全表扫描更多。
     """
-    rows = db.execute(
-        select(DictEntry.dictionary_id)
-        .where(DictEntry.definition.like("%`%"))
-        .group_by(DictEntry.dictionary_id)
-    ).all()
-    return {row[0] for row in rows if row[0] in dictionary_ids}
+    if not dictionary_ids:
+        return set()
+    candidates = db.execute(
+        select(Dictionary.id).where(
+            Dictionary.id.in_(dictionary_ids), Dictionary.format == "mdict"
+        )
+    ).scalars()
+    found: set[int] = set()
+    for dictionary_id in candidates:
+        hit = db.execute(
+            select(DictEntry.id)
+            .where(DictEntry.dictionary_id == dictionary_id, DictEntry.definition.like("%`%"))
+            .limit(1)
+        ).first()
+        if hit is not None:
+            found.add(dictionary_id)
+    return found

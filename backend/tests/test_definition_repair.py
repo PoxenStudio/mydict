@@ -304,3 +304,31 @@ def test_dictionaries_using_style_markers_intersects_requested(db_session: Sessi
 
     assert dictionaries_using_style_markers(db_session, {a, b}) == {a}
     assert dictionaries_using_style_markers(db_session, {b}) == set()
+
+
+def test_dictionaries_using_style_markers_skips_non_mdict(db_session: Session) -> None:
+    """StyleSheet 只存在于 .mdx：StarDict/ECDICT 词典即使正文里有反引号也不用查。"""
+    mdict = _make_dictionary(db_session, "MDict").id
+    stardict = _make_dictionary(db_session, "StarDict")
+    stardict.format = "stardict"
+    db_session.commit()
+    _add_entry(db_session, mdict, "x", "`1`x")
+    _add_entry(db_session, stardict.id, "y", "`1`y")
+
+    assert dictionaries_using_style_markers(db_session, {mdict, stardict.id}) == {mdict}
+    assert dictionaries_using_style_markers(db_session, set()) == set()
+
+
+def test_repair_does_not_touch_other_dictionary_inside_id_window(db_session: Session) -> None:
+    """主键区间里夹着别的词典的行时，即使它的正文恰好含本词典的坏链接前缀也不能改。"""
+    first = _make_dictionary(db_session, "区间甲").id
+    second = _make_dictionary(db_session, "区间乙").id
+    bad = f'<a href="/dict-res/{first}/res/entry:/x">x</a>'
+    head = _add_entry(db_session, first, "头", bad)
+    middle = _add_entry(db_session, second, "夹在中间", bad)  # id 落在甲的区间内
+    tail = _add_entry(db_session, first, "尾", bad)
+    assert head.id < middle.id < tail.id
+
+    assert repair_legacy_links(db_session, first) == 2
+    assert _definition(db_session, middle.id) == bad
+    assert _definition(db_session, head.id) == '<a href="entry://x">x</a>'

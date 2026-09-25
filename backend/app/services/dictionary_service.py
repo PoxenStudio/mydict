@@ -27,7 +27,7 @@ from app.services.definition_repair import (
     dictionaries_using_style_markers,
     expand_stored_styles,
 )
-from app.services.entry_scope import current_generation_only
+from app.services.entry_scope import current_generation_only, in_dictionary_for_id_window
 from app.services.language_detect import detect_language
 from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 
@@ -651,7 +651,7 @@ def _purge_generations(db: Session, dictionary_id: int, condition) -> None:
         upper = min(cursor + _PURGE_BATCH_SIZE, highest)
         db.execute(
             delete(DictEntry).where(
-                DictEntry.dictionary_id == dictionary_id,
+                in_dictionary_for_id_window(dictionary_id),
                 DictEntry.id > cursor,
                 DictEntry.id <= upper,
                 condition,
