@@ -244,6 +244,37 @@ def _query_entries(
     )
 
 
+# 「精确未命中 → 前缀兜底」时每部词典最多返回的词头数。
+_PREFIX_FALLBACK_LIMIT = 8
+
+
+def _prefix_fallback_entries(
+    db: Session, prefix_lower: str, dictionary_id: int
+) -> list[DictEntry]:
+    """精确匹配打不中时退回到「以输入开头的词头」。
+
+    为什么需要：不少词典的 MDict 词头带注记后缀（Japanese Education Vocabulary 的
+    「あ【亜】」「み【味】」、搜韵的「中国【ちゅうごく①】」），对它们做**精确**匹配永远
+    打不中，而 MDict 客户端与 django-mdict 的搜索都是前缀式的，用户因此觉得「明明有这部
+    词典却查不到」。管理端测试查询本来就是前缀 LIKE（dictionary_service.test_query）。
+
+    查询走 (dictionary_id, word_lower) 复合索引：未命中的词典一次索引范围读，只取前几条，
+    代价可忽略；有精确命中的词典根本不进这条路径。
+    """
+    if not prefix_lower:
+        return []
+    return (
+        current_generation_only(db.query(DictEntry))
+        .filter(
+            DictEntry.dictionary_id == dictionary_id,
+            DictEntry.word_lower.like(f"{prefix_lower}%"),
+        )
+        .order_by(DictEntry.word_lower)
+        .limit(_PREFIX_FALLBACK_LIMIT)
+        .all()
+    )
+
+
 def search_word(
     db: Session,
     word: str,
@@ -279,10 +310,28 @@ def search_word(
     others = [d.id for d in candidates.dictionaries if d.id not in candidates.preferred_ids]
 
     entries = _query_entries(db, variants, preferred)
-    if not entries:
-        # 优先语言一部都没命中，才退到其余语言。命中时绝不混入，避免一次查询把
-        # 中/日/英各语言的词典全铺出来。
+    if entries:
+        # 优先语言有精确命中：其余语言的词典完全不参与（既不精确、也不前缀），
+        # 避免一次查询把中/日/英各语言的词典全铺出来。
+        fallback_scope = preferred
+    else:
         entries = _query_entries(db, variants, others)
+        # 其余语言也没命中时两层都试过，前缀兜底放开到全部候选；其余语言有命中时
+        # 只在其余语言里兜（优先语言已经精确查过且落空，混进来只会是噪音）。
+        fallback_scope = others if entries else preferred + others
+
+    # 前缀兜底：对 fallback_scope 里「精确未命中」的词典退回前缀匹配（词头带注记
+    # 后缀的词典，如 Japanese Education Vocabulary 的「あ【亜】」，精确匹配永远打不中）。
+    # 上限 _PREFIX_FALLBACK_LIMIT 条/词典，无关语言最多带出可控的几条小噪音。
+    hit_ids = {e.dictionary_id for e in entries}
+    prefix_entries: list[DictEntry] = []
+    for candidate in candidates.dictionaries:
+        if candidate.id in hit_ids or candidate.id not in fallback_scope:
+            continue
+        prefix_entries.extend(
+            _prefix_fallback_entries(db, word_lower, candidate.id)
+        )
+    entries = list(entries) + prefix_entries
 
     # 结果顺序决定前端手风琴里「哪一部默认展开」，所以显式按候选词典的顺序排，
     # 不依赖数据库返回行的顺序。

@@ -470,6 +470,16 @@
       el.onended = function () {
         send('audio-ended', { url: url })
       }
+      // mp3/opus 这类 404 的候选会**同时**触发 error 事件与 play() 的 reject，两边
+      // 各推进一次会跳级、还多出一次越界 attempt —— 表现为音频明明解码成功播出来了，
+      // 却仍弹「发音不存在」（实测大辞泉、韦氏大学词典，都是纯 spx 词典）。每次
+      // attempt 只许推进一次。
+      var advanced = false
+      function advance() {
+        if (advanced) return
+        advanced = true
+        attempt()
+      }
       // 走到原 .spx 这一步：原生放不了，交给 JS 解码。先摘掉上一个候选挂的 onerror，
       // 否则解码结果播放失败时会再触发一次 attempt，重复上报
       if (SPX_EXT_RE.test(current)) {
@@ -477,13 +487,11 @@
         playSpeexDecoded(el, current, fail)
         return
       }
-      el.onerror = attempt
+      el.onerror = advance
       el.src = current
       var played = el.play()
       if (played && played.catch) {
-        played.catch(function () {
-          attempt()
-        })
+        played.catch(advance)
       }
     }
     attempt()

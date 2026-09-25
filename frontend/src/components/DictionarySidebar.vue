@@ -9,6 +9,8 @@ const props = defineProps<{
   loading: boolean
   /** 是否正在按勾选收窄范围（false = 检索全部） */
   isFiltering: boolean
+  /** 「全部」按钮第二下进入的视觉清空态：复选框全空但语义仍是不限制 */
+  cleared: boolean
   /** 移动端由外层控制显示 */
   mobileOpen: boolean
 }>()
@@ -119,7 +121,7 @@ function selectScope(scope: string) {
 
     <div class="actions">
       <button type="button" :class="{ active: !isFiltering }" @click="emit('selectAll')">
-        全部
+        {{ cleared ? '不选' : '全部' }}
       </button>
       <button
         v-for="scope in languageScopes"
@@ -132,7 +134,8 @@ function selectScope(scope: string) {
       </button>
     </div>
 
-    <p v-if="!loading && !isFiltering" class="hint">未限制范围：检索全部已启用词典</p>
+    <p v-if="!loading && cleared" class="hint">已清空勾选（仍检索全部），勾任意一部即收窄范围；再点「不选」恢复全部。</p>
+    <p v-else-if="!loading && !isFiltering" class="hint">未限制范围：检索全部已启用词典</p>
 
     <p v-if="loading" class="hint">正在载入词典列表…</p>
     <p v-else-if="dictionaries.length === 0" class="hint">暂无已启用的词典。</p>
@@ -141,10 +144,16 @@ function selectScope(scope: string) {
     <ul v-else class="dict-list app-scrollbar">
       <li v-for="item in visible" :key="item.id">
         <label class="dict-row">
+          <!--
+            用 @click.prevent 而不是 @change：checkbox 的原生翻转先改了 DOM，@change 里的
+            状态更新若把 :checked 算回同一个值（如「全部」态里点掉一部又回到只选它），
+            Vue 判定 prop 无变化就不会回写 DOM，勾选框从此与真实状态错位——实测表现为
+            「取消最后一部时其余词典全被勾上、唯独它自己没勾」。
+          -->
           <input
             type="checkbox"
             :checked="checkedIds.has(item.id)"
-            @change="emit('toggle', item.id)"
+            @click.prevent="emit('toggle', item.id)"
           />
           <span class="dict-name" :title="item.name">{{ item.name }}</span>
           <span class="dict-lang">{{ langLabel(item.lang_from) }}</span>

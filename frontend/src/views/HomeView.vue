@@ -28,6 +28,7 @@ const {
   allIds,
   filterIds,
   isFiltering,
+  clearedView,
   loading: dictLoading,
   load: loadDictionaryFilter,
   toggle: toggleDictionary,
@@ -331,6 +332,7 @@ function onUnsupportedAudio() {
           :checked-ids="checkedIds"
           :loading="dictLoading"
           :is-filtering="isFiltering"
+          :cleared="clearedView"
           :mobile-open="mobileOpen"
             @toggle="toggleDictionary"
             @select-all="selectAllOrClear"
