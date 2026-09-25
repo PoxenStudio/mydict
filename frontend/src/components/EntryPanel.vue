@@ -156,7 +156,7 @@ function isLoading(word: string) {
 
         <EntryFrame
           :key="`${primary.dictionary_id}-${primary.word}`"
-          :loader="() => getEntryHtml(primary.dictionary_id, primary.word)"
+          :loader="() => getEntryHtml(primary.dictionary_id, queryWord, [primary.id])"
           @entry="emit('entry', $event)"
           @unsupported-audio="emit('unsupportedAudio')"
         />

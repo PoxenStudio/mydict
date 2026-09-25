@@ -2037,11 +2037,61 @@ async def test_entry_ids_are_limited_to_the_queried_word(
     assert resp.text.count('<section class="mydict-entry">') == 2
     assert "别的词头" not in resp.text
 
+    # 只给别的词的 id：一条都对不上 → 退回按「毛泽东」取，仍然拿不到沁园春的内容
     resp = await client.get(
         f"/api/dict/entry/{dict_id}",
         params={"word": "毛泽东", "entry_ids": str(ids["沁园春"][0])},
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert resp.text.count('<section class="mydict-entry">') == 2
+    assert "别的词头" not in resp.text
+
+
+async def test_stale_entry_ids_fall_back_to_word_after_reparse(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """重新解析后条目 id 整体换新，页面上旧查询结果带着旧 id 来取，不该显示「词条不存在」。"""
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "ids-stale")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+    finally:
+        db.close()
+    old_ids = _entry_ids_by_word(dict_id)["毛泽东"]
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert not set(old_ids) & set(_entry_ids_by_word(dict_id)["毛泽东"])
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东", "entry_ids": ",".join(str(i) for i in old_ids)},
+    )
+    assert resp.status_code == 200
+    assert resp.text.count('<section class="mydict-entry">') == 2
+
+
+async def test_single_entry_ids_render_exactly_that_entry(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """单条也传 entry_ids：同名多条时只渲染被点开的那一条，不再按词把整组都拉出来。"""
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "ids-one")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+    finally:
+        db.close()
+    first, second = _entry_ids_by_word(dict_id)["毛泽东"]
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}", params={"word": "毛泽东", "entry_ids": str(second)}
+    )
+    assert resp.status_code == 200
+    assert "第二首" in resp.text and "第一首" not in resp.text
 
 
 async def test_entry_document_has_its_own_rate_limit(

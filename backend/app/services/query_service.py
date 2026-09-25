@@ -344,15 +344,21 @@ def get_entries_for_document(
     条目（与 search_word 的匹配范围一致）：`entry_ids` 是客户端输入，不加这层约束的话
     随便填 id 就能逐段拉走整部词典，绕过查询配额。
 
+    `entry_ids` 一条都对不上时退回按词取：词典被重新解析后条目 id 整体换新，页面上还开着的
+    旧查询结果带的是旧 id，不该因此显示「词条不存在」。
+
     释义是 `@@@LINK=` 的逐条解引用。
     """
-    statement = current_generation_only(db.query(DictEntry)).filter(
-        DictEntry.dictionary_id == dictionary_id
+    statement = (
+        current_generation_only(db.query(DictEntry))
+        .filter(DictEntry.dictionary_id == dictionary_id)
+        .filter(DictEntry.word_lower.in_(expand_word(word)))
     )
-    statement = statement.filter(DictEntry.word_lower.in_(expand_word(word)))
+    entries: list[DictEntry] = []
     if entry_ids:
-        statement = statement.filter(DictEntry.id.in_(entry_ids))
-    entries = statement.order_by(DictEntry.id).all()
+        entries = statement.filter(DictEntry.id.in_(entry_ids)).order_by(DictEntry.id).all()
+    if not entries:
+        entries = statement.order_by(DictEntry.id).all()
     return [_resolve_link(db, entry) for entry in entries]
 
 

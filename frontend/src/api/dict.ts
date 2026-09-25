@@ -23,9 +23,9 @@ export function listDictionaries() {
  *
  * 同一部词典里同一词头可以有多条内容不同的条目（MDict 允许），这时整组条目会聚合进
  * **一个**文档返回——逐条各建 iframe 的话，搜韵这类词典展开一次就要挂载 82 个沙箱文档。
- * `entryIds` 用来告诉后端这一组是哪些条目（查询结果里带回了 id），不传则后端按词的
- * 变体集合取（兼容单条与旧调用）。传 `entryIds` 时 `word` 必须是用户查询输入的词：
- * 后端只在它的变体范围内认这些 id。
+ * `entryIds` 告诉后端要渲染哪些条目（查询结果里带回的 id，单条也传），保证 iframe 里的内容
+ * 与结果列表一一对应。`word` 必须是用户查询输入的词：后端只在它的变体范围内认这些 id；
+ * id 都对不上（词典被重新解析过、条目 id 已换新）时后端退回按词取。
  *
  * 必须走 axios 取回再塞 srcdoc，而不是让 iframe 直接 src 到这个地址：
  * iframe 导航不会带 Authorization 头，端点就只能匿名开放，会绕过 Token 的
@@ -36,7 +36,7 @@ export function getEntryHtml(dictionaryId: number, word: string, entryIds?: numb
   return request.get<never, string>(`/dict/entry/${dictionaryId}`, {
     params: {
       word,
-      entry_ids: entryIds && entryIds.length > 1 ? entryIds.join(',') : undefined,
+      entry_ids: entryIds && entryIds.length ? entryIds.join(',') : undefined,
       theme: currentTheme(),
     },
     responseType: 'text',
