@@ -11,7 +11,10 @@ const props = defineProps<{
   /** 用户这次查询输入的词：后端只在它的变体范围内认 entry_ids */
   queryWord: string
   expanded: boolean
-  /** 首次展开后才挂载 iframe：一次查询可能命中几十部词典，不能一上来就建几十个文档 */
+  /**
+   * 是否在「保留已挂载 iframe」的 LRU 里（见 HomeView 的 liveKeys）。首次展开后才挂载，
+   * 折叠后仍保留（声音还在放、内部滚动位置也留着），被挤出 LRU 才销毁
+   */
   mounted: boolean
   favoritedWords: Set<string>
   favoriteLoading: Set<string>
@@ -114,14 +117,24 @@ function isLoading(word: string) {
       />
     </header>
 
-    <div v-if="expanded" class="panel-body">
+    <!--
+      折叠时不用 display:none：隐藏的 iframe 会按 0 宽度排版、上报一个极大的高度，把 EntryFrame
+      的增长守卫误触发成「冻结可滚动」。改为高度收成 0，iframe 仍按真实宽度排版；inert 挡住
+      键盘焦点落进看不见的内容。
+    -->
+    <div
+      v-if="expanded || mounted"
+      class="panel-body"
+      :class="{ collapsed: !expanded }"
+      :inert="!expanded"
+    >
       <!--
         同一部词典命中多条（同名词条或繁简变体）时，整个词典只用一个 iframe：词条端点会把
         这组词条聚合进一个文档，条与条之间有小标题和分隔线（见后端 render_entries_document）。
         逐条各建一个 iframe 的话，搜韵诗词全文检索版这类词典展开一次就要挂载 82 个沙箱文档。
       -->
       <EntryFrame
-        v-if="hasMultiple && mounted"
+        v-if="hasMultiple"
         :key="`${primary.dictionary_id}-${primary.word}`"
         :loader="() => getEntryHtml(primary.dictionary_id, queryWord, entries.map((item) => item.id))"
         @entry="emit('entry', $event)"
@@ -131,8 +144,6 @@ function isLoading(word: string) {
       <!--
         单条：per-entry 的徽标（牛津3000 / 柯林斯星级 / extra 字段）只有 ECDICT 这类
         词典才有，它们不会同名多义，保持原来的渲染即可。
-        释义只在首次展开时才去取、才建 iframe。留着已挂载的 iframe 而不是每次折叠就销毁，
-        这样音频播放位置与内部滚动不会丢。
       -->
       <article v-if="!hasMultiple" :key="`${primary.dictionary_id}-${primary.word}`" class="entry">
         <div v-if="isOxford3000(primary) || collinsStars(primary) || tagBadges(primary).length" class="badges">
@@ -144,7 +155,6 @@ function isLoading(word: string) {
         </div>
 
         <EntryFrame
-          v-if="mounted"
           :key="`${primary.dictionary_id}-${primary.word}`"
           :loader="() => getEntryHtml(primary.dictionary_id, primary.word)"
           @entry="emit('entry', $event)"
@@ -233,6 +243,13 @@ function isLoading(word: string) {
 
 .panel-body {
   padding: 0 var(--space-5) var(--space-5);
+}
+
+.panel-body.collapsed {
+  height: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  visibility: hidden;
 }
 
 .entry-header {

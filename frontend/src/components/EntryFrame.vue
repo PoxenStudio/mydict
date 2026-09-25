@@ -41,6 +41,9 @@ const FALLBACK_DELAY_MS = 4000
 // 阈值放宽是因为**图片解码本来就会让高度一路变大**——千篇那类词条里有一千多张字形图，
 // 每张解码完都会触发一次上报。按原来的「3 秒后增长 5 次」会把这种正常的加载过程误判成
 // 布局震荡，直接冻结成可滚动（又是词条里的滚动条）。
+//
+// 计数按滚动窗口算（每个窗口 5 秒内超过 40 次才冻结），而不是累计整个生命周期：iframe 折叠后
+// 会被保留下来，窗口缩放、词典脚本展开折叠带来的零星增长长期累积，迟早会误触发。
 const GROWTH_WINDOW_MS = 5000
 const GROWTH_LIMIT = 40
 // 单帧消息限流：防止词典脚本往父页刷消息
@@ -62,6 +65,7 @@ const scrollable = ref(false)
 let messageCount = 0
 let messageWindowStart = 0
 let grew = 0
+let growthWindowStart = 0
 let firstHeightAt = 0
 let frozen = false
 let fallbackTimer: number | undefined
@@ -83,6 +87,10 @@ function applyHeight(raw: number) {
 
   // 只增长不回落 → 冻结，改用滚动，避免页面被无限拉长
   if (now - firstHeightAt > GROWTH_WINDOW_MS && raw > boxHeight.value) {
+    if (now - growthWindowStart > GROWTH_WINDOW_MS) {
+      growthWindowStart = now
+      grew = 0
+    }
     grew += 1
     if (grew > GROWTH_LIMIT) {
       frozen = true
@@ -98,6 +106,8 @@ function applyHeight(raw: number) {
     scrollable.value = true
     return
   }
+  // 内容缩回上限以内（如词典脚本折叠了一段）就恢复成不滚动、按内容撑高
+  scrollable.value = false
   boxHeight.value = Math.max(MIN_HEIGHT, Math.ceil(raw))
 }
 
@@ -185,6 +195,7 @@ async function load() {
   scrollable.value = false
   frozen = false
   grew = 0
+  growthWindowStart = 0
   firstHeightAt = 0
   try {
     html.value = await props.loader()
@@ -230,9 +241,9 @@ onBeforeUnmount(() => {
       :srcdoc="html"
       sandbox="allow-scripts"
       referrerpolicy="no-referrer"
-      @load="postTheme"
       :style="{ height: `${boxHeight}px`, overflow: scrollable ? 'auto' : 'hidden' }"
       title="词条内容"
+      @load="postTheme"
     />
     <ImageLightbox
       v-if="lightboxSrc"
