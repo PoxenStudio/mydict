@@ -76,3 +76,24 @@ class DictEntry(Base):
     phonetic: Mapped[str | None] = mapped_column(String(255), nullable=True)
     definition: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DictEntryStaging(Base):
+    """「重新解析」的暂存区：新词条先分批写到这里，写完再换进 `dict_entries`。
+
+    直接在 `dict_entries` 上「先删后灌」会让这部词典在整个解析期间查不到内容，而且灌库
+    的大事务长时间独占 SQLite 的写锁，站内每次查询都要写的 query_log 会因此超时报错。
+    暂存区不参与查询，可以每批提交；只有最后的换入要碰正式表，且同样分批。
+    """
+
+    __tablename__ = "dict_entries_staging"
+    __table_args__ = (Index("ix_dict_entries_staging_dict_id", "dictionary_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # 不加外键：解析中途词典被删时，残留行由下一次重新解析清掉即可
+    dictionary_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    word: Mapped[str] = mapped_column(String(255), nullable=False)
+    word_lower: Mapped[str] = mapped_column(String(255), nullable=False)
+    phonetic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    extra: Mapped[str | None] = mapped_column(Text, nullable=True)

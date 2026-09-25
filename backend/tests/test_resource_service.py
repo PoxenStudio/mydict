@@ -50,6 +50,16 @@ def test_write_resource_rejects_traversal(tmp_path: Path) -> None:
         write_resource(tmp_path, "../../etc/passwd", b"evil")
 
 
+def test_write_resource_without_overwrite_keeps_existing_and_adds_missing(tmp_path: Path) -> None:
+    """重新解析给正在服务的词典补资源：已有文件不动，缺的补上，不留临时文件。"""
+    write_resource(tmp_path, "a/x.png", b"old")
+    write_resource(tmp_path, "a/x.png", b"new", overwrite=False)
+    write_resource(tmp_path, "a/y.png", b"added", overwrite=False)
+    assert (tmp_path / "a" / "x.png").read_bytes() == b"old"
+    assert (tmp_path / "a" / "y.png").read_bytes() == b"added"
+    assert sorted(p.name for p in (tmp_path / "a").iterdir()) == ["x.png", "y.png"]
+
+
 # ------------------------------------------------------- MDict 同级附属资源
 #
 # MDict 的样式表/字体/脚本放在 .mdx 同级目录而不是 .mdd 里，词条的 <link href="oxbw.css">

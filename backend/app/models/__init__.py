@@ -1,6 +1,6 @@
 from app.models.admin import Admin
 from app.models.audit import AuditLog
-from app.models.dictionary import DictEntry, Dictionary
+from app.models.dictionary import DictEntry, DictEntryStaging, Dictionary
 from app.models.query import QueryLog, QueryStatsDaily
 from app.models.settings import SystemSetting
 from app.models.token import ApiToken
@@ -12,6 +12,7 @@ __all__ = [
     "User",
     "Dictionary",
     "DictEntry",
+    "DictEntryStaging",
     "ApiToken",
     "VocabItem",
     "TokenVocabItem",

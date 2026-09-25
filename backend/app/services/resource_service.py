@@ -96,12 +96,29 @@ def normalize_resource_path(raw_path: str) -> str:
     return "/".join(parts)
 
 
-def write_resource(resource_dir: Path, relative_path: str, content: bytes) -> None:
-    """将资源内容写入 resource_dir/relative_path，自动创建父目录。"""
+def write_resource(
+    resource_dir: Path, relative_path: str, content: bytes, *, overwrite: bool = True
+) -> None:
+    """将资源内容写入 resource_dir/relative_path，自动创建父目录。
+
+    overwrite=False 用于给**正在服务**的词典补文件：已存在的跳过，新文件走「临时文件 +
+    os.replace」，不让并发请求读到半截内容。
+    """
     normalized = normalize_resource_path(relative_path)
     target = resource_dir / normalized
+    if not overwrite and target.exists():
+        return
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    if overwrite:
+        target.write_bytes(content)
+        return
+    temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, target)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _source_dirs(sources: Iterable[Path]) -> list[Path]:

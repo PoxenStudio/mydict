@@ -1793,3 +1793,142 @@ async def test_reparse_restores_lost_duplicate_headwords(
         assert db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).count() == 3
     finally:
         db.close()
+
+
+def _count_rows(model, dict_id: int) -> int:
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return db.query(model).filter(model.dictionary_id == dict_id).count()
+    finally:
+        db.close()
+
+
+async def _import_duplicate_headword_dict(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, name: str
+) -> int:
+    files = _build_mdx_with_duplicate_headword(tmp_path)
+    rel = _write_scratch(name, files)
+    dictionary = await import_from_dicts_dir(
+        client,
+        admin_headers,
+        json={
+            "name": name,
+            "format": "mdict",
+            "lang_from": "zh-Hans",
+            "lang_to": "zh-Hans",
+            "files": [f"{rel}/{file_name}" for file_name in files],
+        },
+    )
+    return dictionary["id"]
+
+
+async def test_reparse_failure_keeps_old_entries(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """解析中途抛错时旧词条原封不动、暂存区被清空——不再有「先删后灌」留下的空词典。"""
+    from app.models.dictionary import DictEntry, DictEntryStaging
+    from app.parsers.base import ParsedEntry
+    from app.parsers.mdict import MDictParser
+
+    dict_id = await _import_duplicate_headword_dict(
+        client, admin_headers, tmp_path, "reparse-fail"
+    )
+    before = _count_rows(DictEntry, dict_id)
+    assert before == 3
+
+    def broken_parse(self, file_paths, **kwargs):
+        yield ParsedEntry(word="半截", definition="<p>写进暂存区的一条</p>")
+        raise RuntimeError("源文件损坏")
+
+    monkeypatch.setattr(MDictParser, "parse", broken_parse)
+    monkeypatch.setattr("app.services.dictionary_service.BATCH_SIZE", 1)
+
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "error", task
+
+    assert _count_rows(DictEntry, dict_id) == before
+    assert _count_rows(DictEntryStaging, dict_id) == 0
+
+
+async def test_reparse_chunked_swap_replaces_all_rows(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """大词典走分批换入：结果与一次换入相同，旧行全部删掉、暂存区清空、顺序保持源文件顺序。"""
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry, DictEntryStaging
+
+    dict_id = await _import_duplicate_headword_dict(
+        client, admin_headers, tmp_path, "reparse-chunked"
+    )
+    db = SessionLocal()
+    try:
+        old_ids = {
+            row.id for row in db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id)
+        }
+    finally:
+        db.close()
+
+    monkeypatch.setattr("app.services.dictionary_service._SWAP_ATOMIC_LIMIT", 0)
+    monkeypatch.setattr("app.services.dictionary_service._SWAP_BATCH_SIZE", 1)
+
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert task["result"]["entries"] == 3
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DictEntry)
+            .filter(DictEntry.dictionary_id == dict_id)
+            .order_by(DictEntry.id)
+            .all()
+        )
+        assert len(rows) == 3
+        assert not old_ids & {row.id for row in rows}
+        assert [row.definition.strip() for row in rows if row.word == "毛泽东"] == [
+            "<p>第一首</p>",
+            "<p>第二首</p>",
+        ]
+    finally:
+        db.close()
+    assert _count_rows(DictEntryStaging, dict_id) == 0
+
+
+async def test_reparse_does_not_overwrite_existing_resources(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """重新解析只补缺失的资源：词典正在服务，覆盖已有文件会让并发请求读到半截内容。"""
+    from app.services import dictionary_service
+
+    dict_id = await _import_duplicate_headword_dict(
+        client, admin_headers, tmp_path, "reparse-res"
+    )
+    seen: list[bool] = []
+    original_parse = dictionary_service.MDictParser.parse
+
+    def spy_parse(self, file_paths, **kwargs):
+        seen.append(kwargs.get("overwrite_resources", True))
+        return original_parse(self, file_paths, **kwargs)
+
+    monkeypatch.setattr(dictionary_service.MDictParser, "parse", spy_parse)
+
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    assert task["status"] == "success", task
+    assert seen == [False]

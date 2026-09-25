@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import delete, func, insert, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -15,7 +15,7 @@ from app.core.db import SessionLocal
 from app.core.exceptions import AppError, ConflictError, NotFoundError, ValidationAppError
 from app.core.query_cache import invalidate as invalidate_query_cache
 from app.models.audit import AuditLog
-from app.models.dictionary import DictEntry, Dictionary
+from app.models.dictionary import DictEntry, DictEntryStaging, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
 from app.parsers.mdict import MDictParser, read_stylesheet
@@ -33,6 +33,11 @@ from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibl
 logger = logging.getLogger("mydict.dictionary")
 
 BATCH_SIZE = 2000
+
+# 重新解析换入正式表时每批的行数：每批一个短事务，不长时间占着 SQLite 的写锁
+_SWAP_BATCH_SIZE = 20_000
+# 不超过这个条数的词典「删旧 + 插新」放在同一个事务里，查询看不到中间态
+_SWAP_ATOMIC_LIMIT = 200_000
 
 # 语言识别采样条数。词头能做到跨整部词典均匀取样（MDict 的词头表在打开时就已全部读入
 # 内存，按下标取值是纯内存操作），所以多取一些几乎不花钱；释义只能顺序多读再过滤，
@@ -504,11 +509,11 @@ def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Setti
     **原地**：词典 id 不变——Token/用户的「可用词典」白名单、生词本（存的是词典 id 加释义
     快照，词典本身没动）、检索范围勾选全都不用重配。词条 id 会变，但没有任何数据引用它。
 
-    做法是「先清空这部词典的词条、再全量重灌」：
-    - 保证释义用的是**当前**的改写规则。此前有几轮改写修复（`@@@LINK=` 解引用是查询时的、
-      但资源引用改写与样式展开是导入时做的），老行是老规则产出的，只补缺失行会把新旧两种
-      格式混在同一部词典里。
-    - 失败了直接重跑一遍即可，没有半途状态要收拾（每次跑都从清空开始）。
+    全量重灌而不是只补缺失行：此前有几轮导入期改写修复，老行是老规则产出的，只补缺失会把
+    新旧两种格式混在同一部词典里。
+
+    重灌分两步，见 `_reparse_one`：先解析进暂存表（旧词条照常可查），再分批换入正式表。
+    中途失败时旧词条原封不动，重跑即可。
     """
     targets = _spx_targets(db, dictionary_ids)
     task = background_tasks.start("dictionary_reparse", "重新解析词典")
@@ -541,15 +546,6 @@ def _run_reparse_in_background(
                 background_tasks.update_progress(task_id, {"done": index, "total": total})
                 continue
 
-            parser = _PARSERS[dictionary.format]()
-            storage_root = Path(settings.dictionary_storage_path) / str(dict_id)
-            # 勾了「不导入发音/图片」的词典没有 res/，parse 的 resource_dir 传 None：
-            # 释义不做资源引用改写，与当初导入时的行为一致
-            resource_dir = storage_root / "res" if (storage_root / "res").is_dir() else None
-
-            db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).delete()
-            db.commit()
-
             def on_progress(
                 done: int, _task_id: int = task_id, _index: int = index, _total: int = total
             ) -> None:
@@ -558,27 +554,13 @@ def _run_reparse_in_background(
                     _task_id, {"done": _index - 1, "total": _total, "entries": done}
                 )
 
-            try:
-                count = _batch_insert(
-                    db,
-                    dict_id,
-                    parser.parse(paths, dictionary_id=dict_id, resource_dir=resource_dir),
-                    on_progress=on_progress,
-                )
-            except Exception:
-                # 解析失败：这部词典的词条已经被清掉了。源文件还在，重跑一次本任务即可，
-                # 所以这里把错误如实报出去，不做半吊子的回滚。
-                db.rollback()
-                raise
-            dictionary.word_count = count
-            db.commit()
+            count = _reparse_one(db, dictionary, paths, settings, on_progress)
             reparsed += 1
             entries_total += count
+            # 每部换完立刻清缓存：缓存里的条目 id 已经不存在了
+            invalidate_query_cache()
             background_tasks.update_progress(task_id, {"done": index, "total": total})
 
-        if entries_total:
-            # 词条整个换过一遍，进程内的查询结果缓存里全是旧快照
-            invalidate_query_cache()
         background_tasks.succeed(
             task_id, {"dictionaries": reparsed, "entries": entries_total, "skipped": skipped}
         )
@@ -587,6 +569,154 @@ def _run_reparse_in_background(
         background_tasks.fail(task_id, "重新解析失败：服务器内部错误，请查看后端日志")
     finally:
         db.close()
+
+
+def _reparse_one(
+    db: Session, dictionary: Dictionary, paths: list[Path], settings: Settings, on_progress
+) -> int:
+    """重新解析一部词典，返回新的词条数。
+
+    1. 解析进 `dict_entries_staging`，每批提交。这一步最慢（解压 + 改写），但不碰正式表，
+       旧词条照常可查，写锁也只在每批提交时短暂持有。
+    2. 换入正式表（`_swap_in_staged`）。
+
+    资源按「只补缺失、不覆盖」处理：词典正在服务，覆盖已有文件会让并发请求读到半截内容，
+    而且大词典的 res/ 有几十万个文件，全量重写没有必要。
+    """
+    dict_id = dictionary.id
+    _clear_staging(db, dict_id)
+    parser = _PARSERS[dictionary.format]()
+    res_dir = Path(settings.dictionary_storage_path) / str(dict_id) / "res"
+    # 勾了「不导入发音/图片」的词典没有 res/，parse 的 resource_dir 传 None：
+    # 释义不做资源引用改写，与当初导入时的行为一致
+    resource_dir = res_dir if res_dir.is_dir() else None
+    try:
+        count = _stage_entries(
+            db,
+            dict_id,
+            parser.parse(
+                paths,
+                dictionary_id=dict_id,
+                resource_dir=resource_dir,
+                overwrite_resources=False,
+            ),
+            on_progress,
+        )
+    except Exception:
+        db.rollback()
+        _clear_staging(db, dict_id)
+        raise
+    _swap_in_staged(db, dict_id, count)
+    dictionary.word_count = count
+    db.commit()
+    return count
+
+
+def _stage_entries(db: Session, dictionary_id: int, entries, on_progress) -> int:
+    staging = DictEntryStaging.__table__
+    batch: list[dict] = []
+    count = 0
+
+    def flush() -> None:
+        db.execute(insert(staging), batch)
+        db.commit()
+        batch.clear()
+        on_progress(count)
+
+    for entry in entries:
+        batch.append(
+            {
+                "dictionary_id": dictionary_id,
+                "word": entry.word,
+                "word_lower": entry.word.lower(),
+                "phonetic": entry.phonetic,
+                "definition": entry.definition,
+                "extra": json.dumps(entry.extra, ensure_ascii=False) if entry.extra else None,
+            }
+        )
+        count += 1
+        if len(batch) >= BATCH_SIZE:
+            flush()
+    if batch:
+        flush()
+    return count
+
+
+def _id_bounds(db: Session, model, dictionary_id: int) -> tuple[int | None, int | None]:
+    return db.execute(
+        select(func.min(model.id), func.max(model.id)).where(
+            model.dictionary_id == dictionary_id
+        )
+    ).one()
+
+
+def _chunked_ranges(lowest: int | None, highest: int | None):
+    """把 [lowest, highest] 切成 (下界不含, 上界含) 的区间序列。"""
+    if lowest is None or highest is None:
+        return
+    cursor = lowest - 1
+    while cursor < highest:
+        upper = min(cursor + _SWAP_BATCH_SIZE, highest)
+        yield cursor, upper
+        cursor = upper
+
+
+def _clear_staging(db: Session, dictionary_id: int) -> None:
+    """清掉这部词典在暂存区的行（上次中断的残留，或本次换入后的收尾）。"""
+    for lower, upper in _chunked_ranges(*_id_bounds(db, DictEntryStaging, dictionary_id)):
+        db.execute(
+            delete(DictEntryStaging).where(
+                DictEntryStaging.dictionary_id == dictionary_id,
+                DictEntryStaging.id > lower,
+                DictEntryStaging.id <= upper,
+            )
+        )
+        db.commit()
+
+
+def _swap_in_staged(db: Session, dictionary_id: int, staged_count: int) -> None:
+    """把暂存区的新词条换进 `dict_entries`，再删掉旧词条。
+
+    新行的 id 一定大于旧行（SQLite 按当前最大 rowid 递增分配），所以「id <= 换入前的最大
+    id」就能精确圈出旧行。小词典在一个事务里完成，查询看不到中间态；大词典分批提交，换入
+    期间（通常几分钟）这部词典可能短暂出现新旧重复的结果——这比整个解析期间查不到内容、
+    或一个大事务把全站写操作卡住都好。
+    """
+    staging = DictEntryStaging.__table__
+    columns = ["dictionary_id", "word", "word_lower", "phonetic", "definition", "extra"]
+    old_min, old_max = _id_bounds(db, DictEntry, dictionary_id)
+    staged_min, staged_max = _id_bounds(db, DictEntryStaging, dictionary_id)
+    atomic = staged_count <= _SWAP_ATOMIC_LIMIT
+
+    for lower, upper in _chunked_ranges(staged_min, staged_max):
+        db.execute(
+            insert(DictEntry.__table__).from_select(
+                columns,
+                select(*(staging.c[name] for name in columns))
+                .where(
+                    staging.c.dictionary_id == dictionary_id,
+                    staging.c.id > lower,
+                    staging.c.id <= upper,
+                )
+                .order_by(staging.c.id),
+            )
+        )
+        if not atomic:
+            db.commit()
+
+    for lower, upper in _chunked_ranges(old_min, old_max):
+        db.execute(
+            delete(DictEntry).where(
+                DictEntry.dictionary_id == dictionary_id,
+                DictEntry.id > lower,
+                DictEntry.id <= upper,
+            )
+        )
+        if not atomic:
+            db.commit()
+    db.commit()
+
+    _clear_staging(db, dictionary_id)
 
 
 def start_source_repair(

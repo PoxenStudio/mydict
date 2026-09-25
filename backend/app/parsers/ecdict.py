@@ -55,6 +55,7 @@ class EcdictParser(DictionaryParser):
         *,
         dictionary_id: int,
         resource_dir: Path | None,
+        overwrite_resources: bool = True,
     ) -> Iterator[ParsedEntry]:
         csv_path = file_paths[0]
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
