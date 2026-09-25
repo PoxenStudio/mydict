@@ -406,6 +406,51 @@ async def test_dict_res_sets_cors_header(
     assert "max-age" in resp.headers.get("cache-control", "")
 
 
+async def test_dict_res_sandboxes_documents(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """词典包里的 .html/.svg 被直接打开时不能在应用源下执行（否则能读走 localStorage 的 token）。"""
+    dict_id = await _make_dictionary(client, admin_headers, "资源沙箱")
+    res_dir = Path(get_settings().dictionary_storage_path) / str(dict_id) / "res"
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (res_dir / "evil.html").write_text("<script>alert(localStorage.token)</script>")
+    (res_dir / "evil.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>")
+
+    for name, media_type in (("evil.html", "text/html"), ("evil.svg", "image/svg+xml")):
+        resp = await client.get(f"/dict-res/{dict_id}/res/{name}")
+        assert resp.status_code == 200
+        assert resp.headers["content-security-policy"] == "sandbox allow-scripts"
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert resp.headers["content-type"].startswith(media_type)
+
+
+@pytest.mark.parametrize(
+    ("name", "media_type"),
+    [
+        ("a.woff2", "font/woff2"),
+        ("a.otf", "font/otf"),
+        ("a.webp", "image/webp"),
+        ("a.ogg", "audio/ogg"),
+        ("a.spx", "audio/ogg"),
+        ("A.PNG", "image/png"),
+        # 无扩展名：不能退成 text/plain，带 nosniff 时 ORB 会把它拦掉
+        ("noext", "application/octet-stream"),
+    ],
+)
+async def test_dict_res_media_types(
+    client: AsyncClient, admin_headers: dict[str, str], name: str, media_type: str
+) -> None:
+    """不依赖容器里的 /etc/mime.types：内置表不认的字体/音频类型也要给对 Content-Type。"""
+    dict_id = await _make_dictionary(client, admin_headers, f"资源类型-{name}")
+    res_dir = Path(get_settings().dictionary_storage_path) / str(dict_id) / "res"
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (res_dir / name).write_bytes(b"x")
+
+    resp = await client.get(f"/dict-res/{dict_id}/res/{name}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].split(";")[0] == media_type
+
+
 async def test_dict_res_matches_case_insensitively(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
