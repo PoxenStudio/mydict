@@ -140,18 +140,17 @@ function selectScope(scope: string) {
 
     <ul v-else class="dict-list app-scrollbar">
       <li v-for="item in visible" :key="item.id">
-        <label class="dict-row">
-          <!--
-            用 @click.prevent 而不是 @change：checkbox 的原生翻转先改了 DOM，@change 里的
-            状态更新若把 :checked 算回同一个值（如「全部」态里点掉一部又回到只选它），
-            Vue 判定 prop 无变化就不会回写 DOM，勾选框从此与真实状态错位——实测表现为
-            「取消最后一部时其余词典全被勾上、唯独它自己没勾」。
-          -->
-          <input
-            type="checkbox"
-            :checked="checkedIds.has(item.id)"
-            @click.prevent="emit('toggle', item.id)"
-          />
+        <!--
+          点击处理放在 label 上并 prevent（而不是在 input 上监听 change/click）：
+          - 原生 checkbox 会先自己翻转 DOM，状态算回同值时 Vue 不回写，勾选框与真实
+            状态错位；
+          - 部分 WebKit 内核对 label 内的 checkbox 有双发 click 的怪癖，在 input 上监听
+            会一次点击触发两次 toggle（勾上又立刻取消，表现为完全无法勾选）。
+          prevent 掉 label 的默认动作（原生翻转 + 转发点击）后，无论哪类浏览器、点行的
+          任何位置，都恰好触发一次 toggle，勾选态完全由 Vue 的 :checked 驱动。
+        -->
+        <label class="dict-row" @click.prevent="emit('toggle', item.id)">
+          <input type="checkbox" :checked="checkedIds.has(item.id)" />
           <span class="dict-name" :title="item.name">{{ item.name }}</span>
           <span class="dict-lang">{{ langLabel(item.lang_from) }}</span>
         </label>

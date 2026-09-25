@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core import query_cache
@@ -407,20 +406,44 @@ def get_entries_for_document(
     释义是 `@@@LINK=` 的逐条解引用。
     """
     variants = expand_word(word)
-    word_match = or_(
-        DictEntry.word_lower.in_(variants),
-        *[DictEntry.word_lower.like(f"{variant}%") for variant in variants],
-    )
-    statement = (
-        current_generation_only(db.query(DictEntry))
-        .filter(DictEntry.dictionary_id == dictionary_id)
-        .filter(word_match)
-    )
+    variants_lower = {variant.lower() for variant in variants}
+
+    def authorized(entry: DictEntry) -> bool:
+        """id 归属校验：词头是查询词的等价变体，或以任一变体开头（搜索有前缀兜底，
+        命中的词条词头如「あ【亜】」并不是查询词「あ」的变体，而是以它开头）。"""
+        word_lower = entry.word_lower or ""
+        return word_lower in variants_lower or any(
+            word_lower.startswith(variant) for variant in variants_lower
+        )
+
     entries: list[DictEntry] = []
     if entry_ids:
-        entries = statement.filter(DictEntry.id.in_(entry_ids)).order_by(DictEntry.id).all()
+        # 按主键取回（瞬时），归属校验在 Python 里做——不要把十几个前缀 LIKE 塞进一条
+        # OR 查询：那会让规划器放弃索引、退化成整部词典扫描（搜韵上表现为秒级卡顿）。
+        candidates = (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.dictionary_id == dictionary_id)
+            .filter(DictEntry.id.in_(entry_ids))
+            .order_by(DictEntry.id)
+            .all()
+        )
+        entries = [entry for entry in candidates if authorized(entry)]
     if not entries:
+        # 没传 id（或全都不在授权范围内，如词典被重新解析后条目 id 整体换新）时退回按词取
+        statement = (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.dictionary_id == dictionary_id)
+            .filter(DictEntry.word_lower.in_(variants))
+        )
         entries = statement.order_by(DictEntry.id).all()
+        if not entries:
+            # 精确未命中退回前缀（case_sensitive_like=ON 时走索引区间，见 core/db.py）
+            statement = (
+                current_generation_only(db.query(DictEntry))
+                .filter(DictEntry.dictionary_id == dictionary_id)
+                .filter(DictEntry.word_lower.like(f"{word.strip().lower()}%"))
+            )
+            entries = statement.order_by(DictEntry.id).all()
     # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
     resolved: dict[int, DictEntry] = {}
     for entry in entries:
