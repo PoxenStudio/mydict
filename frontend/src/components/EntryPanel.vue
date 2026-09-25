@@ -8,6 +8,8 @@ import type { QueryResultItem } from '../types/query'
 const props = defineProps<{
   dictionaryName: string
   entries: QueryResultItem[]
+  /** 用户这次查询输入的词：后端只在它的变体范围内认 entry_ids */
+  queryWord: string
   expanded: boolean
   /** 首次展开后才挂载 iframe：一次查询可能命中几十部词典，不能一上来就建几十个文档 */
   mounted: boolean
@@ -121,7 +123,7 @@ function isLoading(word: string) {
       <EntryFrame
         v-if="hasMultiple && mounted"
         :key="`${primary.dictionary_id}-${primary.word}`"
-        :loader="() => getEntryHtml(primary.dictionary_id, primary.word, entries.map((item) => item.id))"
+        :loader="() => getEntryHtml(primary.dictionary_id, queryWord, entries.map((item) => item.id))"
         @entry="emit('entry', $event)"
         @unsupported-audio="emit('unsupportedAudio')"
       />

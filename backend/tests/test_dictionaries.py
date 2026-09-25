@@ -1997,3 +1997,85 @@ async def test_reparse_rejects_concurrent_run_on_same_dictionary(
         json={"dictionary_ids": [dict_id]},
     )
     assert resp.status_code == 409, resp.text
+
+
+def _entry_ids_by_word(dict_id: int) -> dict[str, list[int]]:
+    from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
+
+    db = SessionLocal()
+    try:
+        ids: dict[str, list[int]] = {}
+        for row in (
+            db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id).order_by(DictEntry.id)
+        ):
+            ids.setdefault(row.word, []).append(row.id)
+        return ids
+    finally:
+        db.close()
+
+
+async def test_entry_ids_are_limited_to_the_queried_word(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """entry_ids 是客户端输入：只在 word 的变体范围内生效，伪造的 id 取不到别的词条。"""
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "ids-scope")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+    finally:
+        db.close()
+    ids = _entry_ids_by_word(dict_id)
+    all_ids = ",".join(str(i) for group in ids.values() for i in group)
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}", params={"word": "毛泽东", "entry_ids": all_ids}
+    )
+    assert resp.status_code == 200
+    assert resp.text.count('<section class="mydict-entry">') == 2
+    assert "别的词头" not in resp.text
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东", "entry_ids": str(ids["沁园春"][0])},
+    )
+    assert resp.status_code == 404
+
+
+async def test_entry_document_has_its_own_rate_limit(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """词条文档不占查询配额，但有自己的限额（查询限额 × 10），不能被当成无限抓取入口。"""
+    from app.core import rate_limiter
+    from app.core.db import SessionLocal
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "entry-rl")
+    db = SessionLocal()
+    try:
+        set_setting(db, "open_access", "true")
+        set_setting(db, "anonymous_ip_rate_limit_per_min", "1")
+    finally:
+        db.close()
+    rate_limiter.reset()
+    try:
+        for _ in range(10):
+            resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
+            assert resp.status_code == 200
+        resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
+        assert resp.status_code == 429
+        assert "Retry-After" in resp.headers
+
+        # 取了 11 次词条文档，查询配额（1 次/分钟）仍然没被动过
+        resp = await client.get(
+            "/api/dict/search", params={"word": "沁园春", "dict": str(dict_id)}
+        )
+        assert resp.status_code == 200
+    finally:
+        db = SessionLocal()
+        try:
+            set_setting(db, "anonymous_ip_rate_limit_per_min", "60")
+        finally:
+            db.close()
+        rate_limiter.reset()

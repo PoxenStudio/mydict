@@ -336,20 +336,19 @@ def get_entries_for_document(
     同一部词典里同一词头可以有多条内容不同的条目（MDict 允许，搜韵诗词全文检索版的
     「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
 
-    `entry_ids` 给了就按它取（限定属于这部词典）——前端把查询结果里那一组的条目 id 显式
-    传过来，保证 iframe 里的条数与「共 N 条」一致；按 word 再推一遍变体集合可能对不上
-    （查询用的是用户输入推的变体，而词头是词典自己的写法）。没给就按 `expand_word(word)`
-    的变体集合取。
+    `entry_ids` 给了就按它取——前端把查询结果里那一组的条目 id 显式传过来，保证 iframe 里
+    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里的
+    条目（与 search_word 的匹配范围一致）：`entry_ids` 是客户端输入，不加这层约束的话
+    随便填 id 就能逐段拉走整部词典，绕过查询配额。
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
     statement = current_generation_only(db.query(DictEntry)).filter(
         DictEntry.dictionary_id == dictionary_id
     )
+    statement = statement.filter(DictEntry.word_lower.in_(expand_word(word)))
     if entry_ids:
         statement = statement.filter(DictEntry.id.in_(entry_ids))
-    else:
-        statement = statement.filter(DictEntry.word_lower.in_(expand_word(word)))
     entries = statement.order_by(DictEntry.id).all()
     return [_resolve_link(db, entry) for entry in entries]
 

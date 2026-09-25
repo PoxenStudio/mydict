@@ -369,6 +369,7 @@ function onUnsupportedAudio() {
               :data-dict-key="group.key"
               :dictionary-name="group.dictionaryName"
               :entries="group.entries"
+              :query-word="submittedWord"
               :expanded="expandedKey === group.key"
               :mounted="liveKeys.includes(group.key)"
               :favorited-words="favoritedWords"
