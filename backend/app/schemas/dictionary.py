@@ -124,16 +124,10 @@ class RenameDictionariesOut(BaseModel):
     applied: bool
 
 
-class SpxScanRequest(BaseModel):
-    """dictionary_ids 留空表示扫描全部词典。"""
+class DictionaryIdsRequest(BaseModel):
+    """批量处理词典的请求体（从源文件修复、重新解析）：dictionary_ids 留空表示全部词典。"""
 
     dictionary_ids: list[int] | None = None
-
-
-class SpxTranscodeRequest(BaseModel):
-    """单部与批量共用：列表长度 1 就是单部。"""
-
-    dictionary_ids: list[int] = Field(min_length=1, max_length=500)
 
 
 class AllowedDictionaryIdsRequest(BaseModel):

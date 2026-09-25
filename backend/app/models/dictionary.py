@@ -37,13 +37,6 @@ class Dictionary(Base):
         String(16), default="dicts_dir", server_default="dicts_dir"
     )
     word_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    # 待转码的 .spx 发音数：同名同目录下没有非空 .mp3/.opus 产物的那些。
-    # 刻意不做实时扫描——The little dict 单部就有 67.6 万个资源文件，63 部逐个走一遍会让
-    # 列表接口卡死；改由「导入后检测 / 页面扫描发音资源 / 转码结束」三个时机写入。
-    spx_pending_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    # 上次检测时间；NULL 表示从未检测（存量数据）。用来把「扫过、无需转码」和「还没扫过」
-    # 区分开——这两种情况的 spx_pending_count 都是 0。
-    spx_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 当前生效的词条「代」：查询只看 dict_entries.generation 等于它的行。重新解析把新词条
     # 写成下一代，写完只改这一列就完成切换（见 dictionary_service._reparse_one）

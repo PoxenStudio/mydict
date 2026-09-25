@@ -477,7 +477,6 @@ def _run_import_in_background(
                 "word_count": dictionary.word_count,
                 "lang_from": dictionary.lang_from,
                 "lang_to": dictionary.lang_to,
-                "spx_pending_count": dictionary.spx_pending_count,
             },
         )
     except AppError as exc:
@@ -489,7 +488,7 @@ def _run_import_in_background(
         db.close()
 
 
-def _spx_targets(db: Session, dictionary_ids: list[int] | None) -> list[Dictionary]:
+def _resolve_target_dictionaries(db: Session, dictionary_ids: list[int] | None) -> list[Dictionary]:
     """解析要处理的词典；传了 id 就按传入顺序返回，任一个不存在就整体拒绝。"""
     query = db.query(Dictionary)
     if not dictionary_ids:
@@ -518,7 +517,7 @@ def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Setti
     新词条写成下一代，写完只改 `active_generation` 一行即完成切换，见 `_reparse_one`。
     中途失败时旧词条原封不动，重跑即可。
     """
-    target_ids = [d.id for d in _spx_targets(db, dictionary_ids)]
+    target_ids = [d.id for d in _resolve_target_dictionaries(db, dictionary_ids)]
     with _reparsing_lock:
         busy = _reparsing.intersection(target_ids)
         if busy:
@@ -678,7 +677,7 @@ def start_source_repair(
     两者都**不需要重新导入任何词典**。跑完会使查询结果缓存失效——释义被就地改写了，
     缓存里还存着旧快照。
     """
-    targets = _spx_targets(db, dictionary_ids)
+    targets = _resolve_target_dictionaries(db, dictionary_ids)
     task = background_tasks.start("dictionary_source_repair", "从源文件修复")
     threading.Thread(
         target=_run_source_repair_in_background,

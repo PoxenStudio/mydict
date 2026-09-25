@@ -19,7 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 词条正文里点了 entry:// 链接，父级据此发起新查询 */
   entry: [word: string]
-  /** 发音是 .spx 且没有转码产物，浏览器放不了 */
+  /** 发音的全部候选（mp3 → opus → JS 解码 spx）都放不了 */
   unsupportedAudio: []
 }>()
 

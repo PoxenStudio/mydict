@@ -6,7 +6,6 @@ import RefreshButton from '../../components/admin/RefreshButton.vue'
 
 const loading = ref(true)
 const saving = ref(false)
-// 运行时状态而非配置：容器里有没有 ffmpeg、已经转了多少
 
 const form = reactive({
   open_access: false,

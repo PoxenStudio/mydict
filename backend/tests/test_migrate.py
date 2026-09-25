@@ -112,7 +112,10 @@ def test_pending_migrations_marks_heavy(scratch_db: Path) -> None:
     pending = migrate.pending_migrations()
     assert pending[0].revision == _HEAVY and pending[0].heavy
     assert all(not item.heavy for item in pending[1:])
-    assert pending[-1].revision == "a3d5f7b9c1e2"
+    from alembic.script import ScriptDirectory
+
+    head = ScriptDirectory.from_config(migrate._alembic_config()).get_current_head()
+    assert pending[-1].revision == head
 
 
 def test_startup_refuses_heavy_migration_on_large_database(
@@ -162,3 +165,30 @@ def test_cli_migrate_requires_yes(scratch_db: Path, capsys) -> None:
     cli.migrate(argparse.Namespace(dry_run=False, yes=True))
     assert migrate.pending_migrations() == []
     _assert_migrated(scratch_db)
+
+
+def test_drop_spx_columns_keeps_dictionaries_and_entries(scratch_db: Path) -> None:
+    """删掉转码遗留列：词典与词条原样保留（外键不受影响），废弃的系统设置被清掉。"""
+    _upgrade("a3d5f7b9c1e2")
+    _seed_entries(scratch_db)
+    with sqlite3.connect(scratch_db) as conn:
+        conn.execute("UPDATE dictionaries SET spx_pending_count = 5")
+        conn.execute(
+            "INSERT INTO system_settings (key, value) VALUES ('spx_online_transcode', 'true')"
+        )
+
+    _upgrade("b4e6a8c0d2f4")
+    with sqlite3.connect(scratch_db) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(dictionaries)")}
+        assert not {"spx_pending_count", "spx_scanned_at"} & columns
+        assert conn.execute("SELECT name FROM dictionaries").fetchall() == [("d",)]
+        assert conn.execute("SELECT COUNT(*) FROM dict_entries").fetchone()[0] == 2
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM system_settings WHERE key = 'spx_online_transcode'"
+            ).fetchone()[0]
+            == 0
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM dictionaries WHERE id = 1")
+        assert conn.execute("SELECT COUNT(*) FROM dict_entries").fetchone()[0] == 0
