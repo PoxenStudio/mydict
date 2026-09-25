@@ -12,7 +12,7 @@ from app.core.deps import WebCaller, get_web_caller, require_user
 from app.core.exceptions import NotFoundError, RateLimitedError
 from app.models.dictionary import Dictionary
 from app.models.user import User
-from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, QueryResponse
+from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, WebQueryResponse
 from app.services import query_log_service, query_service
 from app.services.entry_render_service import render_entries_document
 from app.services.settings_service import get_int_setting
@@ -66,7 +66,7 @@ def list_dictionaries(db: Session = Depends(get_db)) -> list[PublicDictionaryOut
     return query_service.list_public_dictionaries(db)
 
 
-@router.get("/search", response_model=QueryResponse)
+@router.get("/search", response_model=WebQueryResponse)
 def search(
     word: str,
     dict: str | None = None,  # noqa: A002 - 与 API 契约中的查询参数名保持一致
@@ -75,13 +75,19 @@ def search(
     caller: WebCaller = Depends(get_web_caller),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> QueryResponse:
+) -> WebQueryResponse:
     _enforce_web_rate_limit(db, caller, settings, word)
 
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
     started = time.perf_counter()
     results = query_service.search_word(
-        db, word, query_service.parse_dict_ids(dict), from_, to, allowed_ids
+        db,
+        word,
+        query_service.parse_dict_ids(dict),
+        from_,
+        to,
+        allowed_ids,
+        include_definitions=False,
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -95,7 +101,7 @@ def search(
         dictionary_id=results[0]["dictionary_id"] if results else None,
         ip=caller.ip,
     )
-    return QueryResponse(results=results)
+    return WebQueryResponse(results=results)
 
 
 def _enforce_entry_rate_limit(db: Session, caller: WebCaller, settings: Settings) -> None:

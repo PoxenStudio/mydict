@@ -1,3 +1,4 @@
+/** 前台查询结果不带释义：释义走 /dict/entry 渲染进隔离 iframe */
 export interface QueryResultItem {
   /** 条目主键。同一部词典里可能有多条同名词条（MDict 允许），用它做 key 与寻址 */
   id: number
@@ -5,7 +6,6 @@ export interface QueryResultItem {
   dictionary_name: string
   word: string
   phonetic: string | null
-  definition: string
   extra: Record<string, unknown> | null
   /**
    * 该词典的 lang_from 是否与输入语言一致。false 表示这是「优先语言都没命中、

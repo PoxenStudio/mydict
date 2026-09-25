@@ -251,7 +251,10 @@ def search_word(
     lang_from: str | None = None,
     lang_to: str | None = None,
     allowed_ids: list[int] | None = None,
+    *,
+    include_definitions: bool = True,
 ) -> list[dict]:
+    """查词。include_definitions=False 时结果里不带释义（前台用：释义另走 /dict/entry）。"""
     candidates = resolve_candidates(db, word, dict_ids, lang_from, lang_to, allowed_ids)
     if not candidates.dictionaries:
         return []
@@ -261,11 +264,11 @@ def search_word(
     variants = expand_word(word)
     # 缓存 key 必须用**完整候选集**：若只按「优先语言」那批做 key，「优先语言没命中」这个
     # 空结果会被缓存住，兜底路径就永远走不到了。expansion 版本号也要带上，否则改扩展规则后
-    # 新结果会被旧缓存挡住。
+    # 新结果会被旧缓存挡住。带不带释义是两份不同的结果，也要区分开。
     cache_key = query_cache.make_key(
         word_lower,
         tuple(d.id for d in candidates.dictionaries),
-        f"x{EXPANSION_VERSION}",
+        f"x{EXPANSION_VERSION}|d{int(include_definitions)}",
     )
     cached = query_cache.get(cache_key)
     if cached is not None:
@@ -289,20 +292,20 @@ def search_word(
         # 释义是 @@@LINK= 时跟进到目标词条取内容；但词头仍显示用户查到的那个，
         # 否则标题行的词会突然变成另一个写法（如「中国」变成「中国【ちゅうごく①】」）
         resolved = _resolve_link(db, e)
-        results.append(
-            {
-                # 条目主键。同一部词典里可能有**多条同名词条**（MDict 允许），前端拿它做
-                # key 与寻址——只用 (dictionary_id, word) 会在这种情况下撞在一起。
-                "id": e.id,
-                "dictionary_id": e.dictionary_id,
-                "dictionary_name": by_id[e.dictionary_id].name,
-                "word": e.word,
-                "phonetic": resolved.phonetic,
-                "definition": resolved.definition,
-                "extra": json.loads(e.extra) if e.extra else None,
-                "lang_match": e.dictionary_id in candidates.preferred_ids,
-            }
-        )
+        item = {
+            # 条目主键。同一部词典里可能有**多条同名词条**（MDict 允许），前端拿它做
+            # key 与寻址——只用 (dictionary_id, word) 会在这种情况下撞在一起。
+            "id": e.id,
+            "dictionary_id": e.dictionary_id,
+            "dictionary_name": by_id[e.dictionary_id].name,
+            "word": e.word,
+            "phonetic": resolved.phonetic,
+            "extra": json.loads(e.extra) if e.extra else None,
+            "lang_match": e.dictionary_id in candidates.preferred_ids,
+        }
+        if include_definitions:
+            item["definition"] = resolved.definition
+        results.append(item)
     results.sort(key=lambda item: order[item["dictionary_id"]])
     query_cache.set(cache_key, results)
     return results
