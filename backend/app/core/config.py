@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     dictionary_storage_path: str = "/data/dictionaries"
     log_dir: str = "/data/logs"
 
+    # 在线词典出站抓取（维基百科/维基词典）用的 HTTP 代理；留空直连。
+    # 这台部署环境直连维基不可达，需要走本网段的代理（如 http://192.168.5.197:7890）。
+    online_dict_proxy: str = ""
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path}"

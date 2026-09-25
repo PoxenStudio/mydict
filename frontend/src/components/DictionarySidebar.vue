@@ -11,6 +11,8 @@ const props = defineProps<{
   isFiltering: boolean
   /** 「全部」按钮第二下进入的视觉清空态：复选框全空但语义仍是不限制 */
   cleared: boolean
+  /** 当前是否处于「在线词典」模式（在线按钮点亮） */
+  online: boolean
   /** 移动端由外层控制显示 */
   mobileOpen: boolean
 }>()
@@ -19,6 +21,7 @@ const emit = defineEmits<{
   toggle: [id: number]
   selectAll: []
   selectLanguage: [langFrom: string]
+  selectOnline: []
   closeMobile: []
 }>()
 
@@ -131,6 +134,9 @@ function selectScope(scope: string) {
         @click="selectScope(scope)"
       >
         {{ scopeLabel(scope) }}
+      </button>
+      <button type="button" :class="{ active: online }" @click="emit('selectOnline')">
+        在线
       </button>
     </div>
 

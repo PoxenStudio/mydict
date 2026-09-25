@@ -34,8 +34,8 @@
   // 八门，靠 CSS 属性选择器枚举不完，而 CSS 自己算不了亮度，所以这里换个思路——读渲染后的
   // 计算颜色，太暗就按同色相提亮（蓝的还是蓝的，只是变亮），并记下原值以便切回浅色时还原。
   //
-  // 灰阶的深色（纯黑、深灰）不在这里管，交给注入的 CSS 规则统一处理：它们没有色相，
-  // 提到「浅灰」不如直接用主题前景色。
+  // 灰阶的深色（#111/#333 之类）没有色相，提亮成主题前景色——样式表里的这些值此前漏网，
+  // 暗色下正文直接看不见（搜韵诗词全文检索版）。
   var TEXT_MIN_LUMINANCE = 0.45
   var TEXT_BOOST_LIGHTNESS = 66
   // 大词条可能有上万个元素，逐个读计算样式要花时间，超过这个数就只处理前一批
@@ -110,10 +110,17 @@
       var el = nodes[i]
       var rgb = parseRgb(window.getComputedStyle(el).color)
       if (!rgb || relativeLuminance(rgb) >= TEXT_MIN_LUMINANCE) continue
-      if (rgb[0] === rgb[1] && rgb[1] === rgb[2]) continue
+      var isGray = rgb[0] === rgb[1] && rgb[1] === rgb[2]
       boostedText.push([el, el.style.color])
-      el.style.color =
-        'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'
+      if (isGray) {
+        // 灰阶没有色相，提亮成主题前景色。此前刻意跳过灰阶、指望注入的 CSS 规则兜底，
+        // 但那些规则只覆盖 #000 精确值与内联样式——词典样式表里的 #111/#333（搜韵诗词
+        // 正文的 div.content{color:#111111}）漏网，暗色下深灰字配深底直接看不见。
+        el.style.color = '#eaf1ee'
+      } else {
+        el.style.color =
+          'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'
+      }
     }
   }
 

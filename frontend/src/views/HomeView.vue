@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
 import DictionarySidebar from '../components/DictionarySidebar.vue'
 import EntryPanel from '../components/EntryPanel.vue'
+import OnlineDictPanel from '../components/OnlineDictPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { searchWord } from '../api/dict'
@@ -111,6 +112,7 @@ onMounted(async () => {
 watch(
   () => selectedIds.value.join(','),
   () => {
+    if (onlineMode.value) return
     if (submittedWord.value) runSearch()
   },
 )
@@ -124,10 +126,32 @@ const LANGUAGE_SCOPE_CODES: Record<string, string[]> = {
 
 /** 侧边栏的「只看某种语言」：勾选该筛选范围下的全部词典 */
 function selectLanguage(scope: string) {
+  onlineMode.value = false
   const codes = LANGUAGE_SCOPE_CODES[scope] ?? [scope]
   setSelection(
     dictionaries.value.filter((item) => codes.includes(item.lang_from)).map((i) => i.id),
   )
+}
+
+// --- 在线词典模式 ---
+// 【在线】打开后，查询不再走本地词典库，而是服务端代理去查维基百科/维基词典/百度百科，
+// 并给出 Google 等外部搜索链接。任何本地范围的选择（语言标签/全部/勾选）都会退出该模式。
+const onlineMode = ref(false)
+
+function selectOnline() {
+  // 面板自治：挂载/ watch word 时自己发起请求
+  onlineMode.value = true
+}
+
+// 本地范围选择（勾选/全部/不选）会退出在线模式
+function onToggleDict(id: number) {
+  onlineMode.value = false
+  toggleDictionary(id)
+}
+
+function onSelectAll() {
+  onlineMode.value = false
+  selectAllOrClear()
 }
 
 function touchLive(key: string) {
@@ -239,6 +263,12 @@ async function runSearch(query?: string) {
   if (showLoginGate.value) return
 
   word.value = q
+  if (onlineMode.value) {
+    // 在线模式：结果区域交给 OnlineDictPanel 自己拉取（它 watch word）
+    submittedWord.value = q
+    syncQueryToUrl(q)
+    return
+  }
   status.value = 'loading'
   submittedWord.value = q
   try {
@@ -333,10 +363,12 @@ function onUnsupportedAudio() {
           :loading="dictLoading"
           :is-filtering="isFiltering"
           :cleared="clearedView"
+          :online="onlineMode"
           :mobile-open="mobileOpen"
-            @toggle="toggleDictionary"
-            @select-all="selectAllOrClear"
+            @toggle="onToggleDict"
+            @select-all="onSelectAll"
           @select-language="selectLanguage"
+          @select-online="selectOnline"
           @close-mobile="mobileOpen = false"
         />
       </div>
@@ -349,6 +381,11 @@ function onUnsupportedAudio() {
               <router-link to="/register">注册账号</router-link>。
             </p>
           </div>
+
+          <template v-else-if="onlineMode">
+            <!-- 面板自治：加载/错误/结果都在内部渲染，:key 保证换词重新发起查询 -->
+            <OnlineDictPanel :key="submittedWord" :word="submittedWord" />
+          </template>
 
           <SkeletonList v-else-if="status === 'loading'" :rows="2" />
 

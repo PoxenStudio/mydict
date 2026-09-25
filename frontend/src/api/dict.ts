@@ -1,6 +1,11 @@
 import request from './request'
 import { currentTheme } from '../composables/useTheme'
-import type { PublicDictionary, QueryHistoryEntry, QueryResponse } from '../types/query'
+import type {
+  OnlineLookup,
+  PublicDictionary,
+  QueryHistoryEntry,
+  QueryResponse,
+} from '../types/query'
 
 /**
  * 查询词条。
@@ -12,6 +17,11 @@ export function searchWord(word: string, dictIds?: number[]) {
   const params: Record<string, string> = { word }
   if (dictIds && dictIds.length) params.dict = dictIds.join(',')
   return request.get<never, QueryResponse>('/dict/search', { params })
+}
+
+/** 在线词典（维基百科/维基词典/百度百科 + 外部搜索链接）。lang 是两位语言码 */
+export function lookupOnline(word: string, lang: string) {
+  return request.get<never, OnlineLookup>('/dict/online/lookup', { params: { word, lang } })
 }
 
 export function listDictionaries() {
