@@ -278,6 +278,23 @@ def test_query(
     return [_entry_to_out(e) for e in entries]
 
 
+@router.post("/{dictionary_id}/cleanup-uss-speakers", response_model=DictionaryImportTaskOut)
+def cleanup_uss_speakers(
+    dictionary_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _admin: Admin = Depends(require_admin),
+) -> DictionaryImportTaskOut:
+    """清理词典释义里「指向缺失 mp3」的红色美音例句喇叭（牛津9 的 uss 喇叭）。
+
+    文件存在性在后台任务里逐条解析（大小写不敏感兜底），文件还在的按钮保留。
+    """
+    if db.get(Dictionary, dictionary_id) is None:
+        raise NotFoundError("词典不存在")
+    task_id = dictionary_service.start_uss_cleanup(db, dictionary_id, settings)
+    return DictionaryImportTaskOut(task_id=task_id)
+
+
 @router.get("/{dictionary_id}/entry", response_class=HTMLResponse)
 def entry_document(
     dictionary_id: int,

@@ -26,6 +26,7 @@ from app.services.background_task_service import background_tasks
 from app.services.definition_repair import (
     dictionaries_using_style_markers,
     expand_stored_styles,
+    remove_missing_uss_speakers,
 )
 from app.services.entry_scope import current_generation_only, in_dictionary_for_id_window
 from app.services.language_detect import detect_language
@@ -771,6 +772,53 @@ def _run_source_repair_in_background(
     except Exception:
         logger.exception("从源文件修复失败")
         background_tasks.fail(task_id, "修复失败：服务器内部错误，请查看后端日志")
+    finally:
+        db.close()
+
+
+def start_uss_cleanup(db: Session, dictionary_id: int, settings: Settings) -> int:
+    """登记「清理缺失的红色美音例句喇叭」后台任务，返回 task_id。
+
+    牛津高阶第9版的例句配了一对喇叭，红色美音（audio-uss-liju）指向的 mp3 源词典就基本
+    没打包（实测 99% 缺失），点它必弹「发音不存在或解码失败」。这个任务把**指向缺失文件**
+    的红色喇叭从释义里删掉（文件还在的保留）。只处理指定词典；重新解析后喇叭会被源文件
+    带回来，需要重跑。
+    """
+    if db.get(Dictionary, dictionary_id) is None:
+        raise NotFoundError("词典不存在")
+    task = background_tasks.start("dictionary_uss_cleanup", "清理缺失的美音例句喇叭")
+    threading.Thread(
+        target=_run_uss_cleanup_in_background,
+        args=(task.id, dictionary_id, settings.dictionary_storage_path),
+        daemon=True,
+    ).start()
+    return task.id
+
+
+def _run_uss_cleanup_in_background(
+    task_id: int, dictionary_id: int, storage_path: str
+) -> None:
+    """后台线程入口：请求生命周期已经结束，不能沿用请求的 db session，这里单独开一个。"""
+    db = SessionLocal()
+    try:
+        res_dir = Path(storage_path) / str(dictionary_id) / "res"
+
+        def on_progress(entries_changed: int, anchors_removed: int) -> None:
+            background_tasks.update_progress(
+                task_id,
+                {"entries": entries_changed, "speakers": anchors_removed},
+            )
+
+        entries, speakers = remove_missing_uss_speakers(
+            db, dictionary_id, res_dir, on_progress=on_progress
+        )
+        if entries:
+            # 释义被就地改写，进程内的查询结果缓存里还存着旧快照（TTL 300s）。
+            invalidate_query_cache()
+        background_tasks.succeed(task_id, {"entries": entries, "speakers": speakers})
+    except Exception:
+        logger.exception("红色美音例句喇叭清理失败")
+        background_tasks.fail(task_id, "清理失败：服务器内部错误，请查看后端日志")
     finally:
         db.close()
 

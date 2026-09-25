@@ -25,7 +25,9 @@
 """
 
 import logging
+import re
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from sqlalchemy import bindparam, func, or_, select, update
 from sqlalchemy.orm import Session
@@ -240,3 +242,90 @@ def dictionaries_using_style_markers(db: Session, dictionary_ids: set[int]) -> s
         if hit is not None:
             found.add(dictionary_id)
     return found
+
+
+# ---------------------------------------------------- 牛津9 例句红色美音喇叭清理
+
+# 牛津高阶第9版例句的发音是一对喇叭：蓝色英音（audio-gbs-liju）+ 红色美音
+# （audio-uss-liju）。美音 mp3 源词典就基本没打包——实测 38,869 个引用里 99% 的文件
+# 不存在（38,739 个），点红色喇叭必弹「发音不存在或解码失败」。这里把**指向缺失文件**
+# 的红色喇叭整对锚点删掉；文件还在的（实测 130 个）原样保留。
+#
+# 注意：重新解析会从源文件重灌释义，喇叭会被带回来，届时需要重跑本修复。
+
+_USS_ANCHOR_RE = re.compile(
+    r'<a href="(?P<url>[^"]*uss[^"]*\.mp3)"><audio-uss-liju>[^<]*</audio-uss-liju></a>'
+)
+
+
+def remove_missing_uss_speakers(
+    db: Session,
+    dictionary_id: int,
+    res_dir: Path,
+    *,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[int, int]:
+    """删掉「指向缺失 mp3」的红色美音喇叭锚点，返回 (改动词条数, 删除的喇叭数)。
+
+    只删锚点本身：包裹它的 <audio-wr>、蓝色英音喇叭与例句文本一概不动。文件存在性
+    走 resolve_resource_file（大小写不敏感兜底），与 /dict-res 路由的解析完全一致——
+    路由能取到的文件就不删按钮。
+    """
+    from app.services.resource_service import resolve_resource_file
+
+    def clean(definition: str) -> tuple[str, int]:
+        removed = 0
+
+        def replace(match: re.Match[str]) -> str:
+            nonlocal removed
+            relative = match.group("url").split("/res/", 1)[-1]
+            if resolve_resource_file(res_dir, relative) is not None:
+                return match.group(0)  # 文件还在，按钮保留
+            removed += 1
+            return ""
+
+        return _USS_ANCHOR_RE.sub(replace, definition), removed
+
+    statement = (
+        update(DictEntry.__table__)
+        .where(DictEntry.__table__.c.id == bindparam("row_id"))
+        .values(definition=bindparam("new_definition"))
+    )
+
+    entries_changed = 0
+    anchors_removed = 0
+    cursor = -1
+    while True:
+        rows = db.execute(
+            select(DictEntry.id, DictEntry.definition)
+            .where(
+                DictEntry.id > cursor,
+                DictEntry.dictionary_id == dictionary_id,
+                DictEntry.definition.like("%audio-uss-liju%"),
+            )
+            .order_by(DictEntry.id)
+            .limit(batch_size)
+        ).all()
+        if not rows:
+            break
+        cursor = rows[-1][0]
+        updates = []
+        for row_id, definition in rows:
+            cleaned, removed = clean(definition or "")
+            if removed:
+                updates.append({"row_id": row_id, "new_definition": cleaned})
+                anchors_removed += removed
+        if updates:
+            db.execute(statement, updates)
+            db.commit()
+            entries_changed += len(updates)
+        if on_progress is not None:
+            on_progress(entries_changed, anchors_removed)
+    logger.info(
+        "词典 %s 红色例句喇叭清理完成：改动 %s 条词条、删除 %s 个喇叭",
+        dictionary_id,
+        entries_changed,
+        anchors_removed,
+    )
+    return entries_changed, anchors_removed

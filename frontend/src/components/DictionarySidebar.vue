@@ -134,9 +134,6 @@ function selectScope(scope: string) {
       </button>
     </div>
 
-    <p v-if="!loading && cleared" class="hint">已清空勾选（仍检索全部），勾任意一部即收窄范围；再点「不选」恢复全部。</p>
-    <p v-else-if="!loading && !isFiltering" class="hint">未限制范围：检索全部已启用词典</p>
-
     <p v-if="loading" class="hint">正在载入词典列表…</p>
     <p v-else-if="dictionaries.length === 0" class="hint">暂无已启用的词典。</p>
     <p v-else-if="visible.length === 0" class="hint">没有匹配「{{ keyword }}」的词典。</p>

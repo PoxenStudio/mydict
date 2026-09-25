@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core import query_cache
@@ -395,19 +396,25 @@ def get_entries_for_document(
     「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
 
     `entry_ids` 给了就按它取——前端把查询结果里那一组的条目 id 显式传过来，保证 iframe 里
-    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里的
-    条目（与 search_word 的匹配范围一致）：`entry_ids` 是客户端输入，不加这层约束的话
-    随便填 id 就能逐段拉走整部词典，绕过查询配额。
+    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里
+    **或以任一变体开头**的条目（与 search_word 的匹配范围一致——搜索有前缀兜底，命中的
+    词条词头如「あ【亜】」并不是查询词「あ」的等价变体，而是以它开头）：`entry_ids` 是
+    客户端输入，不加这层约束的话随便填 id 就能逐段拉走整部词典，绕过查询配额。
 
     `entry_ids` 一条都对不上时退回按词取：词典被重新解析后条目 id 整体换新，页面上还开着的
     旧查询结果带的是旧 id，不该因此显示「词条不存在」。
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
+    variants = expand_word(word)
+    word_match = or_(
+        DictEntry.word_lower.in_(variants),
+        *[DictEntry.word_lower.like(f"{variant}%") for variant in variants],
+    )
     statement = (
         current_generation_only(db.query(DictEntry))
         .filter(DictEntry.dictionary_id == dictionary_id)
-        .filter(DictEntry.word_lower.in_(expand_word(word)))
+        .filter(word_match)
     )
     entries: list[DictEntry] = []
     if entry_ids:
