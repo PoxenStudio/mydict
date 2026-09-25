@@ -332,7 +332,10 @@
 
   /* --------------------------------------------------------- 链接与音频 */
 
-  var AUDIO_EXT_RE = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|wma)(?:[?#].*)?$/i
+  // .spx 必须在列表里：导入时词条里的 sound://…spx 已被改写成 /dict-res/…/x.spx，
+  // 拦不住的话点击会直接让 iframe 导航到 spx 文件，浏览器弹出解不了的内置播放器，
+  // 词条整个被换掉（实测 NHK 发音词典）。.spx 由 playAudio 走 JS 解码播放。
+  var AUDIO_EXT_RE = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|wma|spx)(?:[?#].*)?$/i
   var SPX_EXT_RE = /\.spx(?:[?#].*)?$/i
 
   // 遗留坏链接：早期导入代码把 entry://x 改成了 /dict-res/N/res/entry:/x（旧库里还有
@@ -608,6 +611,21 @@
     return null
   }
 
+  // 评注默认折叠：搜韵原站也是收起的（「点击查看或隐藏评注」），全展开会把词条顶得
+  // 很长。在文档就绪时统一把面板后的评注块藏掉，点击面板时再由上面的开关恢复。
+  function collapseCommentPanels() {
+    var panels
+    try {
+      panels = document.querySelectorAll('.commentPanel')
+    } catch (e) {
+      return
+    }
+    for (var i = 0; i < panels.length; i++) {
+      var block = commentBlockAfter(panels[i])
+      if (block) block.style.display = 'none'
+    }
+  }
+
   document.addEventListener(
     'click',
     function (event) {
@@ -858,6 +876,7 @@
 
   function onReady() {
     fixMediaSources()
+    collapseCommentPanels()
     // 首屏就是暗色时，正文已经解析完了，这时才做得了提亮
     boostDarkText()
     installLookupMenu()

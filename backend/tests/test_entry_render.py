@@ -700,3 +700,15 @@ def test_bootstrap_implements_comment_panel_toggle() -> None:
     html = render_entry_document("<p>x</p>", dictionary_id=63)
     assert "commentPanel" in html
     assert "commentBlockAfter" in html
+    # 评注默认折叠（搜韵原站收起，全展开会把词条顶得很长），在文档就绪时统一藏掉
+    assert "collapseCommentPanels" in html
+
+
+def test_bootstrap_intercepts_rewritten_spx_anchors() -> None:
+    """导入时 sound://…spx 已被改写成 /dict-res/…/x.spx，音频扩展名正则必须含 spx。
+
+    拦不住的话点击会让 iframe 直接导航到 spx 文件——浏览器弹出解不了的内置播放器，
+    词条整个被换掉（实测 NHK 发音词典）。.spx 走 JS 解码播放。
+    """
+    html = render_entry_document("<p>x</p>", dictionary_id=28)
+    assert "wma|spx" in html
