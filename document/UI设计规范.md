@@ -146,7 +146,8 @@
 ## 7. 核心组件风格指南
 
 ### 7.1 查询首页搜索框
-- 页面视觉焦点，采用较大尺寸（高度 ≥ 48px）、`--radius-full` 或 `--radius-lg` 圆角、`--shadow-elevation-1` 静态阴影，获得焦点时阴影升到 `--shadow-elevation-2` 并显示品牌色描边，体现"清新有质感"的首屏印象。
+- 页面视觉焦点，采用较大尺寸（高度 ≥ 48px）、`--radius-full` 圆角。浅色主题下页面底色与白色搜索框很接近，只靠浅阴影会“融进背景”，所以常显 `--color-border-hover` 描边 + `--shadow-elevation-2` 阴影；hover 时描边转 `--color-brand-300`，获得焦点时描边转 `--color-brand-500`、阴影升到 `--shadow-elevation-3`。占位文字用 `--color-text-tertiary`。
+- 查询按钮是 7.3 主按钮的例外：底色用 `--color-brand-600`（白字在 `--color-brand-500` 上对比度只有约 2.3:1，看不清），hover `--color-brand-700`、active `--color-brand-900`，文字 `--font-weight-medium`，带 `--shadow-elevation-1`；禁用态为 `--color-border` 底 + `--color-text-tertiary` 字。
 - 页面为单列居中布局（最大宽度 `--size-content-md`）：自上而下依次是站名标语、搜索框、检索范围、结果列表；搜索提示语与部署版本号收在页面底部的页脚（`.site-footer`）。
 - 检索范围只对登录用户显示（列出其可用词典），访客（开放使用）没有这一行。默认收起，搜索框下方居中显示一行摘要（「检索范围：全部词典（N）」或「已选 x / N 部」）与右箭头；点击后箭头转向下方，在摘要下方展开与搜索框同宽的面板（筛选框、语言快捷按钮、词典列表）。词典项以「[语言]词典名」的紧凑形式显示（语言部分用次要文字色，整项超长时一起省略），列表按 240px 最小列宽自动排成多列，超过 `--size-scroll-md` 时在列表内滚动；复选框用 `accent-color: --color-brand-500`。
 

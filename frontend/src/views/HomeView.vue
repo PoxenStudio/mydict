@@ -514,19 +514,27 @@ function onUnsupportedAudio() {
   text-decoration: underline;
 }
 
+/* 浅色主题下页面底色与白色搜索框接近，靠常显描边 + 二级阴影把输入区域托出来 */
 .search-box {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   background: var(--color-bg-surface);
   border-radius: var(--radius-full);
-  box-shadow: var(--shadow-elevation-1);
+  box-shadow: var(--shadow-elevation-2);
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
-  border: 1px solid transparent;
+  border: 1px solid var(--color-border-hover);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.search-box:hover {
+  border-color: var(--color-brand-300);
 }
 
 .search-box:focus-within {
-  box-shadow: var(--shadow-elevation-2);
+  box-shadow: var(--shadow-elevation-3);
   border-color: var(--color-brand-500);
 }
 
@@ -545,25 +553,39 @@ function onUnsupportedAudio() {
   color: var(--color-text-primary);
 }
 
+.search-box input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* 用 brand-600 而非 brand-500 打底：白字在 brand-500 上对比度只有约 2.3:1，看不清 */
 .search-box button {
   /* 比输入框矮一圈，嵌在圆角搜索框内 */
   height: 40px;
-  padding: 0 var(--space-5);
+  padding: 0 var(--space-6);
   border: none;
   border-radius: var(--radius-full);
-  background: var(--color-brand-500);
+  background: var(--color-brand-600);
+  box-shadow: var(--shadow-elevation-1);
   /* 品牌色底上的文字在两种主题下都用白色 */
   color: #fff;
   font-size: var(--text-base);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
+  transition: background 0.15s ease;
 }
 
 .search-box button:hover {
-  background: var(--color-brand-600);
+  background: var(--color-brand-700);
+}
+
+.search-box button:active {
+  background: var(--color-brand-900);
 }
 
 .search-box button:disabled {
   background: var(--color-border);
+  box-shadow: none;
+  color: var(--color-text-tertiary);
   cursor: not-allowed;
 }
 
