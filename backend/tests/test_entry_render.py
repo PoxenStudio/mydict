@@ -651,3 +651,52 @@ def test_bootstrap_decodes_speex_in_the_browser() -> None:
     start = html.index(BOOT_MARK)
     block = html[html.rindex("<script>", 0, start) : html.index("</script>", start)]
     assert "</script" not in block
+
+
+# ------------------------------------------------------- mdx 同名 CSS/JS 注入
+
+
+def test_extra_head_assets_css_link_is_injected_before_bootstrap() -> None:
+    """mdx 同名样式表（搜韵诗词全文检索版.css 这类词条从不引用的）要注入 <link>。
+
+    排在引导脚本**之前**：内联脚本会等前面的样式表加载完才执行，引导脚本按暗色规则
+    改写颜色时词典样式才已生效。
+    """
+    html = render_entry_document(
+        "<p>x</p>",
+        dictionary_id=63,
+        extra_head_assets=[("搜韵诗词全文检索版.css", "/dict-res/63/res/%E6%90%9C.css")],
+    )
+    assert '<link rel="stylesheet" href="/dict-res/63/res/%E6%90%9C.css">' in html
+    assert html.index("<link") < html.index(BOOT_MARK)
+
+
+def test_extra_head_assets_js_is_injected_after_bootstrap() -> None:
+    """同名 .js（MDict 同名自动加载惯例）排在引导脚本之后：词典脚本一抛错，
+    高度上报与链接拦截就都装不上了。"""
+    html = render_entry_document(
+        "<p>x</p>", dictionary_id=8, extra_head_assets=[("d.js", "/dict-res/8/res/d.js")]
+    )
+    assert '<script src="/dict-res/8/res/d.js"></script>' in html
+    assert html.index(BOOT_MARK) < html.index('<script src="/dict-res/8/res/d.js">')
+
+
+def test_extra_head_assets_referenced_by_definition_are_skipped() -> None:
+    """词条自己引用了的同名文件不能再注入一遍（大辞泉的 oxbw.css 词条里有 <link>），
+    否则同一份 css/js 加载两次。"""
+    definition = '<link href="/dict-res/12/res/oxbw.css"><p>x</p>'
+    html = render_entry_document(
+        definition,
+        dictionary_id=12,
+        extra_head_assets=[("oxbw.css", "/dict-res/12/res/oxbw.css")],
+    )
+    assert html.count("oxbw.css") == 1
+    assert '<link rel="stylesheet"' not in html
+
+
+def test_bootstrap_implements_comment_panel_toggle() -> None:
+    """搜韵的「评注（点击查看或隐藏评注）」在词条里没有任何脚本，点击展开/折叠
+    由引导脚本实现：点 div.commentPanel 切换其后 div#comment_xxx 的显示。"""
+    html = render_entry_document("<p>x</p>", dictionary_id=63)
+    assert "commentPanel" in html
+    assert "commentBlockAfter" in html

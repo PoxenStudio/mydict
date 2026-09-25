@@ -590,6 +590,48 @@
     return urls
   }
 
+  /* ------------------------------------- 评注面板点击展开/折叠 */
+
+  // 搜韵诗词全文检索版的词条里，「评注（点击查看或隐藏评注）」是 div.commentPanel，
+  // 紧跟其后的 div#comment_xxx.comment 才是评注正文——词条里没有任何脚本，这个开关在
+  // MDict 客户端/django-mdict 里是靠词典环境补的，这里用委托点击实现同样的效果。
+  // 匹配放宽到「class 含 comment」：同一部词典还有 div.allusionNote 之类的变体结构，
+  // 但面板后第一个带 comment 的块就是正文，往前找不到 id 也不至于误伤别的块。
+  function commentBlockAfter(panel) {
+    var node = panel.nextElementSibling
+    while (node) {
+      var id = node.id || ''
+      var className = ' ' + (node.className || '') + ' '
+      if (id.indexOf('comment_') === 0 || className.indexOf(' comment ') >= 0) return node
+      node = node.nextElementSibling
+    }
+    return null
+  }
+
+  document.addEventListener(
+    'click',
+    function (event) {
+      var node = event.target
+      if (!node || !node.closest) return
+      var panel = node.closest('.commentPanel')
+      if (!panel) return
+      var block = commentBlockAfter(panel)
+      if (!block) return
+      block.style.display = block.style.display === 'none' ? '' : 'none'
+      report()
+    },
+    true
+  )
+
+  // 让面板看起来可点（词典自己的 CSS 没写 cursor）
+  try {
+    var panelStyle = document.createElement('style')
+    panelStyle.textContent = '.commentPanel{cursor:pointer}'
+    ;(document.head || document.documentElement).appendChild(panelStyle)
+  } catch (e) {
+    /* 忽略 */
+  }
+
   document.addEventListener(
     'click',
     function (event) {

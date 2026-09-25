@@ -27,7 +27,7 @@ from app.schemas.dictionary import (
     ReorderRequest,
     TestQueryEntryOut,
 )
-from app.services import dictionary_service, query_service
+from app.services import dictionary_service, query_service, resource_service
 from app.services.entry_render_service import render_entries_document
 
 router = APIRouter(prefix="/admin/dictionaries", tags=["admin-dictionaries"])
@@ -284,6 +284,7 @@ def entry_document(
     word: str,
     theme: Literal["light", "dark"] | None = None,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
 ) -> HTMLResponse:
     """管理端预览单条词条，供「测试查询」弹窗放进隔离 iframe。
@@ -293,7 +294,8 @@ def entry_document(
     必须走 iframe 而不是 v-html：管理端 token 也在 localStorage 里，用 v-html 渲染
     第三方词典的 HTML 等于把权限最高的凭证暴露出去。
     """
-    if db.get(Dictionary, dictionary_id) is None:
+    dictionary = db.get(Dictionary, dictionary_id)
+    if dictionary is None:
         raise NotFoundError("词典不存在")
     # 与前台一致：同一词头的多条聚合进一个文档（见 query_service.get_entries_for_document）
     entries = query_service.get_entries_for_document(db, dictionary_id, word)
@@ -304,5 +306,10 @@ def entry_document(
             [(e.word, e.definition, e.phonetic) for e in entries],
             dictionary_id=dictionary_id,
             theme=theme,
+            extra_head_assets=resource_service.same_name_assets(
+                Path(settings.dictionary_storage_path) / str(dictionary_id) / "res",
+                dictionary_id,
+                dictionary.file_path,
+            ),
         )
     )
