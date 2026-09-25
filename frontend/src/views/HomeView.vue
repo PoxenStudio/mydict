@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowRight } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
-import DictionarySidebar from '../components/DictionarySidebar.vue'
+import SystemTaskBanner from '../components/SystemTaskBanner.vue'
+import DictionaryScopePanel from '../components/DictionaryScopePanel.vue'
 import EntryPanel from '../components/EntryPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -45,7 +47,8 @@ const results = ref<QueryResultItem[]>([])
 const resultsRef = ref<HTMLElement | null>(null)
 const status = ref<'idle' | 'loading' | 'ok' | 'error'>('idle')
 const version = ref('')
-const mobileOpen = ref(false)
+// 检索范围面板默认收起，只露出一行摘要
+const scopeOpen = ref(false)
 
 // 展开状态只存一个 key（互斥展开）；liveKeys 是「已挂载过 iframe」的 LRU 列表
 const expandedKey = ref<string | null>(null)
@@ -53,6 +56,24 @@ const liveKeys = ref<string[]>([])
 
 const showLoginGate = computed(
   () => settingsStore.loaded && !settingsStore.openAccess && !authStore.isLoggedIn,
+)
+
+// 检索范围只给登录用户：列出的是其「可用词典」，访客（开放使用）直接查全部已启用词典
+const showScope = computed(() => authStore.isLoggedIn)
+
+const scopeSummary = computed(() => {
+  if (dictLoading.value) return '载入中…'
+  if (!isFiltering.value) return `全部词典（${allIds.value.length}）`
+  return `已选 ${checkedIds.value.size} / ${allIds.value.length} 部`
+})
+
+// 在「词典选择」里改了可用词典后，检索范围跟着换成新的列表
+watch(
+  () => (authStore.profile ? (authStore.profile.allowed_dictionary_ids ?? []).join(',') : null),
+  (current, previous) => {
+    // previous 为 null 是个人资料刚加载完，不是用户改了设置
+    if (showScope.value && previous !== null && current !== previous) loadDictionaryFilter()
+  },
 )
 
 const favoritedWords = computed(() => new Set(favoriteMap.value.keys()))
@@ -100,7 +121,10 @@ onMounted(async () => {
   // 这里是裸 Promise.all 的话，loadFavorites 在未登录等场景下一 reject，
   // runFromUrl() 就永远不执行——表现为打开 /?q=词 输入框空着、毫无反应，
   // 而且异常发生在 async 回调里，只会变成一条 unhandled rejection，很难查。
-  await Promise.all([loadFavorites().catch(() => undefined), loadDictionaryFilter()])
+  await Promise.all([
+    loadFavorites().catch(() => undefined),
+    authStore.isLoggedIn ? loadDictionaryFilter() : undefined,
+  ])
   // 词典列表与登录态都就绪了，这时才处理地址栏里的 ?q=（外链直达）
   await runFromUrl()
 })
@@ -241,7 +265,7 @@ async function runSearch(query?: string) {
   status.value = 'loading'
   submittedWord.value = q
   try {
-    const resp = await searchWord(q, filterIds.value)
+    const resp = await searchWord(q, showScope.value ? filterIds.value : undefined)
     results.value = resp.results
     status.value = 'ok'
     // 结果出来后把词同步进地址栏，链接才能分享、刷新才能复现
@@ -308,9 +332,11 @@ function onUnsupportedAudio() {
 <template>
   <div class="page">
     <NavBar />
+    <SystemTaskBanner />
 
     <main class="search-page">
       <section class="search-head">
+        <h1 class="tagline">{{ settingsStore.siteName }} · 查询与生词本</h1>
         <form class="search-box" :class="{ disabled: showLoginGate }" @submit.prevent="runSearch()">
           <input
             v-model="word"
@@ -320,24 +346,31 @@ function onUnsupportedAudio() {
           />
           <button type="submit" :disabled="showLoginGate">查询</button>
         </form>
-      </section>
 
-      <div class="sidebar-slot">
-        <button type="button" class="sidebar-toggle" @click="mobileOpen = true">
-          检索范围（{{ checkedIds.size }}/{{ allIds.length }}）
-        </button>
-        <DictionarySidebar
-          :dictionaries="dictionaries"
-          :checked-ids="checkedIds"
-          :loading="dictLoading"
-          :is-filtering="isFiltering"
-          :mobile-open="mobileOpen"
+        <div v-if="showScope" class="scope">
+          <button
+            type="button"
+            class="scope-toggle"
+            :aria-expanded="scopeOpen"
+            aria-controls="dictionary-scope-panel"
+            @click="scopeOpen = !scopeOpen"
+          >
+            <span>检索范围：{{ scopeSummary }}</span>
+            <el-icon class="scope-arrow" :class="{ open: scopeOpen }"><ArrowRight /></el-icon>
+          </button>
+          <DictionaryScopePanel
+            v-show="scopeOpen"
+            id="dictionary-scope-panel"
+            :dictionaries="dictionaries"
+            :checked-ids="checkedIds"
+            :loading="dictLoading"
+            :is-filtering="isFiltering"
             @toggle="toggleDictionary"
             @select-all="selectAllOrClear"
-          @select-language="selectLanguage"
-          @close-mobile="mobileOpen = false"
-        />
-      </div>
+            @select-language="selectLanguage"
+          />
+        </div>
+      </section>
 
       <div class="layout">
         <div class="content">
@@ -385,7 +418,6 @@ function onUnsupportedAudio() {
     </main>
 
     <footer class="site-footer">
-      <h1 class="tagline">{{ settingsStore.siteName }} · 查询与生词本</h1>
       <p v-if="authStore.isLoggedIn" class="search-hint">{{ settingsStore.searchHintText }}</p>
       <p class="search-hint">Ver: {{ version ? version : '0.0.0' }}</p>
       <p class="search-hint">
@@ -401,49 +433,58 @@ function onUnsupportedAudio() {
   background: var(--color-bg-base);
 }
 
-/* 两列栅格：左列是检索范围，右列上方是查询框、下方是结果。
-   检索范围跨两行，这样往下滚读词条时它能一直粘在视口里。 */
+/* 单列居中：标题、搜索框、检索范围（默认收起）自上而下，结果列表在最后 */
 .search-page {
-  max-width: 1180px;
+  max-width: var(--size-content-md);
   margin: 0 auto;
   padding: var(--space-7) var(--space-4);
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  /* 第一行按搜索框的实际高度，其余空间全给第二行：
-     检索范围卡片比查词结果高时，跨两行的它会把两个 auto 行一起拉高（多出来的高度
-     平分给两行），结果区就被推到搜索框下方很远处，看着像「垂直居中」。 */
-  grid-template-rows: auto 1fr;
-  gap: var(--space-5);
-  align-items: start;
-}
-
-.search-head {
-  grid-column: 2;
-  grid-row: 1;
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
 }
 
-.sidebar-slot {
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  position: sticky;
-  top: var(--space-5);
+.search-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
-.layout {
-  grid-column: 2;
-  grid-row: 2;
-  min-width: 0;
-}
-
-.sidebar-toggle {
-  display: none;
-}
-
+.layout,
 .content {
   min-width: 0;
+}
+
+.scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.scope-toggle {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.scope-toggle:hover {
+  background: var(--color-hover-tint);
+  color: var(--color-text-primary);
+}
+
+.scope-arrow {
+  transition: transform 0.2s ease;
+}
+
+.scope-arrow.open {
+  transform: rotate(90deg);
 }
 
 .tagline {
@@ -456,7 +497,7 @@ function onUnsupportedAudio() {
 
 /* 站名、提示语与版本号统一收在页脚，查询区只留一个搜索框 */
 .site-footer {
-  max-width: 1180px;
+  max-width: var(--size-content-md);
   margin: 0 auto;
   padding: var(--space-6) var(--space-4) var(--space-7);
   display: flex;
@@ -498,17 +539,20 @@ function onUnsupportedAudio() {
   border: none;
   outline: none;
   background: transparent;
+  /* 搜索框是首屏视觉焦点，高度不低于 48px */
   height: 48px;
   font-size: var(--text-md);
   color: var(--color-text-primary);
 }
 
 .search-box button {
+  /* 比输入框矮一圈，嵌在圆角搜索框内 */
   height: 40px;
   padding: 0 var(--space-5);
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-brand-500);
+  /* 品牌色底上的文字在两种主题下都用白色 */
   color: #fff;
   font-size: var(--text-base);
   cursor: pointer;
@@ -540,40 +584,5 @@ function onUnsupportedAudio() {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-
-@media (max-width: 640px) {
-  /* 窄屏回落成单列：查询框在前，检索范围（这时只剩抽屉入口）居中，结果在最后 */
-  .search-page {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .search-head {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .sidebar-slot {
-    grid-column: 1;
-    grid-row: 2;
-    position: static;
-  }
-
-  .layout {
-    grid-column: 1;
-    grid-row: 3;
-  }
-
-  .sidebar-toggle {
-    display: block;
-    width: 100%;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg-surface);
-    color: var(--color-text-secondary);
-    font-size: var(--text-sm);
-    padding: var(--space-2);
-    cursor: pointer;
-  }
 }
 </style>

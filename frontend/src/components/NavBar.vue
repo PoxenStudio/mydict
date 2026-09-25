@@ -28,7 +28,7 @@ async function handleUserCommand(command: string) {
   } else if (command === 'logout') {
     authStore.logout()
   } else if (command === 'dictionaries') {
-    availableDictionaries.value = await listDictionaries()
+    availableDictionaries.value = await listDictionaries('all')
     dictPickerVisible.value = true
   }
 }

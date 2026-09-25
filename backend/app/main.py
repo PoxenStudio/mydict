@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -20,10 +22,11 @@ from app.api.web.auth import router as web_auth_router
 from app.api.web.dict import router as web_dict_router
 from app.api.web.public_settings import router as web_public_settings_router
 from app.api.web.vocab import router as web_vocab_router
+from app.core import bootstrap
 from app.core.config import get_settings
 from app.core.exceptions import AppError, RateLimitedError
 from app.core.logging import configure_logging
-from app.core.migrate import run_migrations
+from app.core.maintenance import MaintenanceGate
 from app.core.version import get_app_version
 from app.services.resource_service import (
     normalize_resource_path,
@@ -31,19 +34,21 @@ from app.services.resource_service import (
     resource_media_type,
     strip_legacy_file_prefix,
 )
-from app.tasks.scheduler import start_scheduler
 
 settings = get_settings()
 settings.ensure_data_dirs()
 get_app_version()
-run_migrations()
-# alembic 迁移会通过 fileConfig 重新配置 root logger（见 alembic/env.py），
-# 必须放在 run_migrations() 之后调用才不会被它覆盖掉
 configure_logging()
-if settings.enable_scheduler:
-    start_scheduler()
 
-app = FastAPI(title="MyDict")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    bootstrap.start_in_background()
+    yield
+
+
+app = FastAPI(title="MyDict", lifespan=lifespan)
+app.add_middleware(MaintenanceGate)
 
 
 @app.exception_handler(AppError)

@@ -3,6 +3,13 @@ import { ElMessage } from 'element-plus'
 import router from '../router'
 import { clearTokens, getAccessToken } from '../utils/authStorage'
 
+let maintenanceHandler: (() => void) | undefined
+
+// 服务启动流程未就绪时业务接口统一返回 503 maintenance，由系统状态 store 接手展示维护页
+export function onMaintenance(handler: () => void) {
+  maintenanceHandler = handler
+}
+
 const request = axios.create({
   baseURL: '/api',
   timeout: 10000,
@@ -28,7 +35,9 @@ request.interceptors.response.use(
     // code === 'invalid_credentials' 是登录/改密时用户名密码错误，属于正常业务错误，
     // 不代表登录态失效，只应提示不应清 token/跳转（否则会把当前登录页面的失败尝试
     // 误判成会话过期，静默跳回同一个登录页，界面上看起来像“点了没反应”）
-    if (status === 401 && code === 'unauthorized') {
+    if (status === 503 && code === 'maintenance') {
+      maintenanceHandler?.()
+    } else if (status === 401 && code === 'unauthorized') {
       clearTokens(isAdminApi ? 'admin' : 'user')
       router.push(isAdminApi ? '/admin/login' : '/login')
     } else if (status === 403) {

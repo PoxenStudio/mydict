@@ -12,10 +12,12 @@ class BackgroundTask:
     STATUS_SUCCESS = "success"
     STATUS_ERROR = "error"
 
-    def __init__(self, task_id: int, task_type: str, title: str):
+    def __init__(self, task_id: int, task_type: str, title: str, public: bool):
         self.id = task_id
         self.task_type = task_type
         self.title = title
+        # 公开任务的标题与进度会经 /api/system/status 给未登录的访客看
+        self.public = public
         self.status = self.STATUS_RUNNING
         self.progress_data: dict[str, Any] = {}
         self.result: dict[str, Any] | None = None
@@ -28,6 +30,7 @@ class BackgroundTask:
             "id": self.id,
             "task_type": self.task_type,
             "title": self.title,
+            "public": self.public,
             "status": self.status,
             "progress_data": self.progress_data,
             "result": self.result,
@@ -38,7 +41,7 @@ class BackgroundTask:
 
 
 class BackgroundTaskService:
-    """进程内登记当前正在跑的长任务（目前只有词典导入）。运行中的任务供别的会话/
+    """进程内登记当前正在跑的长任务（启动时的数据库迁移、词典导入/重新解析/修复）。运行中的任务供别的会话/
     标签页打开管理后台时也能看到"正在导入"的状态；发起方自己则通过 get() 轮询
     task_id 直到 status 变成 success/error，取得导入是否真正完成。不持久化，
     随进程重启清空。"""
@@ -48,10 +51,10 @@ class BackgroundTaskService:
         self._lock = threading.Lock()
         self._next_id = 1
 
-    def start(self, task_type: str, title: str) -> BackgroundTask:
+    def start(self, task_type: str, title: str, *, public: bool = False) -> BackgroundTask:
         with self._lock:
             self._prune_finished_locked()
-            task = BackgroundTask(self._next_id, task_type, title)
+            task = BackgroundTask(self._next_id, task_type, title, public)
             self._next_id += 1
             self._tasks[task.id] = task
             return task

@@ -9,15 +9,12 @@ const props = defineProps<{
   loading: boolean
   /** 是否正在按勾选收窄范围（false = 检索全部） */
   isFiltering: boolean
-  /** 移动端由外层控制显示 */
-  mobileOpen: boolean
 }>()
 
 const emit = defineEmits<{
   toggle: [id: number]
   selectAll: []
   selectLanguage: [langFrom: string]
-  closeMobile: []
 }>()
 
 const keyword = ref('')
@@ -27,10 +24,6 @@ const visible = computed(() => {
   if (!needle) return props.dictionaries
   return props.dictionaries.filter((item) => item.name.toLowerCase().includes(needle))
 })
-
-const checkedCount = computed(
-  () => props.dictionaries.filter((item) => props.checkedIds.has(item.id)).length,
-)
 
 // 中文系（含早期数据里的裸 zh）在界面上合成一个按钮：查询路由本来就不区分简繁
 // （输入汉字时三种码都算「优先语言」），拆成两个按钮只会让「只看中文词典」要点两次。
@@ -106,15 +99,7 @@ function selectScope(scope: string) {
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ 'mobile-open': mobileOpen }">
-    <header class="sidebar-header">
-      <h2 class="title">检索范围</h2>
-      <button type="button" class="close-mobile" aria-label="收起" @click="emit('closeMobile')">
-        ×
-      </button>
-      <span class="count">{{ checkedCount }} / {{ dictionaries.length }}</span>
-    </header>
-
+  <section class="scope-panel">
     <input v-model="keyword" class="search" type="search" placeholder="筛选词典名" />
 
     <div class="actions">
@@ -146,16 +131,17 @@ function selectScope(scope: string) {
             :checked="checkedIds.has(item.id)"
             @change="emit('toggle', item.id)"
           />
-          <span class="dict-name" :title="item.name">{{ item.name }}</span>
-          <span class="dict-lang">{{ langLabel(item.lang_from) }}</span>
+          <span class="dict-name" :title="`[${langLabel(item.lang_from)}]${item.name}`">
+            <span class="dict-lang">[{{ langLabel(item.lang_from) }}]</span>{{ item.name }}
+          </span>
         </label>
       </li>
     </ul>
-  </aside>
+  </section>
 </template>
 
 <style scoped>
-.sidebar {
+.scope-panel {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -163,37 +149,7 @@ function selectScope(scope: string) {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
   padding: var(--space-4);
-  max-height: calc(100vh - var(--space-7) * 2);
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.title {
-  margin: 0;
-  font-size: var(--text-base);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
-.count {
-  margin-left: auto;
-  font-size: var(--text-xs);
-  color: var(--color-text-tertiary);
-}
-
-.close-mobile {
-  display: none;
-  border: none;
-  background: transparent;
-  color: var(--color-text-tertiary);
-  font-size: var(--text-lg);
-  line-height: 1;
-  cursor: pointer;
-  order: 3;
+  text-align: left;
 }
 
 .search {
@@ -243,14 +199,16 @@ function selectScope(scope: string) {
   font-size: var(--text-xs);
 }
 
+/* 面板与搜索框同宽，词典多时排成多列（240px 是多数「[语言]词典名」能完整显示的列宽），超出高度在列表内滚动 */
 .dict-list {
   margin: 0;
   padding: 0;
   list-style: none;
+  max-height: var(--size-scroll-md);
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-1) var(--space-3);
 }
 
 .dict-row {
@@ -260,6 +218,10 @@ function selectScope(scope: string) {
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+
+.dict-row input {
+  accent-color: var(--color-brand-500);
 }
 
 .dict-row:hover {
@@ -277,31 +239,6 @@ function selectScope(scope: string) {
 }
 
 .dict-lang {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
   color: var(--color-text-tertiary);
-}
-
-/* 移动端：侧边栏变成覆盖式抽屉，由外层按钮切换 */
-@media (max-width: 640px) {
-  .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: min(320px, 86vw);
-    z-index: 20;
-    border-radius: 0;
-    max-height: none;
-    transform: translateX(-100%);
-    transition: transform 0.2s ease;
-    box-shadow: var(--shadow-elevation-2);
-  }
-
-  .sidebar.mobile-open {
-    transform: translateX(0);
-  }
-
-  .close-mobile {
-    display: block;
-  }
 }
 </style>
