@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core import query_cache
 from app.models.dictionary import DictEntry, Dictionary
+from app.services.entry_scope import current_generation_only
 from app.services.query_expand import EXPANSION_VERSION, expand_word
 
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}
@@ -84,7 +85,7 @@ def _resolve_link(db: Session, entry: DictEntry) -> DictEntry:
             return current
         seen.add(key)
         following = (
-            db.query(DictEntry)
+            current_generation_only(db.query(DictEntry))
             .filter(DictEntry.dictionary_id == entry.dictionary_id, DictEntry.word_lower == key)
             .first()
         )
@@ -234,7 +235,7 @@ def _query_entries(
     if not dictionary_ids or not words_lower:
         return []
     return (
-        db.query(DictEntry)
+        current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id.in_(dictionary_ids),
             DictEntry.word_lower.in_(words_lower),
@@ -314,7 +315,7 @@ def get_entry(db: Session, dictionary_id: int, word: str) -> DictEntry | None:
     这正是查询结果卡片里的那一对。释义是 `@@@LINK=` 时会跟进到目标词条（见 `_resolve_link`）。
     """
     entry = (
-        db.query(DictEntry)
+        current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id == dictionary_id,
             DictEntry.word_lower == word.strip().lower(),
@@ -342,7 +343,9 @@ def get_entries_for_document(
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
-    statement = db.query(DictEntry).filter(DictEntry.dictionary_id == dictionary_id)
+    statement = current_generation_only(db.query(DictEntry)).filter(
+        DictEntry.dictionary_id == dictionary_id
+    )
     if entry_ids:
         statement = statement.filter(DictEntry.id.in_(entry_ids))
     else:
@@ -363,7 +366,7 @@ def suggest_prefix(
         return []
     prefix_lower = prefix.strip().lower()
     rows = (
-        db.query(DictEntry.word)
+        current_generation_only(db.query(DictEntry.word))
         .filter(
             DictEntry.dictionary_id.in_([d.id for d in dictionaries]),
             DictEntry.word_lower.like(f"{prefix_lower}%"),

@@ -1795,12 +1795,33 @@ async def test_reparse_restores_lost_duplicate_headwords(
         db.close()
 
 
-def _count_rows(model, dict_id: int) -> int:
+
+def _entries_by_generation(dict_id: int) -> dict[int, int]:
+    from sqlalchemy import func
+
     from app.core.db import SessionLocal
+    from app.models.dictionary import DictEntry
 
     db = SessionLocal()
     try:
-        return db.query(model).filter(model.dictionary_id == dict_id).count()
+        rows = (
+            db.query(DictEntry.generation, func.count())
+            .filter(DictEntry.dictionary_id == dict_id)
+            .group_by(DictEntry.generation)
+            .all()
+        )
+        return dict(rows)
+    finally:
+        db.close()
+
+
+def _active_generation(dict_id: int) -> int:
+    from app.core.db import SessionLocal
+    from app.models.dictionary import Dictionary as DictionaryModel
+
+    db = SessionLocal()
+    try:
+        return db.get(DictionaryModel, dict_id).active_generation
     finally:
         db.close()
 
@@ -1821,89 +1842,123 @@ async def _import_duplicate_headword_dict(
             "files": [f"{rel}/{file_name}" for file_name in files],
         },
     )
+    await client.put(f"/api/admin/dictionaries/{dictionary['id']}/enable", headers=admin_headers)
     return dictionary["id"]
 
 
-async def test_reparse_failure_keeps_old_entries(
+async def _reparse(client: AsyncClient, admin_headers: dict[str, str], dict_id: int) -> dict:
+    resp = await client.post(
+        "/api/admin/dictionaries/reparse",
+        headers=admin_headers,
+        json={"dictionary_ids": [dict_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    return await wait_for_task(client, admin_headers, resp.json()["task_id"])
+
+
+async def test_reparse_switches_generation_and_purges_old(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """切换只改 active_generation；切换后旧一代被删光，新一代保持源文件顺序。"""
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-ok")
+    assert _active_generation(dict_id) == 0
+    assert _entries_by_generation(dict_id) == {0: 3}
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert _active_generation(dict_id) == 1
+    assert _entries_by_generation(dict_id) == {1: 3}
+
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert _active_generation(dict_id) == 2
+    assert _entries_by_generation(dict_id) == {2: 3}
+
+
+async def test_reparse_failure_keeps_old_generation(
     client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
 ) -> None:
-    """解析中途抛错时旧词条原封不动、暂存区被清空——不再有「先删后灌」留下的空词典。"""
-    from app.models.dictionary import DictEntry, DictEntryStaging
+    """解析中途抛错：旧一代原封不动、写了一半的新一代被清掉，不再有「先删后灌」留下的空词典。"""
     from app.parsers.base import ParsedEntry
     from app.parsers.mdict import MDictParser
 
-    dict_id = await _import_duplicate_headword_dict(
-        client, admin_headers, tmp_path, "reparse-fail"
-    )
-    before = _count_rows(DictEntry, dict_id)
-    assert before == 3
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-fail")
 
     def broken_parse(self, file_paths, **kwargs):
-        yield ParsedEntry(word="半截", definition="<p>写进暂存区的一条</p>")
+        yield ParsedEntry(word="半截", definition="<p>已经提交的一条</p>")
         raise RuntimeError("源文件损坏")
 
     monkeypatch.setattr(MDictParser, "parse", broken_parse)
     monkeypatch.setattr("app.services.dictionary_service.BATCH_SIZE", 1)
 
-    resp = await client.post(
-        "/api/admin/dictionaries/reparse",
-        headers=admin_headers,
-        json={"dictionary_ids": [dict_id]},
-    )
-    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
+    task = await _reparse(client, admin_headers, dict_id)
     assert task["status"] == "error", task
+    assert _active_generation(dict_id) == 0
+    assert _entries_by_generation(dict_id) == {0: 3}
 
-    assert _count_rows(DictEntry, dict_id) == before
-    assert _count_rows(DictEntryStaging, dict_id) == 0
 
-
-async def test_reparse_chunked_swap_replaces_all_rows(
-    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+async def test_pending_generation_is_invisible_to_every_read_path(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path
 ) -> None:
-    """大词典走分批换入：结果与一次换入相同，旧行全部删掉、暂存区清空、顺序保持源文件顺序。"""
+    """重新解析写到一半时（下一代已入库、尚未切换），任何查询都不能看到它。"""
     from app.core.db import SessionLocal
-    from app.models.dictionary import DictEntry, DictEntryStaging
+    from app.core.query_cache import invalidate
+    from app.models.dictionary import DictEntry
 
-    dict_id = await _import_duplicate_headword_dict(
-        client, admin_headers, tmp_path, "reparse-chunked"
-    )
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-hidden")
     db = SessionLocal()
     try:
-        old_ids = {
-            row.id for row in db.query(DictEntry).filter(DictEntry.dictionary_id == dict_id)
-        }
-    finally:
-        db.close()
-
-    monkeypatch.setattr("app.services.dictionary_service._SWAP_ATOMIC_LIMIT", 0)
-    monkeypatch.setattr("app.services.dictionary_service._SWAP_BATCH_SIZE", 1)
-
-    resp = await client.post(
-        "/api/admin/dictionaries/reparse",
-        headers=admin_headers,
-        json={"dictionary_ids": [dict_id]},
-    )
-    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
-    assert task["status"] == "success", task
-    assert task["result"]["entries"] == 3
-
-    db = SessionLocal()
-    try:
-        rows = (
-            db.query(DictEntry)
-            .filter(DictEntry.dictionary_id == dict_id)
-            .order_by(DictEntry.id)
-            .all()
+        # 查询端点要走通（测试环境默认不开放匿名访问）
+        set_setting(db, "open_access", "true")
+        db.add(
+            DictEntry(
+                dictionary_id=dict_id,
+                word="毛泽东",
+                word_lower="毛泽东",
+                definition="<p>未切换的新一代</p>",
+                generation=1,
+            )
         )
-        assert len(rows) == 3
-        assert not old_ids & {row.id for row in rows}
-        assert [row.definition.strip() for row in rows if row.word == "毛泽东"] == [
-            "<p>第一首</p>",
-            "<p>第二首</p>",
-        ]
+        db.add(
+            DictEntry(
+                dictionary_id=dict_id,
+                word="毛泽东选集",
+                word_lower="毛泽东选集",
+                definition="<p>只在新一代里</p>",
+                generation=1,
+            )
+        )
+        db.commit()
     finally:
         db.close()
-    assert _count_rows(DictEntryStaging, dict_id) == 0
+    invalidate()
+
+    resp = await client.get(
+        "/api/dict/search", params={"word": "毛泽东", "dict": str(dict_id)}
+    )
+    results = resp.json()["results"]
+    assert len(results) == 2
+    assert "未切换的新一代" not in resp.text
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}", params={"word": "毛泽东"}
+    )
+    assert "未切换的新一代" not in resp.text
+    assert resp.text.count('<section class="mydict-entry">') == 2
+
+    resp = await client.get(
+        f"/api/dict/entry/{dict_id}",
+        params={"word": "毛泽东选集"},
+    )
+    assert resp.status_code == 404
+
+    resp = await client.get(
+        f"/api/admin/dictionaries/{dict_id}/test-query",
+        params={"word": "毛泽东"},
+        headers=admin_headers,
+    )
+    assert {item["word"] for item in resp.json()} == {"毛泽东"}
+    assert len(resp.json()) == 2
 
 
 async def test_reparse_does_not_overwrite_existing_resources(
@@ -1912,9 +1967,7 @@ async def test_reparse_does_not_overwrite_existing_resources(
     """重新解析只补缺失的资源：词典正在服务，覆盖已有文件会让并发请求读到半截内容。"""
     from app.services import dictionary_service
 
-    dict_id = await _import_duplicate_headword_dict(
-        client, admin_headers, tmp_path, "reparse-res"
-    )
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-res")
     seen: list[bool] = []
     original_parse = dictionary_service.MDictParser.parse
 
@@ -1924,11 +1977,23 @@ async def test_reparse_does_not_overwrite_existing_resources(
 
     monkeypatch.setattr(dictionary_service.MDictParser, "parse", spy_parse)
 
+    task = await _reparse(client, admin_headers, dict_id)
+    assert task["status"] == "success", task
+    assert seen == [False]
+
+
+async def test_reparse_rejects_concurrent_run_on_same_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], tmp_path: Path, monkeypatch
+) -> None:
+    """同一部词典并发重解析会各写一代、互相清掉对方的行，第二个请求直接拒绝。"""
+    from app.services import dictionary_service
+
+    dict_id = await _import_duplicate_headword_dict(client, admin_headers, tmp_path, "gen-busy")
+    monkeypatch.setattr(dictionary_service, "_reparsing", {dict_id})
+
     resp = await client.post(
         "/api/admin/dictionaries/reparse",
         headers=admin_headers,
         json={"dictionary_ids": [dict_id]},
     )
-    task = await wait_for_task(client, admin_headers, resp.json()["task_id"])
-    assert task["status"] == "success", task
-    assert seen == [False]
+    assert resp.status_code == 409, resp.text
