@@ -1,7 +1,17 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+from mdict_utils.base import readmdict as _readmdict
 from mdict_utils.base.readmdict import MDD, MDX
+
+# LZO 压缩支持：readmdict 的 LZO 分支代码是现成的，只是缺 python-lzo（无预编译
+# wheel、编译不可靠）。这里注入 ctypes 版垫片（直调 liblzo2），使 6 部 LZO 词典
+# （读懂你的化验单、超级新华字典等）可以正常导入。若镜像里真装了 python-lzo，
+# 则保留原实现不动。
+if getattr(_readmdict, "lzo", None) is None:
+    from app.parsers import lzo_compat
+
+    _readmdict.lzo = lzo_compat
 
 from app.parsers.base import (
     SAMPLE_SCAN_FACTOR,
