@@ -150,6 +150,13 @@ function selectScope(scope: string) {
           任何位置，都恰好触发一次 toggle，勾选态完全由 Vue 的 :checked 驱动。
         -->
         <label class="dict-row" @click.prevent="emit('toggle', item.id)">
+          <!--
+            pointer-events:none 让 checkbox 退化为纯受控显示组件：浏览器的原生翻转与
+            label 转发被彻底隔离，勾选态 100% 由 :checked 驱动。此前即使 @click.prevent
+            也观测到「计数 0/63 但勾还在」的残留错位（Thorium/Chrome 实测）。
+            键盘可达性不受影响：space 在聚焦的 input 上触发的 click 会冒泡到 label，
+            同样被 prevent 并走 toggle。
+          -->
           <input type="checkbox" :checked="checkedIds.has(item.id)" />
           <span class="dict-name" :title="item.name">{{ item.name }}</span>
           <span class="dict-lang">{{ langLabel(item.lang_from) }}</span>
@@ -265,6 +272,11 @@ function selectScope(scope: string) {
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+
+/* 勾选框是纯受控显示组件：点击统一由 label 的 @click.prevent 接管（见模板内注释） */
+.dict-row input {
+  pointer-events: none;
 }
 
 .dict-row:hover {
