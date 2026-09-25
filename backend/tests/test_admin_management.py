@@ -3,9 +3,11 @@ from datetime import date, datetime, timedelta, timezone
 from httpx import AsyncClient
 
 from app.models.audit import AuditLog
+from app.models.token import ApiToken
 from app.models.query import QueryLog, QueryStatsDaily
 from app.services.settings_service import set_setting
 from app.tasks.stats_aggregation import aggregate_date
+from app.core.timeutil import today_str
 from tests.conftest import import_dictionary
 
 
@@ -434,3 +436,67 @@ async def test_stats_invalid_date_returns_empty(
         response = await client.get(path, params=params, headers=admin_headers)
         assert response.status_code == 200
         assert response.json() == []
+
+
+async def test_token_delete_anonymizes_history(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """删除 Token：生词本级联清理，查询日志/统计保留但匿名化（token_id 置 NULL）。
+
+    query_logs / query_stats_daily 对 api_tokens 的外键没有 ondelete（加它需要迁移），
+    直接删会撞外键——这也是「Token 删不掉」的根源之一：此前根本没有删除功能。
+    """
+    resp = await client.post(
+        "/api/admin/tokens", json={"name": "待删Token"}, headers=admin_headers
+    )
+    token_id = resp.json()["id"]
+
+    # 造一条带 token 的查询日志与一条统计，证明删除不会连带丢运营数据
+    from app.core.db import SessionLocal
+    from app.models.query import QueryLog, QueryStatsDaily
+    from app.models.vocab import TokenVocabItem
+
+    db = SessionLocal()
+    try:
+        db.add(QueryLog(token_id=token_id, word="x", status="ok", source="api"))
+        db.add(QueryStatsDaily(stat_date=today_str(), token_id=token_id, query_count=3))
+        db.add(TokenVocabItem(token_id=token_id, word="apple"))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = await client.delete(f"/api/admin/tokens/{token_id}", headers=admin_headers)
+    assert resp.status_code == 204, resp.text
+
+    db = SessionLocal()
+    try:
+        assert db.get(ApiToken, token_id) is None
+        # 生词本随外键级联清理
+        assert (
+            db.query(TokenVocabItem).filter(TokenVocabItem.token_id == token_id).count() == 0
+        )
+        # 查询日志与统计保留，token_id 匿名化为 NULL
+        log = db.query(QueryLog).filter(QueryLog.word == "x").one()
+        assert log.token_id is None
+        stat = (
+            db.query(QueryStatsDaily)
+            .filter(QueryStatsDaily.stat_date == today_str(), QueryStatsDaily.query_count == 3)
+            .one()
+        )
+        assert stat.token_id is None
+        # 审计日志
+        actions = {
+            a.action for a in db.query(AuditLog).filter(AuditLog.target == str(token_id)).all()
+        }
+        assert "token.delete" in actions
+    finally:
+        db.close()
+
+    # 删过之后再删 → 404
+    resp = await client.delete(f"/api/admin/tokens/{token_id}", headers=admin_headers)
+    assert resp.status_code == 404
+
+
+async def test_token_delete_requires_admin(client: AsyncClient) -> None:
+    resp = await client.delete("/api/admin/tokens/1")
+    assert resp.status_code == 401

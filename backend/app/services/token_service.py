@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import NotFoundError
 from app.core.security import generate_api_token, hash_api_token, token_display_prefix
 from app.core.timeutil import today_str
-from app.models.query import QueryStatsDaily
+from app.models.query import QueryLog, QueryStatsDaily
 from app.models.token import ApiToken
 from app.models.vocab import TokenVocabItem
 from app.services.audit_service import log_action
@@ -139,6 +139,23 @@ def regenerate_token(db: Session, token_id: int, admin_id: int) -> dict:
     )
     today_count, total_count = _usage(db, token_id)
     return {**_to_out(token, today_count, total_count), "token": raw}
+
+
+def delete_token(db: Session, token_id: int, admin_id: int) -> None:
+    """删除一个 Token。
+
+    历史数据**保留但匿名化**：query_logs 与 query_stats_daily 的 token_id 置 NULL——这两张表
+    的外键没有 ondelete（加了就要迁移），直接删会撞外键；而查询统计是运营数据，不该跟着
+    Token 一起消失。TokenVocabItem 的外键带 CASCADE，随删除自动清理。
+    """
+    token = _get_or_404(db, token_id)
+    for model in (QueryLog, QueryStatsDaily):
+        db.query(model).filter(model.token_id == token_id).update({"token_id": None})
+    db.delete(token)
+    db.commit()
+    log_action(
+        db, actor_type="admin", actor_id=admin_id, action="token.delete", target=str(token_id)
+    )
 
 
 def get_vocab_count(db: Session, token_id: int) -> int:
