@@ -409,8 +409,13 @@ def get_entries_for_document(
     variants_lower = {variant.lower() for variant in variants}
 
     def authorized(entry: DictEntry) -> bool:
-        """id 归属校验：词头是查询词的等价变体，或以任一变体开头（搜索有前缀兜底，
-        命中的词条词头如「あ【亜】」并不是查询词「あ」的变体，而是以它开头）。"""
+        """id 归属校验：词条属于目标词典，且词头是查询词的等价变体或以任一变体开头
+        （搜索有前缀兜底，命中的词条词头如「あ【亜】」并不是查询词「あ」的变体，
+        而是以它开头）。词典归属放在 Python 侧而不是 SQL 里——
+        `dictionary_id=? AND id IN (…)` 会让规划器放弃主键、走词典覆盖索引全扫
+        （搜韵 826 万行，实测 770ms；纯主键 IN 只要 1ms）。"""
+        if entry.dictionary_id != dictionary_id:
+            return False
         word_lower = entry.word_lower or ""
         return word_lower in variants_lower or any(
             word_lower.startswith(variant) for variant in variants_lower
@@ -418,11 +423,11 @@ def get_entries_for_document(
 
     entries: list[DictEntry] = []
     if entry_ids:
-        # 按主键取回（瞬时），归属校验在 Python 里做——不要把十几个前缀 LIKE 塞进一条
-        # OR 查询：那会让规划器放弃索引、退化成整部词典扫描（搜韵上表现为秒级卡顿）。
+        # 纯主键取回（瞬时），归属与词典校验都在 Python 里做——不要把 dictionary_id
+        # 塞进这条查询（见 authorized 注释），也不要把十几个前缀 LIKE 塞进一条 OR
+        # 查询：都会让规划器放弃索引、退化成整部词典扫描。
         candidates = (
             current_generation_only(db.query(DictEntry))
-            .filter(DictEntry.dictionary_id == dictionary_id)
             .filter(DictEntry.id.in_(entry_ids))
             .order_by(DictEntry.id)
             .all()
