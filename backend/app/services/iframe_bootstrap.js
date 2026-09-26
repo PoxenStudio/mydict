@@ -34,8 +34,8 @@
   // 八门，靠 CSS 属性选择器枚举不完，而 CSS 自己算不了亮度，所以这里换个思路——读渲染后的
   // 计算颜色，太暗就按同色相提亮（蓝的还是蓝的，只是变亮），并记下原值以便切回浅色时还原。
   //
-  // 灰阶的深色（纯黑、深灰）不在这里管，交给注入的 CSS 规则统一处理：它们没有色相，
-  // 提到「浅灰」不如直接用主题前景色。
+  // 灰阶的深色（#111/#333 之类）没有色相，提亮成主题前景色——样式表里的这些值此前漏网，
+  // 暗色下正文直接看不见（搜韵诗词全文检索版）。
   var TEXT_MIN_LUMINANCE = 0.45
   var TEXT_BOOST_LIGHTNESS = 66
   // 大词条可能有上万个元素，逐个读计算样式要花时间，超过这个数就只处理前一批
@@ -110,10 +110,17 @@
       var el = nodes[i]
       var rgb = parseRgb(window.getComputedStyle(el).color)
       if (!rgb || relativeLuminance(rgb) >= TEXT_MIN_LUMINANCE) continue
-      if (rgb[0] === rgb[1] && rgb[1] === rgb[2]) continue
+      var isGray = rgb[0] === rgb[1] && rgb[1] === rgb[2]
       boostedText.push([el, el.style.color])
-      el.style.color =
-        'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'
+      if (isGray) {
+        // 灰阶没有色相，提亮成主题前景色。此前刻意跳过灰阶、指望注入的 CSS 规则兜底，
+        // 但那些规则只覆盖 #000 精确值与内联样式——词典样式表里的 #111/#333（搜韵诗词
+        // 正文的 div.content{color:#111111}）漏网，暗色下深灰字配深底直接看不见。
+        el.style.color = '#eaf1ee'
+      } else {
+        el.style.color =
+          'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'
+      }
     }
   }
 
@@ -256,12 +263,42 @@
   var pending = false
   var ticks = 0
 
+  // 测量哨兵：0 高度的块元素，钉在 body 末尾。它的底边天然位于「全部内容 + 末元素
+  // 外距」之后——Range 边界盒不含外距（body 默认 8px + 末元素外距，实测少 8~24px），
+  // 盒子比内容矮一截，词条右侧就会出现滚动条；scrollHeight 又有「视口托底」（见下）
+  // 不能用。词典自己的脚本可能往 body 追加元素，所以每次测量前都把哨兵重新挪到末尾。
+  function ensureSentinel(doc) {
+    var sentinel = doc.getElementById('mydict-measure-end')
+    if (!sentinel) {
+      sentinel = doc.createElement('div')
+      sentinel.id = 'mydict-measure-end'
+      sentinel.style.cssText =
+        'display:block;height:0;margin:0;padding:0;border:0;visibility:hidden'
+    }
+    if (sentinel.parentElement !== doc.body) doc.body.appendChild(sentinel)
+    return sentinel
+  }
+
   function measure() {
     var docEl = document.documentElement
     var body = document.body
+    if (!body) return 0
     var height = 0
-    if (docEl) height = Math.max(height, docEl.scrollHeight, docEl.offsetHeight)
-    if (body) height = Math.max(height, body.scrollHeight, body.offsetHeight)
+    try {
+      var sentinel = ensureSentinel(document)
+      var docTop = docEl.getBoundingClientRect().top
+      var bodyStyle = window.getComputedStyle(body)
+      height =
+        sentinel.getBoundingClientRect().bottom - docTop +
+        (parseFloat(bodyStyle.paddingBottom) || 0) +
+        (parseFloat(bodyStyle.marginBottom) || 0)
+    } catch (e) {
+      /* 哨兵不可用时退回 scrollHeight（有视口托底，虚高但不会丢内容） */
+    }
+    if (height <= 0) {
+      height = Math.max(body.scrollHeight, body.offsetHeight)
+      if (docEl) height = Math.max(height, docEl.scrollHeight, docEl.offsetHeight)
+    }
     return height
   }
 
@@ -319,8 +356,10 @@
       },
       true
     )
-    // 部分词典的首屏内容由延迟脚本填充，定时补几次；有上限，不做无限轮询
-    ;[0, 60, 200, 600, 1500, 3000].forEach(function (delay) {
+    // 部分词典的首屏内容由延迟脚本填充，定时补几次；有上限，不做无限轮询。
+    // 最早一档 200ms：更早的测量会撞上「CSS 还没加载完、按 300px 默认宽度排版」
+    // 的虚高（见 measure 注释），把盒子一次性锁死在大值上。
+    ;[200, 600, 1500, 3000].forEach(function (delay) {
       setTimeout(report, delay)
     })
     var tail = setInterval(function () {
@@ -332,7 +371,10 @@
 
   /* --------------------------------------------------------- 链接与音频 */
 
-  var AUDIO_EXT_RE = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|wma)(?:[?#].*)?$/i
+  // .spx 必须在列表里：导入时词条里的 sound://…spx 已被改写成 /dict-res/…/x.spx，
+  // 拦不住的话点击会直接让 iframe 导航到 spx 文件，浏览器弹出解不了的内置播放器，
+  // 词条整个被换掉（实测 NHK 发音词典）。.spx 由 playAudio 走 JS 解码播放。
+  var AUDIO_EXT_RE = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|wma|spx)(?:[?#].*)?$/i
   var SPX_EXT_RE = /\.spx(?:[?#].*)?$/i
 
   // 遗留坏链接：早期导入代码把 entry://x 改成了 /dict-res/N/res/entry:/x（旧库里还有
@@ -467,6 +509,16 @@
       el.onended = function () {
         send('audio-ended', { url: url })
       }
+      // mp3/opus 这类 404 的候选会**同时**触发 error 事件与 play() 的 reject，两边
+      // 各推进一次会跳级、还多出一次越界 attempt —— 表现为音频明明解码成功播出来了，
+      // 却仍弹「发音不存在」（实测大辞泉、韦氏大学词典，都是纯 spx 词典）。每次
+      // attempt 只许推进一次。
+      var advanced = false
+      function advance() {
+        if (advanced) return
+        advanced = true
+        attempt()
+      }
       // 走到原 .spx 这一步：原生放不了，交给 JS 解码。先摘掉上一个候选挂的 onerror，
       // 否则解码结果播放失败时会再触发一次 attempt，重复上报
       if (SPX_EXT_RE.test(current)) {
@@ -474,13 +526,11 @@
         playSpeexDecoded(el, current, fail)
         return
       }
-      el.onerror = attempt
+      el.onerror = advance
       el.src = current
       var played = el.play()
       if (played && played.catch) {
-        played.catch(function () {
-          attempt()
-        })
+        played.catch(advance)
       }
     }
     attempt()
@@ -588,6 +638,63 @@
       urls.push(url)
     }
     return urls
+  }
+
+  /* ------------------------------------- 评注面板点击展开/折叠 */
+
+  // 搜韵诗词全文检索版的词条里，「评注（点击查看或隐藏评注）」是 div.commentPanel，
+  // 紧跟其后的 div#comment_xxx.comment 才是评注正文——词条里没有任何脚本，这个开关在
+  // MDict 客户端/django-mdict 里是靠词典环境补的，这里用委托点击实现同样的效果。
+  // 匹配放宽到「class 含 comment」：同一部词典还有 div.allusionNote 之类的变体结构，
+  // 但面板后第一个带 comment 的块就是正文，往前找不到 id 也不至于误伤别的块。
+  function commentBlockAfter(panel) {
+    var node = panel.nextElementSibling
+    while (node) {
+      var id = node.id || ''
+      var className = ' ' + (node.className || '') + ' '
+      if (id.indexOf('comment_') === 0 || className.indexOf(' comment ') >= 0) return node
+      node = node.nextElementSibling
+    }
+    return null
+  }
+
+  // 评注默认折叠：搜韵原站也是收起的（「点击查看或隐藏评注」），全展开会把词条顶得
+  // 很长。在文档就绪时统一把面板后的评注块藏掉，点击面板时再由上面的开关恢复。
+  function collapseCommentPanels() {
+    var panels
+    try {
+      panels = document.querySelectorAll('.commentPanel')
+    } catch (e) {
+      return
+    }
+    for (var i = 0; i < panels.length; i++) {
+      var block = commentBlockAfter(panels[i])
+      if (block) block.style.display = 'none'
+    }
+  }
+
+  document.addEventListener(
+    'click',
+    function (event) {
+      var node = event.target
+      if (!node || !node.closest) return
+      var panel = node.closest('.commentPanel')
+      if (!panel) return
+      var block = commentBlockAfter(panel)
+      if (!block) return
+      block.style.display = block.style.display === 'none' ? '' : 'none'
+      report()
+    },
+    true
+  )
+
+  // 让面板看起来可点（词典自己的 CSS 没写 cursor）
+  try {
+    var panelStyle = document.createElement('style')
+    panelStyle.textContent = '.commentPanel{cursor:pointer}'
+    ;(document.head || document.documentElement).appendChild(panelStyle)
+  } catch (e) {
+    /* 忽略 */
   }
 
   document.addEventListener(
@@ -816,6 +923,7 @@
 
   function onReady() {
     fixMediaSources()
+    collapseCommentPanels()
     // 首屏就是暗色时，正文已经解析完了，这时才做得了提亮
     boostDarkText()
     installLookupMenu()

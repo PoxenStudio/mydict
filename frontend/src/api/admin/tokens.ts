@@ -38,3 +38,8 @@ export function regenerateToken(id: number) {
 export function getTokenVocabCount(id: number) {
   return request.get<never, { count: number }>(`/admin/tokens/${id}/vocab-count`)
 }
+
+/** 删除 Token（查询日志/统计保留但匿名化，生词本随级联清理）。 */
+export function deleteToken(tokenId: number) {
+  return request.delete<never, void>(`/admin/tokens/${tokenId}`)
+}

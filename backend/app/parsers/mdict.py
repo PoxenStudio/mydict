@@ -1,7 +1,17 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+from mdict_utils.base import readmdict as _readmdict
 from mdict_utils.base.readmdict import MDD, MDX
+
+# LZO 压缩支持：readmdict 的 LZO 分支代码是现成的，只是缺 python-lzo（无预编译
+# wheel、编译不可靠）。这里注入 ctypes 版垫片（直调 liblzo2），使 6 部 LZO 词典
+# （读懂你的化验单、超级新华字典等）可以正常导入。若镜像里真装了 python-lzo，
+# 则保留原实现不动。
+if getattr(_readmdict, "lzo", None) is None:
+    from app.parsers import lzo_compat
+
+    _readmdict.lzo = lzo_compat
 
 from app.parsers.base import (
     SAMPLE_SCAN_FACTOR,
@@ -11,7 +21,7 @@ from app.parsers.base import (
     is_informative_headword,
     spread_downsample,
 )
-from app.parsers.mdict_stylesheet import expand_style_markers, stylesheet_of
+from app.parsers.mdict_stylesheet import expand_style_markers, is_compact, stylesheet_of
 from app.services.resource_service import (
     copy_sibling_resources,
     rewrite_resource_refs,
@@ -36,25 +46,33 @@ def read_stylesheet(path: Path) -> dict[str, tuple[str, str]]:
 
     注意代价：`MDX.__init__` 会把**整份词头索引**读进内存（实测 The little dict 8.7 秒、
     搜韵诗词 17.6 秒），所以调用方必须先确认这部词典真的需要展开，不能每部都调。
+    需要连 Compact 标志一起拿时用 `read_style_context`。
     """
     return stylesheet_of(_open_mdict(MDX, path))
+
+
+def read_style_context(path: Path) -> tuple[dict[str, tuple[str, str]], bool]:
+    """样式表 + Compact 标志一起取（同一次打开，省一遍整份词头索引的加载）。"""
+    mdx = _open_mdict(MDX, path)
+    return stylesheet_of(mdx), is_compact(mdx)
 
 
 class MDictParser(DictionaryParser):
     def __init__(self) -> None:
         # 大 MDX 打开时要加载整份词头索引，采样与解析共用同一次打开
         self._mdx_cache: dict[Path, object] = {}
-        # 每份 .mdx 的样式表只解析一次
-        self._stylesheet_cache: dict[Path, dict[str, tuple[str, str]]] = {}
+        # 每份 .mdx 的样式表只解析一次；Compact 标志与样式表同源，一起缓存
+        self._stylesheet_cache: dict[Path, tuple[dict[str, tuple[str, str]], bool]] = {}
 
     def _open_mdx(self, path: Path):
         if path not in self._mdx_cache:
             self._mdx_cache[path] = _open_mdict(MDX, path)
         return self._mdx_cache[path]
 
-    def _stylesheet_for(self, mdx_path: Path) -> dict[str, tuple[str, str]]:
+    def _style_context_for(self, mdx_path: Path) -> tuple[dict[str, tuple[str, str]], bool]:
         if mdx_path not in self._stylesheet_cache:
-            self._stylesheet_cache[mdx_path] = stylesheet_of(self._open_mdx(mdx_path))
+            mdx = self._open_mdx(mdx_path)
+            self._stylesheet_cache[mdx_path] = (stylesheet_of(mdx), is_compact(mdx))
         return self._stylesheet_cache[mdx_path]
 
     def parse(
@@ -86,13 +104,13 @@ class MDictParser(DictionaryParser):
 
         for mdx_path in mdx_paths:
             mdx = self._open_mdx(mdx_path)
-            sheet = self._stylesheet_for(mdx_path)
+            sheet, compact = self._style_context_for(mdx_path)
             for key, value in mdx.items():
                 word = key.decode("utf-8", errors="replace")
                 html = value.decode("utf-8", errors="replace")
                 # 先展开 `` `编号` `` 样式标记、再改写资源引用：样式表的标签里本身可能
                 # 含 src/href（如 <img src=...>），这个顺序才能让它们一并被改写
-                definition = expand_style_markers(html, sheet)
+                definition = expand_style_markers(html, sheet, compact=compact)
                 if resource_dir is not None:
                     definition = rewrite_resource_refs(definition, dictionary_id)
                 yield ParsedEntry(word=word, definition=definition)

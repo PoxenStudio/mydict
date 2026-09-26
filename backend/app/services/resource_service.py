@@ -5,6 +5,7 @@ import shutil
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 logger = logging.getLogger("mydict.resource")
 
@@ -307,6 +308,31 @@ def copy_sibling_resources(resource_dir: Path, sources: Iterable[Path]) -> int:
                 continue
             count += 1
     return count
+
+
+def same_name_assets(
+    res_dir: Path, dictionary_id: int, source_file: str
+) -> list[tuple[str, str]]:
+    """找出 `.mdx` **同名**的 `.css`/`.js` 附属文件，返回 `(文件名, /dict-res URL)` 列表。
+
+    MDict 客户端的惯例：词条 HTML 从不引用同名的样式表/脚本，客户端会**自动加载**它们
+    （搜韵诗词全文检索版的全部配色——诗词块 `#fffddf`、评注块 `#faf1cf`——都来自同名的
+    `搜韵诗词全文检索版.css`，词条里一个 `<link>` 都没有）。django-mdict 的
+    `check_same_name_css_js` 也是这么补的；不补的话这些词典就以无样式渲染。
+
+    词条**自己引用了**的（大辞泉的 `oxbw.css` 词条里有 `<link>`）不需要也不会由这里注入，
+    调用方按文件名过滤，避免同一份文件加载两次。
+    """
+    stem = Path(source_file).stem
+    assets: list[tuple[str, str]] = []
+    for extension in (".css", ".js"):
+        name = stem + extension
+        if resolve_resource_file(res_dir, name) is None:
+            continue
+        assets.append(
+            (name, f"/dict-res/{dictionary_id}/res/{quote(name)}")
+        )
+    return assets
 
 
 def _split_suffix(raw: str) -> tuple[str, str]:

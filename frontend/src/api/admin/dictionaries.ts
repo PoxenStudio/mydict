@@ -101,6 +101,17 @@ export function reparseDictionaries(dictionaryIds?: number[] | null) {
   })
 }
 
+/**
+ * 清理缺失的美音例句喇叭：把释义里「指向不存在 mp3」的红色喇叭（audio-uss-liju）锚点
+ * 删掉，文件还在的保留。牛津高阶第9版的美音 mp3 源词典就基本没打包，点红色喇叭必报
+ * 「发音不存在或解码失败」。只处理单部词典；重新解析后需要重跑。
+ */
+export function cleanupUssSpeakers(dictionaryId: number) {
+  return request.post<never, { task_id: number }>(
+    `/admin/dictionaries/${dictionaryId}/cleanup-uss-speakers`,
+  )
+}
+
 export function testQuery(id: number, word: string) {
   return request.get<never, TestQueryEntry[]>(`/admin/dictionaries/${id}/test-query`, {
     params: { word },

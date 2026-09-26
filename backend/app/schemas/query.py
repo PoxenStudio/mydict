@@ -55,3 +55,37 @@ class QueryHistoryEntryOut(BaseModel):
 
 class QueryHistoryResponse(BaseModel):
     items: list[QueryHistoryEntryOut]
+
+
+# ---------------------------------------------------------------- 在线词典
+
+
+class OnlineLinkOut(BaseModel):
+    """「在外部打开」的搜索链接（Google / Urban Dictionary / Merriam-Webster / Goodreads）：
+    这些站点都设 X-Frame-Options 拒绝内嵌，抓内容没有意义，给链接就好。`id` 用于
+    管理后台的源开关（google/urban/merriam/goodreads）。"""
+
+    id: str
+    name: str
+    url: str
+
+
+class OnlineSectionOut(BaseModel):
+    """单个在线源的结果。id 标明来源（wikipedia/wiktionary/baike），字段按来源可选：
+    wikipedia/baike 是「标题 + 副标题 + 正文 + 原文链接」的卡片；wiktionary 是按词性
+    分组的释义列表。所有文本都是服务端剥过 HTML 的纯文本。"""
+
+    id: str
+    name: str
+    title: str | None = None
+    subtitle: str | None = None
+    text: str | None = None
+    url: str | None = None
+    entries: list[dict] | None = None
+
+
+class OnlineLookupResponse(BaseModel):
+    word: str
+    lang: str
+    sections: list[OnlineSectionOut]
+    links: list[OnlineLinkOut]

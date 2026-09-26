@@ -1615,8 +1615,8 @@ async def test_repair_from_source_expands_style_markers_of_stored_entries(
 
     monkeypatch.setattr(
         dictionary_service,
-        "read_stylesheet",
-        lambda _path: {"1": ("<b>", "</b>"), "2": ("<br>", "")},
+        "read_style_context",
+        lambda _path: ({"1": ("<b>", "</b>"), "2": ("<br>", "")}, True),
     )
 
     resp = await client.post(

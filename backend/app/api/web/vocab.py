@@ -1,14 +1,17 @@
 from typing import Literal
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.deps import require_user
+from app.models.dictionary import Dictionary
 from app.models.user import User
 from app.schemas.vocab import VocabCreateRequest, VocabItemOut, VocabListResponse
-from app.services import vocab_service
+from app.services import resource_service, vocab_service
 from app.services.entry_render_service import render_entry_document
 
 router = APIRouter(prefix="/vocab", tags=["web-vocab"])
@@ -51,6 +54,7 @@ def vocab_entry_document(
     theme: Literal["light", "dark"] | None = None,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
     """把生词本里保存的释义**快照**渲染成隔离 iframe 用的 HTML 文档。
 
@@ -59,9 +63,28 @@ def vocab_entry_document(
     就已改写成 /dict-res/{id}/res/ 绝对地址，所以只要词典还在，图片发音照常能显示。
     """
     item = vocab_service.get_vocab_item(db, "user", user.id, item_id)
+    # 快照里的 <link> 等资源引用是收藏时就固化的，但 mdx 同名的 .css/.js 词条里从来不
+    # 引用（靠客户端自动加载），词典还在就补注入，评注块/诗词块的配色才不会丢
+    dictionary = (
+        db.get(Dictionary, item.dictionary_id) if item.dictionary_id else None
+    )
+    extra_head_assets = (
+        resource_service.same_name_assets(
+            Path(settings.dictionary_storage_path)
+            / str(item.dictionary_id)
+            / "res",
+            item.dictionary_id,
+            dictionary.file_path,
+        )
+        if dictionary
+        else []
+    )
     return HTMLResponse(
         render_entry_document(
-            item.definition or "", dictionary_id=item.dictionary_id or 0, theme=theme
+            item.definition or "",
+            dictionary_id=item.dictionary_id or 0,
+            theme=theme,
+            extra_head_assets=extra_head_assets,
         )
     )
 

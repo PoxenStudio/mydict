@@ -244,6 +244,37 @@ def _query_entries(
     )
 
 
+# 「精确未命中 → 前缀兜底」时每部词典最多返回的词头数。
+_PREFIX_FALLBACK_LIMIT = 8
+
+
+def _prefix_fallback_entries(
+    db: Session, prefix_lower: str, dictionary_id: int
+) -> list[DictEntry]:
+    """精确匹配打不中时退回到「以输入开头的词头」。
+
+    为什么需要：不少词典的 MDict 词头带注记后缀（Japanese Education Vocabulary 的
+    「あ【亜】」「み【味】」、搜韵的「中国【ちゅうごく①】」），对它们做**精确**匹配永远
+    打不中，而 MDict 客户端与 django-mdict 的搜索都是前缀式的，用户因此觉得「明明有这部
+    词典却查不到」。管理端测试查询本来就是前缀 LIKE（dictionary_service.test_query）。
+
+    查询走 (dictionary_id, word_lower) 复合索引：未命中的词典一次索引范围读，只取前几条，
+    代价可忽略；有精确命中的词典根本不进这条路径。
+    """
+    if not prefix_lower:
+        return []
+    return (
+        current_generation_only(db.query(DictEntry))
+        .filter(
+            DictEntry.dictionary_id == dictionary_id,
+            DictEntry.word_lower.like(f"{prefix_lower}%"),
+        )
+        .order_by(DictEntry.word_lower)
+        .limit(_PREFIX_FALLBACK_LIMIT)
+        .all()
+    )
+
+
 def search_word(
     db: Session,
     word: str,
@@ -279,10 +310,28 @@ def search_word(
     others = [d.id for d in candidates.dictionaries if d.id not in candidates.preferred_ids]
 
     entries = _query_entries(db, variants, preferred)
-    if not entries:
-        # 优先语言一部都没命中，才退到其余语言。命中时绝不混入，避免一次查询把
-        # 中/日/英各语言的词典全铺出来。
+    if entries:
+        # 优先语言有精确命中：其余语言的词典完全不参与（既不精确、也不前缀），
+        # 避免一次查询把中/日/英各语言的词典全铺出来。
+        fallback_scope = preferred
+    else:
         entries = _query_entries(db, variants, others)
+        # 其余语言也没命中时两层都试过，前缀兜底放开到全部候选；其余语言有命中时
+        # 只在其余语言里兜（优先语言已经精确查过且落空，混进来只会是噪音）。
+        fallback_scope = others if entries else preferred + others
+
+    # 前缀兜底：对 fallback_scope 里「精确未命中」的词典退回前缀匹配（词头带注记
+    # 后缀的词典，如 Japanese Education Vocabulary 的「あ【亜】」，精确匹配永远打不中）。
+    # 上限 _PREFIX_FALLBACK_LIMIT 条/词典，无关语言最多带出可控的几条小噪音。
+    hit_ids = {e.dictionary_id for e in entries}
+    prefix_entries: list[DictEntry] = []
+    for candidate in candidates.dictionaries:
+        if candidate.id in hit_ids or candidate.id not in fallback_scope:
+            continue
+        prefix_entries.extend(
+            _prefix_fallback_entries(db, word_lower, candidate.id)
+        )
+    entries = list(entries) + prefix_entries
 
     # 结果顺序决定前端手风琴里「哪一部默认展开」，所以显式按候选词典的顺序排，
     # 不依赖数据库返回行的顺序。
@@ -346,25 +395,60 @@ def get_entries_for_document(
     「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
 
     `entry_ids` 给了就按它取——前端把查询结果里那一组的条目 id 显式传过来，保证 iframe 里
-    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里的
-    条目（与 search_word 的匹配范围一致）：`entry_ids` 是客户端输入，不加这层约束的话
-    随便填 id 就能逐段拉走整部词典，绕过查询配额。
+    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里
+    **或以任一变体开头**的条目（与 search_word 的匹配范围一致——搜索有前缀兜底，命中的
+    词条词头如「あ【亜】」并不是查询词「あ」的等价变体，而是以它开头）：`entry_ids` 是
+    客户端输入，不加这层约束的话随便填 id 就能逐段拉走整部词典，绕过查询配额。
 
     `entry_ids` 一条都对不上时退回按词取：词典被重新解析后条目 id 整体换新，页面上还开着的
     旧查询结果带的是旧 id，不该因此显示「词条不存在」。
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
-    statement = (
-        current_generation_only(db.query(DictEntry))
-        .filter(DictEntry.dictionary_id == dictionary_id)
-        .filter(DictEntry.word_lower.in_(expand_word(word)))
-    )
+    variants = expand_word(word)
+    variants_lower = {variant.lower() for variant in variants}
+
+    def authorized(entry: DictEntry) -> bool:
+        """id 归属校验：词条属于目标词典，且词头是查询词的等价变体或以任一变体开头
+        （搜索有前缀兜底，命中的词条词头如「あ【亜】」并不是查询词「あ」的变体，
+        而是以它开头）。词典归属放在 Python 侧而不是 SQL 里——
+        `dictionary_id=? AND id IN (…)` 会让规划器放弃主键、走词典覆盖索引全扫
+        （搜韵 826 万行，实测 770ms；纯主键 IN 只要 1ms）。"""
+        if entry.dictionary_id != dictionary_id:
+            return False
+        word_lower = entry.word_lower or ""
+        return word_lower in variants_lower or any(
+            word_lower.startswith(variant) for variant in variants_lower
+        )
+
     entries: list[DictEntry] = []
     if entry_ids:
-        entries = statement.filter(DictEntry.id.in_(entry_ids)).order_by(DictEntry.id).all()
+        # 纯主键取回（瞬时），归属与词典校验都在 Python 里做——不要把 dictionary_id
+        # 塞进这条查询（见 authorized 注释），也不要把十几个前缀 LIKE 塞进一条 OR
+        # 查询：都会让规划器放弃索引、退化成整部词典扫描。
+        candidates = (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.id.in_(entry_ids))
+            .order_by(DictEntry.id)
+            .all()
+        )
+        entries = [entry for entry in candidates if authorized(entry)]
     if not entries:
+        # 没传 id（或全都不在授权范围内，如词典被重新解析后条目 id 整体换新）时退回按词取
+        statement = (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.dictionary_id == dictionary_id)
+            .filter(DictEntry.word_lower.in_(variants))
+        )
         entries = statement.order_by(DictEntry.id).all()
+        if not entries:
+            # 精确未命中退回前缀（case_sensitive_like=ON 时走索引区间，见 core/db.py）
+            statement = (
+                current_generation_only(db.query(DictEntry))
+                .filter(DictEntry.dictionary_id == dictionary_id)
+                .filter(DictEntry.word_lower.like(f"{word.strip().lower()}%"))
+            )
+            entries = statement.order_by(DictEntry.id).all()
     # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
     resolved: dict[int, DictEntry] = {}
     for entry in entries:

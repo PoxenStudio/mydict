@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -13,7 +14,7 @@ from app.core.exceptions import NotFoundError, RateLimitedError
 from app.models.dictionary import Dictionary
 from app.models.user import User
 from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, WebQueryResponse
-from app.services import query_log_service, query_service
+from app.services import query_log_service, query_service, resource_service
 from app.services.entry_render_service import render_entries_document
 from app.services.settings_service import get_int_setting
 
@@ -191,6 +192,12 @@ def entry_document(
             dictionary_id=dictionary_id,
             theme=theme,
             allow_lookup=True,
+            # mdx 同名的 .css/.js（MDict 客户端与 django-mdict 都会自动加载的那类）
+            extra_head_assets=resource_service.same_name_assets(
+                Path(settings.dictionary_storage_path) / str(dictionary_id) / "res",
+                dictionary_id,
+                dictionary.file_path,
+            ),
         )
     )
 
