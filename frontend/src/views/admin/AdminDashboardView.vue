@@ -4,6 +4,7 @@ import { useAdminAuthStore } from '../../stores/adminAuth'
 import * as statsApi from '../../api/admin/stats'
 import type { StatsOverview } from '../../types/stats'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
+import BackgroundTasksPanel from '../../components/admin/BackgroundTasksPanel.vue'
 
 const authStore = useAdminAuthStore()
 const overview = ref<StatsOverview | null>(null)
@@ -45,6 +46,8 @@ const cards = [
         <span class="kpi-label">{{ card.label }}</span>
       </div>
     </div>
+
+    <BackgroundTasksPanel class="tasks-panel" />
 
     <section class="panel">
       <h2>快速开始</h2>
@@ -110,6 +113,10 @@ h1 {
 .kpi-label {
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
+}
+
+.tasks-panel {
+  margin-bottom: var(--space-5);
 }
 
 .panel {

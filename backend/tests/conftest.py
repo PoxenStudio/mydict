@@ -15,10 +15,14 @@ os.environ["LOG_DIR"] = os.path.join(_tmp_dir, "logs")
 # 定时聚合任务在测试里关闭：避免后台线程并发写 query_stats_daily 与断言竞争。
 os.environ["ENABLE_SCHEDULER"] = "false"
 
-# 导入 app 会触发 ensure_data_dirs() + run_migrations()，
+# 启动流程平时在 lifespan 的后台线程里跑，ASGITransport 不触发 lifespan，这里同步跑一遍：
 # 建表与 system_settings 默认值播种均由 Alembic migration 完成，无需在测试里重复处理。
+from app.core import bootstrap  # noqa: E402
 from app.core.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
+
+bootstrap.run()
+assert bootstrap.is_ready(), bootstrap.snapshot()
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "adminpass123"

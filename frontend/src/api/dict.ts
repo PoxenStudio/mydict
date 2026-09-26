@@ -24,8 +24,11 @@ export function lookupOnline(word: string, lang: string) {
   return request.get<never, OnlineLookup>('/dict/online/lookup', { params: { word, lang } })
 }
 
-export function listDictionaries() {
-  return request.get<never, PublicDictionary[]>('/dict/dictionaries')
+/**
+ * 需要登录。`usable`：当前用户能用的词典（首页检索范围）；`all`：全部已启用词典（词典选择弹窗）。
+ */
+export function listDictionaries(scope: 'usable' | 'all' = 'usable') {
+  return request.get<never, PublicDictionary[]>('/dict/dictionaries', { params: { scope } })
 }
 
 /**

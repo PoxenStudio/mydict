@@ -61,10 +61,16 @@ def _enforce_web_rate_limit(db: Session, caller: WebCaller, settings: Settings, 
 
 
 @router.get("/dictionaries", response_model=list[PublicDictionaryOut])
-def list_dictionaries(db: Session = Depends(get_db)) -> list[PublicDictionaryOut]:
-    """供前台「词典选择」弹窗展示全部已启用词典，不受当前用户自己的可用词典限制——
-    那是用来配置限制的，如果被限制过滤了就没法再选回来。"""
-    return query_service.list_public_dictionaries(db)
+def list_dictionaries(
+    scope: Literal["usable", "all"] = "usable",
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> list[PublicDictionaryOut]:
+    """`usable`（默认）：当前用户能用的词典，即已启用词典与其「可用词典」设置的交集，供首页
+    「检索范围」面板。`all`：全部已启用词典，供「词典选择」弹窗——那是用来配置限制的，
+    被限制过滤了就没法再选回来。"""
+    allowed_ids = user.allowed_dictionary_ids if scope == "usable" else None
+    return query_service.list_public_dictionaries(db, allowed_ids)
 
 
 @router.get("/search", response_model=WebQueryResponse)

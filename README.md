@@ -101,17 +101,16 @@ docker exec -it mydict python -m app.cli reset-admin-password --username admin
 
 不会。`/data` 是独立的挂载卷，重新构建/替换镜像并用相同的 `-v` 挂载启动即可，容器启动时会自动执行数据库迁移。
 
-例外是**重型迁移**（会整表重建词条表）：词库较大时它不会在启动时自动跑：服务拒绝启动，`docker compose logs mydict` 里会看到提示（配置了 `restart: unless-stopped` 时容器会反复重启，属正常现象）。这时按下面的步骤手动执行：
+升级期间打开网页会看到「正在升级数据库」的维护页，显示当前步骤与已用时，完成后页面自动刷新；这段时间里 API 调用返回 `503`（`code: maintenance`），稍后重试即可。其中**重型迁移**（会整表重建词条表）在词库较大时可能要跑几十分钟，耐心等它完成即可；它需要约与数据库文件同等大小的剩余磁盘空间，空间不足时维护页会提示。万一中途被打断（容器被重启/停止），再次启动会自动接着执行。升级前备份一下 `data/db/mydict.sqlite3` 总是稳妥的。
+
+如果维护页提示升级失败，先用 `docker compose logs mydict` 查看原因，处理后重启容器即可继续；也可以停掉服务手动执行：
 
 ```bash
 docker compose stop mydict
-cp data/db/mydict.sqlite3 data/db/mydict.sqlite3.bak          # 先备份
 docker compose run --rm mydict python -m app.cli migrate          # 查看待执行的迁移与磁盘空间
-docker compose run --rm mydict python -m app.cli migrate --yes    # 执行（大库可能要几十分钟）
+docker compose run --rm mydict python -m app.cli migrate --yes    # 执行
 docker compose up -d
 ```
-
-重型迁移需要约与数据库文件同等大小的剩余磁盘空间；中途被打断可以直接重跑。想完全由自己掌控迁移时机，可以设置环境变量 `AUTO_MIGRATE=false`：有待执行的迁移时容器不启动，一律用上面的命令执行。
 
 **查询接口一直返回 401？**
 
@@ -172,7 +171,7 @@ docker restart mydict
 
 扫描版词典（整页是图片、没有可提取文字）判不出来，在「词典管理 → 编辑」里手工设置语言方向即可。
 
-如果你只是想收窄本次查询的范围（比如暂时不想看到日文词典），用查询页左侧的「检索范围」勾选或按语言筛选——那只影响你自己的浏览器，不改动词典的启用状态。
+如果你只是想收窄本次查询的范围（比如暂时不想看到日文词典），登录后用查询页左侧的「检索范围」勾选或按语言筛选（列出的是你账号可用的词典）——那只影响你自己的浏览器，不改动词典的启用状态。
 
 **词条里的图标特别大、表格没有边框？**
 

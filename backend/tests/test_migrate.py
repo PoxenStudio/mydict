@@ -24,7 +24,7 @@ def scratch_db(tmp_path: Path, monkeypatch) -> Path:
 def _upgrade(revision: str) -> None:
     from alembic import command
 
-    command.upgrade(migrate._alembic_config(), revision)
+    command.upgrade(migrate._alembic_config(keep_app_logging=True), revision)
 
 
 def _seed_entries(database: Path) -> None:
@@ -118,36 +118,29 @@ def test_pending_migrations_marks_heavy(scratch_db: Path) -> None:
     assert pending[-1].revision == head
 
 
-def test_startup_refuses_heavy_migration_on_large_database(
+def test_run_migrations_runs_heavy_migration_step_by_step(scratch_db: Path, caplog) -> None:
+    _upgrade(_BEFORE_HEAVY)
+    _seed_entries(scratch_db)
+    steps: list[tuple[int, str]] = []
+
+    migrate.run_migrations(on_step=lambda index, item: steps.append((index, item.revision)))
+
+    assert migrate.pending_migrations() == []
+    assert steps[0] == (1, _HEAVY) and [i for i, _ in steps] == list(range(1, len(steps) + 1))
+    assert _HEAVY in caplog.text
+    _assert_migrated(scratch_db)
+
+
+def test_run_migrations_refuses_heavy_migration_without_enough_disk(
     scratch_db: Path, monkeypatch
 ) -> None:
     _upgrade(_BEFORE_HEAVY)
     _seed_entries(scratch_db)
-    monkeypatch.setattr(migrate, "HEAVY_MIGRATION_ROW_THRESHOLD", 1)
+    monkeypatch.setattr(migrate, "free_space_for_database", lambda: (10, 1))
 
-    with pytest.raises(SystemExit, match="app.cli migrate"):
+    with pytest.raises(migrate.MigrationBlockedError, match="磁盘空间"):
         migrate.run_migrations()
     assert _state(scratch_db)["version"] == _BEFORE_HEAVY
-
-
-def test_startup_runs_heavy_migration_on_small_database(scratch_db: Path) -> None:
-    """新装或数据很少的库照常自动迁移，不给小部署添麻烦。"""
-    _upgrade(_BEFORE_HEAVY)
-    _seed_entries(scratch_db)
-    migrate.run_migrations()
-    assert migrate.pending_migrations() == []
-
-
-def test_startup_refuses_any_pending_migration_when_auto_migrate_disabled(
-    scratch_db: Path, monkeypatch
-) -> None:
-    _upgrade(_HEAVY)
-    monkeypatch.setattr(get_settings(), "auto_migrate", False)
-    with pytest.raises(SystemExit, match="AUTO_MIGRATE=false"):
-        migrate.run_migrations()
-
-    _upgrade("head")
-    migrate.run_migrations()  # 没有待执行的迁移时照常启动
 
 
 def test_cli_migrate_requires_yes(scratch_db: Path, capsys) -> None:
