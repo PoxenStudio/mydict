@@ -18,7 +18,7 @@ from app.models.audit import AuditLog
 from app.models.dictionary import DictEntry, Dictionary
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
-from app.parsers.mdict import MDictParser, read_stylesheet
+from app.parsers.mdict import MDictParser, read_style_context
 from app.parsers.stardict import StarDictParser, parse_ifo
 from app.schemas.dictionary import VALID_FORMATS
 from app.services.audit_service import log_action
@@ -695,12 +695,12 @@ def _source_files(dictionary: Dictionary) -> list[Path]:
     ]
 
 
-def _source_stylesheet(sources: list[Path]) -> dict[str, tuple[str, str]]:
+def _source_style_context(sources: list[Path]) -> tuple[dict[str, tuple[str, str]], bool]:
     """从这部词典的 `.mdx` 里读 `StyleSheet`；读不到就返回空表。
 
     调用方已经确认过这部词典的词条里真的含反引号，所以这里才敢打开 `.mdx`——打开会把整份
     词头索引读进内存。源文件被删、或是不支持的压缩（LZO）导致打不开时，只记一条 warning
-    并返回空表：这类词典仍可正常查词，只是这条存量修复做不了。
+    并返回空表 + False：这类词典仍可正常查词，只是这条存量修复做不了。
     """
     for source in sources:
         path = source
@@ -712,10 +712,10 @@ def _source_stylesheet(sources: list[Path]) -> dict[str, tuple[str, str]]:
         if path.suffix.lower() != ".mdx" or not path.is_file():
             continue
         try:
-            return read_stylesheet(path)
+            return read_style_context(path)
         except Exception:
             logger.warning("读取 %s 的 StyleSheet 失败，跳过样式展开", path, exc_info=True)
-    return {}
+    return {}, False
 
 
 def _run_source_repair_in_background(
@@ -748,9 +748,13 @@ def _run_source_repair_in_background(
             copied += count
 
             if dict_id in with_markers:
-                stylesheet = _source_stylesheet(sources)
-                if stylesheet:
-                    changed = expand_stored_styles(db, dict_id, stylesheet)
+                stylesheet, compact = _source_style_context(sources)
+                # 非 Compact 词典的反引号是巧合文本（见 expand_style_markers 的门控注释），
+                # 修复就是空操作；Compact 词典即使样式表为空也要跑——任务是剔除标记。
+                if compact:
+                    changed = expand_stored_styles(
+                        db, dict_id, stylesheet, compact=compact
+                    )
                     if changed:
                         styled_dictionaries += 1
                         styled_entries += changed

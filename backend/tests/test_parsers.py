@@ -631,7 +631,11 @@ class _FakeMdx:
     """
 
     def __init__(self, stylesheet: str | None, entries: list[tuple[str, str]]) -> None:
-        self.header = {b"StyleSheet": stylesheet.encode("utf-8")} if stylesheet else {}
+        # 样式标记只在 Compact=Yes 的 mdx 里出现（见 mdict_stylesheet 的门控注释），
+        # 所以造数据时默认带上 Compact=Yes；没有样式表的用例靠不设 Compact 来表达
+        self.header = {b"Compact": b"Yes"}
+        if stylesheet:
+            self.header[b"StyleSheet"] = stylesheet.encode("utf-8")
         self._entries = entries
 
     def items(self):
@@ -685,9 +689,36 @@ def test_mdict_parse_expands_markers_even_without_resource_dir(
     assert entries[0].definition == "<b>apple</b>"
 
 
-def test_mdict_parse_leaves_text_alone_without_stylesheet(monkeypatch, tmp_path: Path) -> None:
-    """没有 StyleSheet 的词典（含恰好带反引号数字的）绝不能被改写。"""
+def test_mdict_parse_strips_markers_without_stylesheet_when_compact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Compact=Yes 但没有 StyleSheet（超级新华字典）：剔除标记，django-mdict 同款紧凑排版。"""
+    _patch_mdx(monkeypatch, None, [("apple", "`1`apple`2`")])
+
+    parser = MDictParser()
+    entries = list(
+        parser.parse(
+            [tmp_path / "fake.mdx"], dictionary_id=7, resource_dir=tmp_path / "res"
+        )
+    )
+
+    assert entries[0].definition == "apple"
+
+
+def test_mdict_parse_leaves_text_alone_when_not_compact(monkeypatch, tmp_path: Path) -> None:
+    """非 Compact 词典（含恰好带反引号数字的）绝不能被改写。"""
+    from app.parsers import mdict as mdict_module
+
     _patch_mdx(monkeypatch, None, [("apple", "<p>`1`apple</p>")])
+    # 覆盖 _FakeMdx 默认的 Compact=Yes
+    from tests.test_parsers import _FakeMdx as _F  # noqa: F401  # 确认可导入
+
+    def _no_compact_mdx(_path):
+        fake = _F(None, [("apple", "<p>`1`apple</p>")])
+        fake.header = {}  # 非 Compact
+        return fake
+
+    monkeypatch.setattr(mdict_module, "MDX", _no_compact_mdx)
 
     parser = MDictParser()
     entries = list(

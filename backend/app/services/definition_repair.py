@@ -153,6 +153,7 @@ def expand_stored_styles(
     dictionary_id: int,
     stylesheet: Mapping[str, tuple[str, str]],
     *,
+    compact: bool,
     batch_size: int = DEFAULT_BATCH_SIZE,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
@@ -163,8 +164,8 @@ def expand_stored_styles(
     扫描，只能在 Python 里逐条转换，所以分批策略变成「按主键区间取一批 → 转换 → 批量写回」。
     写回用 `update(...).where(id == bindparam('row_id'))` 的 executemany 形式，一批一次往返。
 
-    幂等：编号没在样式表里定义时 `expand_style_markers` 原样返回，而展开过之后文本里已经不剩
-    定义过的编号了，所以第二次跑改动的行数为 0。
+    幂等：Compact 词典的标记总会被消费掉（定义过的展开、没定义的剔除），展开过之后
+    文本里已经不剩标记，所以第二次跑改动的行数为 0。
 
     只挑含反引号的行走转换：绝大多数词典一条都不含，等于省掉整轮 Python 转换。
     """
@@ -201,7 +202,12 @@ def expand_stored_styles(
         updates = [
             {"row_id": row_id, "new_definition": expanded}
             for row_id, definition in rows
-            if (expanded := expand_style_markers(definition or "", stylesheet)) != definition
+            if (
+                expanded := expand_style_markers(
+                    definition or "", stylesheet, compact=compact
+                )
+            )
+            != definition
         ]
         if updates:
             db.execute(statement, updates)

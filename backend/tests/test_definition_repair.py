@@ -245,7 +245,7 @@ def test_expand_stored_styles_rewrites_only_rows_with_markers(db_session: Sessio
     marked = _add_entry(db_session, did, "标记", "`1`不`2``7`◆不`2`")
     plain = _add_entry(db_session, did, "普通", "<p>没有标记</p>")
 
-    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 1
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True) == 1
 
     assert _definition(db_session, marked.id) == (
         "<b><center><font size=5 color=Green>不"
@@ -261,21 +261,31 @@ def test_expand_stored_styles_is_idempotent(db_session: Session) -> None:
     did = _make_dictionary(db_session).id
     entry = _add_entry(db_session, did, "标记", "`1`不`2`")
 
-    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 1
-    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 0
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True) == 1
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True) == 0
     # 内容也不该变
     once = _definition(db_session, entry.id)
-    expand_stored_styles(db_session, did, _STYLE_SHEET)
+    expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True)
     assert _definition(db_session, entry.id) == once
 
 
-def test_expand_stored_styles_keeps_undefined_numbers(db_session: Session) -> None:
-    """编号不在样式表里时该行原样保留（同库里有词典的正文恰好含反引号数字但没有样式表）。"""
+def test_expand_stored_styles_strips_undefined_numbers(db_session: Session) -> None:
+    """Compact 词典里编号不在样式表里时剔除标记（MDict 客户端不会把标记原样显示），
+    与 django-mdict 的行为一致。"""
     did = _make_dictionary(db_session).id
-    entry = _add_entry(db_session, did, "巧合", "<p>`99`苹果</p>")
+    entry = _add_entry(db_session, did, "未定义编号", "<p>`99`苹果</p>")
 
-    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 0
-    assert _definition(db_session, entry.id) == "<p>`99`苹果</p>"
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True) == 1
+    assert _definition(db_session, entry.id) == "<p>苹果</p>"
+
+
+def test_expand_stored_styles_skips_non_compact_dictionaries(db_session: Session) -> None:
+    """非 Compact 词典的反引号数字是巧合文本，一个字节都不动。"""
+    did = _make_dictionary(db_session).id
+    entry = _add_entry(db_session, did, "巧合", "<p>`1`苹果</p>")
+
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=False) == 0
+    assert _definition(db_session, entry.id) == "<p>`1`苹果</p>"
 
 
 def test_expand_stored_styles_spans_many_batches(db_session: Session) -> None:
@@ -284,7 +294,7 @@ def test_expand_stored_styles_spans_many_batches(db_session: Session) -> None:
     rows = 25
     ids = [_add_entry(db_session, did, f"w{index}", "`7`红`1`").id for index in range(rows)]
 
-    assert expand_stored_styles(db_session, did, _STYLE_SHEET, batch_size=4) == rows
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True, batch_size=4) == rows
     for entry_id in ids:
         definition = _definition(db_session, entry_id)
         assert definition.startswith("<font color=Red>红")
@@ -293,7 +303,7 @@ def test_expand_stored_styles_spans_many_batches(db_session: Session) -> None:
 
 def test_expand_stored_styles_on_empty_dictionary(db_session: Session) -> None:
     did = _make_dictionary(db_session).id
-    assert expand_stored_styles(db_session, did, _STYLE_SHEET) == 0
+    assert expand_stored_styles(db_session, did, _STYLE_SHEET, compact=True) == 0
 
 
 def test_dictionaries_using_style_markers_intersects_requested(db_session: Session) -> None:

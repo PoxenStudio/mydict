@@ -106,9 +106,12 @@ function applyHeight(raw: number) {
     scrollable.value = true
     return
   }
-  // 内容缩回上限以内（如词典脚本折叠了一段）就恢复成不滚动、按内容撑高
+  // 内容缩回上限以内（如词典脚本折叠了一段）就恢复成不滚动、按内容撑高。
+  // 不设 MIN_HEIGHT 下限：短词条（如超级新华字典的两三行释义）被 120px 托底后
+  // 再叠上 4 秒兜底的 320px，就是用户看到的「底部 200px 空白」。首屏闪烁由
+  // loading 态挡着，这里忠实按内容高度来。
   scrollable.value = false
-  boxHeight.value = Math.max(MIN_HEIGHT, Math.ceil(raw))
+  boxHeight.value = Math.ceil(raw)
 }
 
 /**
@@ -219,8 +222,11 @@ async function load() {
 
 onMounted(() => {
   window.addEventListener('message', onMessage)
+  // 4 秒内一条高度上报都没有才用兜底高度（词典脚本先抛错、引导脚本没能装上等）。
+  // 判据是 firstHeightAt 而不是「boxHeight 还是初始值」——后者分不清「没收到上报」和
+  // 「内容比初始值还矮」，短词条会被错误地撑到 320px（底部大段空白的来源之一）。
   fallbackTimer = window.setTimeout(() => {
-    if (!frozen && boxHeight.value === MIN_HEIGHT) boxHeight.value = FALLBACK_HEIGHT
+    if (!frozen && firstHeightAt === 0) boxHeight.value = FALLBACK_HEIGHT
   }, FALLBACK_DELAY_MS)
   load()
 })
