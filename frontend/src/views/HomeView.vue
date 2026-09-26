@@ -451,6 +451,11 @@ function searchFromEntry(next: string) {
 function onUnsupportedAudio() {
   ElMessage.warning('这条发音不存在或解码失败，暂时无法播放')
 }
+
+/** 分批切换后把面板滚回顶部（与展开时的滚动同款） */
+function onRescroll(key: string) {
+  nextTick(() => scrollPanelToTop(key))
+}
 </script>
 
 <template>
@@ -573,6 +578,7 @@ function onUnsupportedAudio() {
               @entry="searchFromEntry"
               @toggle-favorite="toggleFavorite"
               @unsupported-audio="onUnsupportedAudio"
+              @rescroll="onRescroll(group.key)"
             />
           </div>
         </div>
