@@ -128,6 +128,10 @@ _MULTI_ENTRY_STYLE = (
     "[data-mydict-theme='dark'] .mydict-entry-index{color:#7d8f89}"
     "[data-mydict-theme='dark'] .mydict-entry-word{color:#eaf1ee}"
     "[data-mydict-theme='dark'] .mydict-entry-phonetic{color:#7d8f89}"
+    # 跳过视口外分节的排版与绘制：多词条聚合文档（搜韵「毛泽东」82 首叠出 3.3 万像素）
+    # 首屏只排版可见的一两节，其余滚到哪画到哪。contain-intrinsic-size 给视口外的节
+    # 一个估高（真实高度在接近视口时修正），撑起总高度让 scrollHeight/锚点大体可用。
+    ".mydict-entry{content-visibility:auto;contain-intrinsic-size:auto 500px}"
     "</style>"
 )
 
