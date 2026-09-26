@@ -17,6 +17,8 @@ export interface SystemSettings {
   search_hint_text: string
   /** 在线词典出站代理；空串表示直连 */
   online_dict_proxy: string
+  /** 启用的在线词典源 CSV；空串表示全部启用 */
+  online_dict_sources: string
 }
 
 export type SystemSettingsUpdate = Partial<SystemSettings>

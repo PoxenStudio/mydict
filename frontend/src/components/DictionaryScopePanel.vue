@@ -1,25 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ZH_CODES, langLabel } from '../utils/language'
+import { langLabel } from '../utils/language'
 import type { PublicDictionary } from '../types/query'
 
+/**
+ * 词典勾选列表（可按名称过滤）。语言/在线标签行已移到 HomeView 的搜索框下方常驻
+ * （高频操作不该藏在折叠面板里），本组件只负责「展开后挑具体词典」这个低频动作。
+ */
 const props = defineProps<{
   dictionaries: PublicDictionary[]
   checkedIds: Set<number>
   loading: boolean
-  /** 是否正在按勾选收窄范围（false = 检索全部） */
-  isFiltering: boolean
-  /** 「全部」按钮第二下进入的视觉清空态：复选框全空但语义仍是不限制 */
-  cleared: boolean
-  /** 当前模式：online 时本地词典都不参与（勾选全空、语言标签全灭），严格与语言标签互斥 */
-  mode: 'local' | 'online'
 }>()
 
 const emit = defineEmits<{
   toggle: [id: number]
-  selectAll: []
-  selectLanguage: [langFrom: string]
-  selectOnline: []
 }>()
 
 const keyword = ref('')
@@ -29,110 +24,11 @@ const visible = computed(() => {
   if (!needle) return props.dictionaries
   return props.dictionaries.filter((item) => item.name.toLowerCase().includes(needle))
 })
-
-// 中文系（含早期数据里的裸 zh）在界面上合成一个按钮：查询路由本来就不区分简繁
-// （输入汉字时三种码都算「优先语言」），拆成两个按钮只会让「只看中文词典」要点两次。
-// ZH_CODES 与词典管理页的语种 tab 共用同一份定义，避免两处各写一遍。
-// 中文按钮的循环顺序：中文（全部）→ 简中 → 繁中 → 中文…
-const ZH_SCOPES = ['zh', 'zh-Hans', 'zh-Hant']
-const ZH_SCOPE_LABELS: Record<string, string> = {
-  zh: '中文',
-  'zh-Hans': '简中',
-  'zh-Hant': '繁中',
-}
-
-/** 每个筛选范围对应的 lang_from 取值；不在表里的按原样精确匹配 */
-const SCOPE_CODES: Record<string, string[]> = {
-  zh: ZH_CODES,
-  'zh-Hans': ['zh-Hans'],
-  'zh-Hant': ['zh-Hant'],
-}
-
-/** 库里出现过的语言筛选项，按出现顺序去重；中文系合并成一项 */
-const languageScopes = computed(() => {
-  const scopes: string[] = []
-  let zhAdded = false
-  for (const item of props.dictionaries) {
-    const code = item.lang_from
-    if (ZH_CODES.includes(code)) {
-      if (!zhAdded) {
-        zhAdded = true
-        scopes.push('zh')
-      }
-      continue
-    }
-    if (!scopes.includes(code)) scopes.push(code)
-  }
-  return scopes
-})
-
-/** 当前勾选集是否恰好等于某个筛选范围的全部词典 */
-function matchesScope(scope: string): boolean {
-  const codes = SCOPE_CODES[scope] ?? [scope]
-  const ids = props.dictionaries
-    .filter((item) => codes.includes(item.lang_from))
-    .map((item) => item.id)
-  return (
-    ids.length > 0 &&
-    ids.length === props.checkedIds.size &&
-    ids.every((id) => props.checkedIds.has(id))
-  )
-}
-
-/** 中文按钮当前落在哪一态；不在任何一种中文范围里时为 null（按钮显示默认的「中文」） */
-const activeZhScope = computed<string | null>(() => {
-  if (!props.isFiltering) return null
-  for (const scope of ZH_SCOPES) {
-    if (matchesScope(scope)) return scope
-  }
-  return null
-})
-
-function scopeLabel(scope: string): string {
-  return scope === 'zh' ? ZH_SCOPE_LABELS[activeZhScope.value ?? 'zh'] : langLabel(scope)
-}
-
-function selectScope(scope: string) {
-  if (scope !== 'zh') {
-    emit('selectLanguage', scope)
-    return
-  }
-  // 中文按钮：在三种范围之间循环
-  const index = activeZhScope.value ? ZH_SCOPES.indexOf(activeZhScope.value) : -1
-  emit('selectLanguage', ZH_SCOPES[(index + 1) % ZH_SCOPES.length])
-}
 </script>
 
 <template>
   <section class="scope-panel">
     <input v-model="keyword" class="search" type="search" placeholder="筛选词典名" />
-
-    <div class="actions">
-      <button
-        type="button"
-        :class="{ active: mode === 'local' && !isFiltering }"
-        @click="emit('selectAll')"
-      >
-        {{ cleared ? '不选' : '全部' }}
-      </button>
-      <button
-        v-for="scope in languageScopes"
-        :key="scope"
-        type="button"
-        :class="{ active: mode === 'local' && matchesScope(scope) }"
-        @click="selectScope(scope)"
-      >
-        {{ scopeLabel(scope) }}
-      </button>
-      <button type="button" :class="{ active: mode === 'online' }" @click="emit('selectOnline')">
-        在线
-      </button>
-    </div>
-
-    <p v-if="!loading && mode === 'online'" class="hint">
-      在线模式：查询维基百科 / 维基词典 / 百度百科（本地词典不参与），点语言标签或词典退出。
-    </p>
-    <p v-else-if="!loading && !isFiltering" class="hint">未限制范围：检索全部已启用词典</p>
 
     <p v-if="loading" class="hint">正在载入词典列表…</p>
     <p v-else-if="dictionaries.length === 0" class="hint">暂无已启用的词典。</p>
@@ -190,33 +86,6 @@ function selectScope(scope: string) {
 
 .search:focus {
   border-color: var(--color-brand-500);
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.actions button {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: var(--color-bg-base);
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  padding: var(--space-1) var(--space-3);
-  cursor: pointer;
-}
-
-.actions button:hover {
-  border-color: var(--color-border-hover);
-  background: var(--color-hover-tint);
-}
-
-.actions button.active {
-  border-color: var(--color-brand-500);
-  background: var(--color-brand-50);
-  color: var(--color-brand-700);
 }
 
 .hint {

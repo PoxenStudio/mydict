@@ -21,6 +21,7 @@ import concurrent.futures
 import logging
 import re
 from html import unescape
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -81,18 +82,22 @@ def _external_links(word: str) -> list[dict[str, str]]:
     encoded = quote(word)
     return [
         {
+            "id": "google",
             "name": "Google",
             "url": f"https://www.google.com/search?q=define:{encoded}&hl=en",
         },
         {
+            "id": "urban",
             "name": "Urban Dictionary",
             "url": f"https://www.urbandictionary.com/define.php?term={encoded}",
         },
         {
+            "id": "merriam",
             "name": "Merriam-Webster",
             "url": f"https://www.merriam-webster.com/dictionary/{encoded}",
         },
         {
+            "id": "goodreads",
             "name": "Goodreads",
             "url": f"https://www.goodreads.com/search?q={encoded}",
         },
@@ -228,26 +233,44 @@ def _fetch_baike(word: str) -> dict | None:
     }
 
 
-def lookup_online(word: str, lang: str) -> dict:
-    """查询在线词典，返回 {word, sections, links}；单个源失败不影响其它源。"""
-    key = (word, lang)
+# section 源注册表：id -> 取数函数（统一 (word, lang) 签名，baike 不用 lang）
+_SECTION_SOURCES: dict[str, "Any"] = {
+    "wikipedia": lambda word, lang: _fetch_wikipedia(word, lang),
+    "wiktionary": lambda word, lang: _fetch_wiktionary(word, lang),
+    "baike": lambda word, lang: _fetch_baike(word),
+}
+
+# 全部可开关的源 id（section 源 + 外链）。管理后台「在线词典」开关的合法取值。
+ALL_SOURCE_IDS = frozenset(_SECTION_SOURCES) | {"google", "urban", "merriam", "goodreads"}
+
+
+def lookup_online(
+    word: str, lang: str, enabled_sources: set[str] | None = None
+) -> dict:
+    """查询在线词典，返回 {word, sections, links}；单个源失败不影响其它源。
+
+    `enabled_sources` 是管理后台「在线词典」开关的白名单（None/空集 = 全部启用），
+    id 取值见 ALL_SOURCE_IDS。
+    """
+    if not enabled_sources:
+        enabled_sources = ALL_SOURCE_IDS
+    key = (word, lang, tuple(sorted(enabled_sources)))
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
 
+    wanted = {sid: fn for sid, fn in _SECTION_SOURCES.items() if sid in enabled_sources}
     with concurrent.futures.ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
-        futures = {
-            "wikipedia": pool.submit(_fetch_wikipedia, word, lang),
-            "wiktionary": pool.submit(_fetch_wiktionary, word, lang),
-            "baike": pool.submit(_fetch_baike, word),
-        }
+        futures = {sid: pool.submit(fn, word, lang) for sid, fn in wanted.items()}
         sections = [f.result() for f in futures.values() if f.result()]
 
     result = {
         "word": word,
         "lang": lang,
         "sections": sections,
-        "links": _external_links(word),
+        "links": [
+            link for link in _external_links(word) if link["id"] in enabled_sources
+        ],
     }
     _CACHE[key] = result
     return result

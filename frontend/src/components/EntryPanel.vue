@@ -309,4 +309,13 @@ function isLoading(word: string) {
   border: none;
   border-top: 1px solid var(--color-border);
 }
+
+/* 手机：外层容器已吃满屏宽，词条卡片收一点（95%）留出呼吸感 */
+@media (max-width: 640px) {
+  .panel {
+    width: 95%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
 </style>

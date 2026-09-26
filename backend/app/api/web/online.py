@@ -55,5 +55,8 @@ def online_lookup(
     if not word:
         return OnlineLookupResponse(word=word, lang=lang, sections=[], links=[])
 
-    data = online_dict_service.lookup_online(word, lang)
+    # 源开关：管理后台「在线词典」的启用白名单（CSV；空 = 全部启用）
+    raw = settings_service.get_setting(db, "online_dict_sources", "").strip()
+    enabled = {sid for sid in raw.split(",") if sid in online_dict_service.ALL_SOURCE_IDS}
+    data = online_dict_service.lookup_online(word, lang, enabled or None)
     return OnlineLookupResponse(**data)

@@ -17,6 +17,30 @@ const form = reactive({
   site_name: 'MyDict',
   search_hint_text: '小搜一下, 大进一步',
   online_dict_proxy: '',
+  online_dict_sources: '',
+})
+
+// 在线词典源开关。后端存 CSV（空 = 全部启用，向后兼容），界面用 checkbox 数组：
+// 加载时空 CSV 显示为全选；保存时全选存回空串（将来新增的源自动默认启用）。
+const ONLINE_SOURCES = [
+  { id: 'wikipedia', label: '维基百科' },
+  { id: 'wiktionary', label: '维基词典' },
+  { id: 'baike', label: '百度百科' },
+  { id: 'google', label: 'Google' },
+  { id: 'urban', label: 'Urban Dictionary' },
+  { id: 'merriam', label: 'Merriam-Webster' },
+  { id: 'goodreads', label: 'Goodreads' },
+]
+
+const onlineSourceSelection = computed({
+  get: () =>
+    form.online_dict_sources
+      ? form.online_dict_sources.split(',').filter((id) => ONLINE_SOURCES.some((s) => s.id === id))
+      : ONLINE_SOURCES.map((s) => s.id),
+  set: (ids: string[]) => {
+    form.online_dict_sources =
+      ids.length === ONLINE_SOURCES.length ? '' : ONLINE_SOURCES.filter((s) => ids.includes(s.id)).map((s) => s.id).join(',')
+  },
 })
 
 const vocabUnlimited = computed({
@@ -38,6 +62,10 @@ async function load() {
 onMounted(load)
 
 async function save() {
+  if (!onlineSourceSelection.value.length) {
+    ElMessage.warning('至少启用一个在线词典源')
+    return
+  }
   saving.value = true
   try {
     const updated = await settingsApi.updateSettings({ ...form })
@@ -139,6 +167,16 @@ async function save() {
           维基百科/维基词典的查询经由该代理发出（百度百科直连即可）。保存后立即生效，无需重启。
           未设置时回落到部署环境变量 ONLINE_DICT_PROXY。
         </p>
+        <el-form-item label="启用的源">
+          <el-checkbox-group v-model="onlineSourceSelection" class="source-group">
+            <el-checkbox v-for="source in ONLINE_SOURCES" :key="source.id" :value="source.id">
+              {{ source.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <p class="hint">
+          不勾的源不参与在线查询（外链按钮也会隐藏）。全部勾选时保存为「默认」，之后新增的源自动启用。
+        </p>
       </section>
 
       <el-button type="primary" :loading="saving" @click="save">保存设置</el-button>
@@ -194,6 +232,11 @@ h1 {
   font-size: var(--text-xs);
   line-height: var(--leading-body);
   color: var(--color-text-tertiary);
+}
+
+.source-group {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .hint code {

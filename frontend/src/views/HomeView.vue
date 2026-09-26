@@ -11,6 +11,7 @@ import OnlineDictPanel from '../components/OnlineDictPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { searchWord } from '../api/dict'
+import { langLabel } from '../utils/language'
 import { getSystemInfo } from '../api/system'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
@@ -167,6 +168,92 @@ const onlineMode = ref(false)
 const sidebarCheckedIds = computed(() =>
   onlineMode.value ? new Set<number>() : checkedIds.value,
 )
+
+// --- 检索范围标签行（常驻在搜索框下方，不受折叠面板影响） ---
+// 从 DictionaryScopePanel 迁出：语言/在线切换是高频操作，不该藏在折叠面板里；
+// 面板只留「挑具体词典」这个低频动作。
+
+// 中文系（含早期数据里的裸 zh）在界面上合成一个按钮：查询路由本来就不区分简繁
+// （输入汉字时三种码都算「优先语言」），拆成两个按钮只会让「只看中文词典」要点两次。
+// ZH_CODES 与词典管理页的语种 tab 共用同一份定义，避免两处各写一遍。
+// 中文按钮的循环顺序：中文（全部）→ 简中 → 繁中 → 中文…
+const ZH_SCOPES = ['zh', 'zh-Hans', 'zh-Hant']
+const ZH_SCOPE_LABELS: Record<string, string> = {
+  zh: '中文',
+  'zh-Hans': '简中',
+  'zh-Hant': '繁中',
+}
+
+/** 每个筛选范围对应的 lang_from 取值；不在表里的按原样精确匹配 */
+const SCOPE_CODES: Record<string, string[]> = {
+  zh: ['zh', 'zh-Hans', 'zh-Hant'],
+  'zh-Hans': ['zh-Hans'],
+  'zh-Hant': ['zh-Hant'],
+}
+
+/** 库里出现过的语言筛选项，按出现顺序去重；中文系合并成一项 */
+const languageScopes = computed(() => {
+  const scopes: string[] = []
+  let zhAdded = false
+  for (const item of dictionaries.value) {
+    const code = item.lang_from
+    if (SCOPE_CODES.zh.includes(code)) {
+      if (!zhAdded) {
+        zhAdded = true
+        scopes.push('zh')
+      }
+      continue
+    }
+    if (!scopes.includes(code)) scopes.push(code)
+  }
+  return scopes
+})
+
+/** 当前勾选集是否恰好等于某个筛选范围的全部词典 */
+function matchesScope(scope: string): boolean {
+  const codes = SCOPE_CODES[scope] ?? [scope]
+  const ids = dictionaries.value
+    .filter((item) => codes.includes(item.lang_from))
+    .map((item) => item.id)
+  return (
+    ids.length > 0 &&
+    ids.length === checkedIds.value.size &&
+    ids.every((id) => checkedIds.value.has(id))
+  )
+}
+
+/** 中文按钮当前落在哪一态；不在任何一种中文范围里时为 null（按钮显示默认的「中文」） */
+const activeZhScope = computed<string | null>(() => {
+  if (!isFiltering.value) return null
+  for (const scope of ZH_SCOPES) {
+    if (matchesScope(scope)) return scope
+  }
+  return null
+})
+
+function scopeLabel(scope: string): string {
+  return scope === 'zh' ? ZH_SCOPE_LABELS[activeZhScope.value ?? 'zh'] : langLabel(scope)
+}
+
+/** 标签行当前亮起的按钮：在线模式只有【在线】，本地模式下亮「全部」或命中的语言 */
+const activeTab = computed<string>(() => {
+  if (onlineMode.value) return 'online'
+  if (!isFiltering.value) return 'all'
+  for (const scope of languageScopes.value) {
+    if (matchesScope(scope)) return scope
+  }
+  return ''
+})
+
+function selectScope(scope: string) {
+  if (scope !== 'zh') {
+    selectLanguage(scope)
+    return
+  }
+  // 中文按钮：在三种范围之间循环
+  const index = activeZhScope.value ? ZH_SCOPES.indexOf(activeZhScope.value) : -1
+  selectLanguage(ZH_SCOPES[(index + 1) % ZH_SCOPES.length])
+}
 
 function selectOnline() {
   // 面板自治：挂载/ watch word 时自己发起请求
@@ -384,7 +471,37 @@ function onUnsupportedAudio() {
           <button type="submit" :disabled="showLoginGate">查询</button>
         </form>
 
-        <div v-if="showScope" class="scope">
+        <!--
+          检索范围标签行：语言/在线切换是高频操作，常驻搜索框下方（不随下面的
+          词典列表面板折叠）。点任何本地范围都会退出在线模式。
+        -->
+        <div v-if="showScope" class="scope-tabs">
+          <button
+            type="button"
+            :class="{ active: activeTab === 'all' }"
+            @click="onSelectAll"
+          >
+            {{ clearedView ? '不选' : '全部' }}
+          </button>
+          <button
+            v-for="scope in languageScopes"
+            :key="scope"
+            type="button"
+            :class="{ active: activeTab === scope }"
+            @click="selectScope(scope)"
+          >
+            {{ scopeLabel(scope) }}
+          </button>
+          <button type="button" :class="{ active: onlineMode }" @click="selectOnline">
+            在线
+          </button>
+        </div>
+
+        <!--
+          折叠的词典列表：低频的「挑具体词典」动作。在线模式下没有本地词典可选，
+          整行（含开关）藏掉，只剩标签行。
+        -->
+        <div v-if="showScope && !onlineMode" class="scope">
           <button
             type="button"
             class="scope-toggle"
@@ -401,13 +518,7 @@ function onUnsupportedAudio() {
             :dictionaries="dictionaries"
             :checked-ids="sidebarCheckedIds"
             :loading="dictLoading"
-            :is-filtering="isFiltering"
-            :cleared="clearedView"
-            :mode="onlineMode ? 'online' : 'local'"
             @toggle="onToggleDict"
-            @select-all="onSelectAll"
-            @select-language="selectLanguage"
-            @select-online="selectOnline"
           />
         </div>
       </section>
@@ -532,6 +643,35 @@ function onUnsupportedAudio() {
   transform: rotate(90deg);
 }
 
+/* 检索范围标签行：常驻搜索框下方（高频操作），样式沿用原面板 actions 的胶囊按钮 */
+.scope-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.scope-tabs button {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+
+.scope-tabs button:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-hover-tint);
+}
+
+.scope-tabs button.active {
+  border-color: var(--color-brand-500);
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+}
+
 .tagline {
   text-align: center;
   font-size: var(--text-lg);
@@ -651,5 +791,29 @@ function onUnsupportedAudio() {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* 手机：容器吃满屏宽（默认的左右内边距让词条区显得很窄），查询按钮不换行 */
+@media (max-width: 640px) {
+  .search-page {
+    width: 100%;
+    max-width: none;
+    padding: var(--space-4) var(--space-2);
+  }
+
+  .search-box {
+    flex-wrap: nowrap;
+  }
+
+  .search-box input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .search-box button {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 0 var(--space-4);
+  }
 }
 </style>

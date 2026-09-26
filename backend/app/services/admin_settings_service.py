@@ -12,9 +12,20 @@ _INT_KEYS = {
     "user_ip_rate_limit_per_min",
 }
 _OPTIONAL_INT_KEYS = {"vocab_max_items_per_owner"}
-_STR_KEYS = {"site_name", "search_hint_text", "online_dict_proxy"}
+_STR_KEYS = {"site_name", "search_hint_text", "online_dict_proxy", "online_dict_sources"}
 
 _SEARCH_HINT_DEFAULT = "小搜一下, 大进一步"
+
+# 在线词典源的合法 id（与 online_dict_service.ALL_SOURCE_IDS 对应）；空值 = 全部启用
+_ONLINE_SOURCE_IDS = ("wikipedia", "wiktionary", "baike", "google", "urban", "merriam", "goodreads")
+
+
+def _normalize_online_sources(raw: str | None) -> str:
+    """把用户输入的 CSV 归一化成固定顺序的白名单 CSV；非法 id 忽略。"""
+    if not raw:
+        return ""
+    picked = {sid.strip() for sid in raw.split(",")}
+    return ",".join(sid for sid in _ONLINE_SOURCE_IDS if sid in picked)
 
 
 def get_all_settings(db: Session, defaults: Settings) -> dict:
@@ -41,6 +52,9 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         ),
         "online_dict_proxy": settings_service.get_setting(
             db, "online_dict_proxy", defaults.online_dict_proxy
+        ),
+        "online_dict_sources": _normalize_online_sources(
+            settings_service.get_setting(db, "online_dict_sources", "")
         ),
     }
 
@@ -87,6 +101,8 @@ def update_settings(
         elif key in _INT_KEYS:
             settings_service.set_setting(db, key, str(value))
         else:
+            if key == "online_dict_sources":
+                value = _normalize_online_sources(value)
             settings_service.set_setting(db, key, value or "")
         changed[key] = value
 

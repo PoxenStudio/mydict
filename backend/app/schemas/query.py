@@ -62,8 +62,10 @@ class QueryHistoryResponse(BaseModel):
 
 class OnlineLinkOut(BaseModel):
     """「在外部打开」的搜索链接（Google / Urban Dictionary / Merriam-Webster / Goodreads）：
-    这些站点都设 X-Frame-Options 拒绝内嵌，抓内容没有意义，给链接就好。"""
+    这些站点都设 X-Frame-Options 拒绝内嵌，抓内容没有意义，给链接就好。`id` 用于
+    管理后台的源开关（google/urban/merriam/goodreads）。"""
 
+    id: str
     name: str
     url: str
 

@@ -11,6 +11,7 @@ class SystemSettingsOut(BaseModel):
     site_name: str
     search_hint_text: str
     online_dict_proxy: str
+    online_dict_sources: str
 
 
 class PublicSettingsOut(BaseModel):
@@ -33,3 +34,4 @@ class SystemSettingsUpdateRequest(BaseModel):
     site_name: str | None = None
     search_hint_text: str | None = Field(default=None, max_length=100)
     online_dict_proxy: str | None = Field(default=None, max_length=300)
+    online_dict_sources: str | None = Field(default=None, max_length=200)

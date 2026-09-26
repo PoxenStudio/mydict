@@ -183,6 +183,19 @@ async def test_settings_get_and_partial_update(
     )
     assert resp.json()["online_dict_proxy"] == ""
 
+    # 在线词典源开关：PUT 后 GET 一致（归一化为固定顺序 CSV）；非法 id 被滤掉；
+    # null 清空为空串（空 = 全部启用）
+    resp = await client.put(
+        "/api/admin/settings",
+        json={"online_dict_sources": "baike,wikipedia,不存在,google"},
+        headers=admin_headers,
+    )
+    assert resp.json()["online_dict_sources"] == "wikipedia,baike,google"
+    resp = await client.put(
+        "/api/admin/settings", json={"online_dict_sources": None}, headers=admin_headers
+    )
+    assert resp.json()["online_dict_sources"] == ""
+
     resp = await client.put(
         "/api/admin/settings", json={"site_name": "MyDict"}, headers=admin_headers
     )

@@ -62,6 +62,32 @@ async def test_online_lookup_all_sources_fail_still_returns_links(
     assert len(data["links"]) == 4
 
 
+async def test_online_lookup_filters_disabled_sources(
+    client: AsyncClient, admin_headers: dict[str, str], db_session, monkeypatch
+) -> None:
+    """管理后台的源开关：设置里只留 wikipedia + google，其它 section/外链都不出现。"""
+    set_setting(db_session, "open_access", "true")
+    set_setting(db_session, "online_dict_sources", "wikipedia,google,不合法id")
+    word = f"开关词{online_dict_service.__name__}{id(monkeypatch)}"
+
+    def fake_wikipedia(w, lang):
+        return {"id": "wikipedia", "name": "Wikipedia", "title": w,
+                "subtitle": "", "text": "摘要", "url": None}
+
+    def fail(*args, **kwargs):
+        raise AssertionError("被禁用的源不应该被调用")
+
+    monkeypatch.setattr(online_dict_service, "_fetch_wikipedia", fake_wikipedia)
+    monkeypatch.setattr(online_dict_service, "_fetch_wiktionary", fail)
+    monkeypatch.setattr(online_dict_service, "_fetch_baike", fail)
+
+    resp = await client.get("/api/dict/online/lookup", params={"word": word, "lang": "zh"})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert [s["id"] for s in data["sections"]] == ["wikipedia"]
+    assert [link["id"] for link in data["links"]] == ["google"]
+
+
 async def test_online_lookup_requires_open_access_or_login(
     client: AsyncClient, db_session
 ) -> None:
