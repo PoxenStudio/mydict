@@ -196,6 +196,13 @@ async def test_settings_get_and_partial_update(
     )
     assert resp.json()["online_dict_sources"] == ""
 
+    # 在线词典总开关：默认禁用，PUT true 后打开
+    assert resp.json()["online_dict_enabled"] is False
+    resp = await client.put(
+        "/api/admin/settings", json={"online_dict_enabled": True}, headers=admin_headers
+    )
+    assert resp.json()["online_dict_enabled"] is True
+
     resp = await client.put(
         "/api/admin/settings", json={"site_name": "MyDict"}, headers=admin_headers
     )

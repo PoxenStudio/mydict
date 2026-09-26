@@ -310,12 +310,17 @@ function isLoading(word: string) {
   border-top: 1px solid var(--color-border);
 }
 
-/* 手机：外层容器已吃满屏宽，词条卡片收一点（95%）留出呼吸感 */
+/* 手机：词典卡片吃满屏宽，词条内容区只留 8px 左右内边距（约 95% 可用宽度）。
+   之前的 95% 卡片 + 默认内边距叠加，实测仍然显得窄。 */
 @media (max-width: 640px) {
   .panel {
-    width: 95%;
-    margin-left: auto;
-    margin-right: auto;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .panel-body {
+    padding: 0 var(--space-2) var(--space-3);
   }
 }
 </style>

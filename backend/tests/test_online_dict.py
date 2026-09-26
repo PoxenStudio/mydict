@@ -11,6 +11,7 @@ async def test_online_lookup_aggregates_sections_and_links(
     client: AsyncClient, admin_headers: dict[str, str], db_session, monkeypatch
 ) -> None:
     set_setting(db_session, "open_access", "true")
+    set_setting(db_session, "online_dict_enabled", "true")
     word = f"在线词{online_dict_service.__name__}{id(monkeypatch)}"
 
     def fake_wikipedia(w, lang):
@@ -46,6 +47,7 @@ async def test_online_lookup_all_sources_fail_still_returns_links(
     client: AsyncClient, admin_headers: dict[str, str], db_session, monkeypatch
 ) -> None:
     set_setting(db_session, "open_access", "true")
+    set_setting(db_session, "online_dict_enabled", "true")
     word = f"全失败{online_dict_service.__name__}{id(client)}"
 
     def fail(*args, **kwargs):
@@ -67,6 +69,7 @@ async def test_online_lookup_filters_disabled_sources(
 ) -> None:
     """管理后台的源开关：设置里只留 wikipedia + google，其它 section/外链都不出现。"""
     set_setting(db_session, "open_access", "true")
+    set_setting(db_session, "online_dict_enabled", "true")
     set_setting(db_session, "online_dict_sources", "wikipedia,google,不合法id")
     word = f"开关词{online_dict_service.__name__}{id(monkeypatch)}"
 
@@ -86,6 +89,16 @@ async def test_online_lookup_filters_disabled_sources(
     data = resp.json()
     assert [s["id"] for s in data["sections"]] == ["wikipedia"]
     assert [link["id"] for link in data["links"]] == ["google"]
+
+
+async def test_online_lookup_rejected_when_master_switch_off(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """总开关默认禁用：开着 open_access 也不行，返回 403。"""
+    set_setting(db_session, "open_access", "true")
+    set_setting(db_session, "online_dict_enabled", "false")
+    resp = await client.get("/api/dict/online/lookup", params={"word": "x"})
+    assert resp.status_code == 403
 
 
 async def test_online_lookup_requires_open_access_or_login(

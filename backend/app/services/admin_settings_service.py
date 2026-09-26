@@ -5,7 +5,7 @@ from app.services import settings_service
 from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
 
-_BOOL_KEYS = {"open_access", "allow_registration"}
+_BOOL_KEYS = {"open_access", "allow_registration", "online_dict_enabled"}
 _INT_KEYS = {
     "token_default_daily_limit",
     "anonymous_ip_rate_limit_per_min",
@@ -35,6 +35,10 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         ),
         "allow_registration": settings_service.get_bool_setting(
             db, "allow_registration", defaults.allow_registration_default
+        ),
+        # 在线词典总开关：默认禁用（出站抓取第三方站点，是否开放由部署者决定）
+        "online_dict_enabled": settings_service.get_bool_setting(
+            db, "online_dict_enabled", False
         ),
         "token_default_daily_limit": settings_service.get_int_setting(
             db, "token_default_daily_limit", defaults.token_default_daily_limit
@@ -66,6 +70,10 @@ def get_public_settings(db: Session, defaults: Settings) -> dict:
         ),
         "allow_registration": settings_service.get_bool_setting(
             db, "allow_registration", defaults.allow_registration_default
+        ),
+        # 前台要靠它决定是否渲染【在线】标签
+        "online_dict_enabled": settings_service.get_bool_setting(
+            db, "online_dict_enabled", False
         ),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
         "initialized": is_initialized(db),

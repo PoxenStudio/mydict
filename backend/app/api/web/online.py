@@ -16,7 +16,7 @@ from app.core import rate_limiter
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.deps import WebCaller, get_web_caller
-from app.core.exceptions import RateLimitedError
+from app.core.exceptions import ForbiddenError, RateLimitedError
 from app.schemas.query import OnlineLookupResponse
 from app.services import online_dict_service, settings_service
 router = APIRouter(prefix="/dict", tags=["web-dict"])
@@ -43,6 +43,10 @@ def online_lookup(
             "在线词典查询过于频繁，请稍后再试",
             retry_after=rate_limiter.seconds_to_next_minute(),
         )
+
+    # 总开关：管理后台默认禁用；关着时端点直接拒绝（前端标签也已隐藏，这里是双保险）
+    if not settings_service.get_bool_setting(db, "online_dict_enabled", False):
+        raise ForbiddenError("在线词典功能未启用，请联系管理员在系统设置中开启")
 
     # 出站代理：管理后台设置（DB）覆盖 env 默认值，热同步（变了才动，免得反复清缓存）
     proxy = settings_service.get_setting(

@@ -18,9 +18,12 @@ const form = reactive({
   search_hint_text: '小搜一下, 大进一步',
   online_dict_proxy: '',
   online_dict_sources: '',
+  online_dict_enabled: false,
 })
 
-// 在线词典源开关。后端存 CSV（空 = 全部启用，向后兼容），界面用 checkbox 数组：
+// 在线词典源开关。后端存 CSV（空 = 全部启用，向后兼容），界面用 checkbox 数组。
+// 注意：选中态存独立的 ref，**不能**从 form 字符串反向推导——「空串 = 全部启用」的
+// 后端语义会让「取消最后一个勾选」立即被渲染成「全部勾选」（实测踩过的坑）。
 // 加载时空 CSV 显示为全选；保存时全选存回空串（将来新增的源自动默认启用）。
 const ONLINE_SOURCES = [
   { id: 'wikipedia', label: '维基百科' },
@@ -32,16 +35,23 @@ const ONLINE_SOURCES = [
   { id: 'goodreads', label: 'Goodreads' },
 ]
 
-const onlineSourceSelection = computed({
-  get: () =>
-    form.online_dict_sources
-      ? form.online_dict_sources.split(',').filter((id) => ONLINE_SOURCES.some((s) => s.id === id))
-      : ONLINE_SOURCES.map((s) => s.id),
-  set: (ids: string[]) => {
-    form.online_dict_sources =
-      ids.length === ONLINE_SOURCES.length ? '' : ONLINE_SOURCES.filter((s) => ids.includes(s.id)).map((s) => s.id).join(',')
-  },
-})
+const onlineSourceSelection = ref<string[]>([])
+
+function syncSourceSelectionFromForm() {
+  onlineSourceSelection.value = form.online_dict_sources
+    ? form.online_dict_sources.split(',').filter((id) => ONLINE_SOURCES.some((s) => s.id === id))
+    : ONLINE_SOURCES.map((s) => s.id)
+}
+
+function onSourceSelectionChange(ids: string[]) {
+  onlineSourceSelection.value = [...ids]
+  form.online_dict_sources =
+    ids.length === ONLINE_SOURCES.length
+      ? ''
+      : ONLINE_SOURCES.filter((s) => ids.includes(s.id))
+          .map((s) => s.id)
+          .join(',')
+}
 
 const vocabUnlimited = computed({
   get: () => form.vocab_max_items_per_owner === null,
@@ -54,6 +64,7 @@ async function load() {
   loading.value = true
   try {
     Object.assign(form, await settingsApi.getSettings())
+    syncSourceSelectionFromForm()
   } finally {
     loading.value = false
   }
@@ -155,6 +166,18 @@ async function save() {
 
       <section class="panel">
         <h2>在线词典</h2>
+        <el-form-item>
+          <div class="switch-row">
+            <el-switch v-model="form.online_dict_enabled" />
+            <span>
+              {{
+                form.online_dict_enabled
+                  ? '已开启：检索范围出现【在线】标签，查询维基百科/维基词典/百度百科等在线源'
+                  : '已禁用：前台不显示【在线】标签，在线查询接口一并拒绝'
+              }}
+            </span>
+          </div>
+        </el-form-item>
         <el-form-item label="出站代理服务器">
           <el-input
             v-model="form.online_dict_proxy"
@@ -168,7 +191,11 @@ async function save() {
           未设置时回落到部署环境变量 ONLINE_DICT_PROXY。
         </p>
         <el-form-item label="启用的源">
-          <el-checkbox-group v-model="onlineSourceSelection" class="source-group">
+          <el-checkbox-group
+            :model-value="onlineSourceSelection"
+            class="source-group"
+            @change="onSourceSelectionChange"
+          >
             <el-checkbox v-for="source in ONLINE_SOURCES" :key="source.id" :value="source.id">
               {{ source.label }}
             </el-checkbox>

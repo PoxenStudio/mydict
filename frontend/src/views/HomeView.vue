@@ -492,7 +492,13 @@ function onUnsupportedAudio() {
           >
             {{ scopeLabel(scope) }}
           </button>
-          <button type="button" :class="{ active: onlineMode }" @click="selectOnline">
+          <!-- 总开关（管理后台默认禁用）：关着时连标签都不出现 -->
+          <button
+            v-if="settingsStore.onlineDictEnabled"
+            type="button"
+            :class="{ active: onlineMode }"
+            @click="selectOnline"
+          >
             在线
           </button>
         </div>
@@ -793,12 +799,14 @@ function onUnsupportedAudio() {
   gap: var(--space-2);
 }
 
-/* 手机：容器吃满屏宽（默认的左右内边距让词条区显得很窄），查询按钮不换行 */
+/* 手机：容器真正吃满屏宽（水平零边距，词典卡片 100%），词条内容区由
+   EntryPanel 自己留 8px 内边距（约 95% 可用宽度）。此前保留的 8px 容器边距
+   叠加 panel-body 内边距，实测词条内容只占屏宽 87%，仍显窄。 */
 @media (max-width: 640px) {
   .search-page {
     width: 100%;
     max-width: none;
-    padding: var(--space-4) var(--space-2);
+    padding: var(--space-4) 0;
   }
 
   .search-box {

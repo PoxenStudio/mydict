@@ -47,8 +47,6 @@ watch(() => props.word, run)
       @action="run"
     />
 
-    <div v-else-if="!word" class="empty-hint">输入词语后点【查询】。</div>
-
     <template v-else>
       <div v-if="data && data.sections.length === 0" class="empty-hint">
         在线词典没有查到「{{ data.word }}」的内容，可以用下面的外部搜索。
