@@ -46,8 +46,15 @@ export function listDictionaries(scope: 'usable' | 'all' = 'usable') {
  * 「可用词典」限制。
  */
 export function getEntryHtml(dictionaryId: number, word: string, entryIds?: number[]) {
-  // 带上主题：明暗直接写进文档，iframe 首屏就不会先白一下再变色
-  return request.get<never, string>(`/dict/entry/${dictionaryId}`, {
+  const key = `${dictionaryId}|${word}|${entryIds && entryIds.length ? entryIds.join(',') : ''}`
+  const cached = ENTRY_HTML_CACHE.get(key)
+  if (cached) {
+    // LRU 触碰：命中就挪到队尾，最旧的先淘汰
+    ENTRY_HTML_CACHE.delete(key)
+    ENTRY_HTML_CACHE.set(key, cached)
+    return cached
+  }
+  const pending = request.get<never, string>(`/dict/entry/${dictionaryId}`, {
     params: {
       word,
       entry_ids: entryIds && entryIds.length ? entryIds.join(',') : undefined,
@@ -55,6 +62,26 @@ export function getEntryHtml(dictionaryId: number, word: string, entryIds?: numb
     },
     responseType: 'text',
   })
+  ENTRY_HTML_CACHE.set(key, pending)
+  // 失败的预取别留在缓存里，用户真点开时还能重试
+  pending.catch(() => ENTRY_HTML_CACHE.delete(key))
+  if (ENTRY_HTML_CACHE.size > ENTRY_HTML_CACHE_MAX) {
+    const oldest = ENTRY_HTML_CACHE.keys().next().value
+    if (oldest !== undefined) ENTRY_HTML_CACHE.delete(oldest)
+  }
+  return pending
+}
+
+// 词条文档预取缓存：悬停/按下面板标题时就把文档拉回来，点击展开时 HTML 已在手，
+// iframe 立即挂载——首屏等待里最大的可消除项就是这次往返。
+// 主题不在 key 里：缓存文档带着取回时的主题，父页在 iframe load 后会补发当前主题
+// （EntryFrame.postTheme），引导脚本的 applyTheme 会自行切换。
+const ENTRY_HTML_CACHE = new Map<string, Promise<string>>()
+const ENTRY_HTML_CACHE_MAX = 24
+
+/** 后台预取词条文档（悬停/按下时调用）；失败静默，等真正展开时再走正常重试路径 */
+export function prefetchEntryHtml(dictionaryId: number, word: string, entryIds?: number[]) {
+  getEntryHtml(dictionaryId, word, entryIds).catch(() => undefined)
 }
 
 /**
