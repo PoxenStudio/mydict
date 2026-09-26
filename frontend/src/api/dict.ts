@@ -5,6 +5,7 @@ import type {
   PublicDictionary,
   QueryHistoryEntry,
   QueryResponse,
+  RandomEntry,
 } from '../types/query'
 
 /**
@@ -22,6 +23,16 @@ export function searchWord(word: string, dictIds?: number[]) {
 /** 在线词典（维基百科/维基词典/百度百科 + 外部搜索链接）。lang 是两位语言码 */
 export function lookupOnline(word: string, lang: string) {
   return request.get<never, OnlineLookup>('/dict/online/lookup', { params: { word, lang } })
+}
+
+/**
+ * 随机浏览：在指定词典池（缺省 = 全部可用词典）里随机挑一条词条。
+ * 返回词典与词条标识，渲染由调用方走 getEntryHtml。
+ */
+export function randomEntry(dictIds?: number[]) {
+  const params: Record<string, string> = {}
+  if (dictIds && dictIds.length) params.dict_ids = dictIds.join(',')
+  return request.get<never, RandomEntry>('/dict/random', { params })
 }
 
 /**

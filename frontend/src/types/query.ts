@@ -50,8 +50,15 @@ export interface OnlineLink {
   url: string
 }
 
-export interface OnlineLookup {
+/** 随机浏览：后端挑好的一条词条（渲染走既有的词条文档接口） */
+export interface RandomEntry {
+  dictionary_id: number
+  dictionary_name: string
   word: string
+  entry_id: number
+}
+
+export interface OnlineLookup {  word: string
   lang: string
   sections: OnlineSection[]
   links: OnlineLink[]

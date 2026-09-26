@@ -8,6 +8,7 @@ import SystemTaskBanner from '../components/SystemTaskBanner.vue'
 import DictionaryScopePanel from '../components/DictionaryScopePanel.vue'
 import EntryPanel from '../components/EntryPanel.vue'
 import OnlineDictPanel from '../components/OnlineDictPanel.vue'
+import RandomDictPanel from '../components/RandomDictPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { searchWord } from '../api/dict'
@@ -66,6 +67,7 @@ const showScope = computed(() => authStore.isLoggedIn)
 
 const scopeSummary = computed(() => {
   if (onlineMode.value) return '在线词典'
+  if (randomMode.value) return '随机浏览'
   if (dictLoading.value) return '载入中…'
   if (!isFiltering.value) return `全部词典（${allIds.value.length}）`
   return `已选 ${checkedIds.value.size} / ${allIds.value.length} 部`
@@ -138,7 +140,8 @@ onMounted(async () => {
 watch(
   () => selectedIds.value.join(','),
   () => {
-    if (onlineMode.value) return
+    // 随机模式下勾选变化只换池子（RandomDictPanel 自己 watch poolIds），不发查询
+    if (onlineMode.value || randomMode.value) return
     if (submittedWord.value) runSearch()
   },
 )
@@ -153,6 +156,7 @@ const LANGUAGE_SCOPE_CODES: Record<string, string[]> = {
 /** 侧边栏的「只看某种语言」：勾选该筛选范围下的全部词典 */
 function selectLanguage(scope: string) {
   onlineMode.value = false
+  randomMode.value = false
   const codes = LANGUAGE_SCOPE_CODES[scope] ?? [scope]
   setSelection(
     dictionaries.value.filter((item) => codes.includes(item.lang_from)).map((i) => i.id),
@@ -235,9 +239,10 @@ function scopeLabel(scope: string): string {
   return scope === 'zh' ? ZH_SCOPE_LABELS[activeZhScope.value ?? 'zh'] : langLabel(scope)
 }
 
-/** 标签行当前亮起的按钮：在线模式只有【在线】，本地模式下亮「全部」或命中的语言 */
+/** 标签行当前亮起的按钮：在线/随机各自独占，本地模式下亮「全部」或命中的语言 */
 const activeTab = computed<string>(() => {
   if (onlineMode.value) return 'online'
+  if (randomMode.value) return 'random'
   if (!isFiltering.value) return 'all'
   for (const scope of languageScopes.value) {
     if (matchesScope(scope)) return scope
@@ -258,16 +263,31 @@ function selectScope(scope: string) {
 function selectOnline() {
   // 面板自治：挂载/ watch word 时自己发起请求
   onlineMode.value = true
+  randomMode.value = false
 }
 
-// 本地范围选择（勾选/全部/不选）会退出在线模式
+// --- 随机浏览 ---
+// 以当前检索范围勾选的词典为池，每次【换一个】随机挑一条展示。任何本地范围
+// 的选择（语言标签/全部/勾选）会换池子但不退出随机模式；发起正常查询才退出。
+const randomMode = ref(false)
+
+const randomPool = computed(() => (isFiltering.value ? filterIds.value ?? [] : allIds.value))
+
+function selectRandom() {
+  onlineMode.value = false
+  randomMode.value = true
+}
+
+// 本地范围选择（勾选/全部/不选）会退出在线模式；随机模式换池子但不退出
 function onToggleDict(id: number) {
   onlineMode.value = false
+  randomMode.value = false
   toggleDictionary(id)
 }
 
 function onSelectAll() {
   onlineMode.value = false
+  randomMode.value = false
   selectAllOrClear()
 }
 
@@ -379,6 +399,9 @@ async function runSearch(query?: string) {
   if (!q) return
   if (showLoginGate.value) return
 
+  // 发起正常查询 = 明确要检索，退出随机模式
+  randomMode.value = false
+
   word.value = q
   if (onlineMode.value) {
     // 在线模式：结果区域交给 OnlineDictPanel 自己拉取（它 watch word）
@@ -386,6 +409,7 @@ async function runSearch(query?: string) {
     syncQueryToUrl(q)
     return
   }
+  onlineMode.value = false
   status.value = 'loading'
   submittedWord.value = q
   try {
@@ -506,6 +530,14 @@ function onRescroll(key: string) {
           >
             在线
           </button>
+          <!-- 随机浏览：池子 = 当前检索范围勾选的词典 -->
+          <button
+            type="button"
+            :class="{ active: randomMode }"
+            @click="selectRandom"
+          >
+            随机
+          </button>
         </div>
 
         <!--
@@ -542,6 +574,18 @@ function onRescroll(key: string) {
               <router-link to="/register">注册账号</router-link>。
             </p>
           </div>
+
+          <template v-else-if="randomMode">
+            <!-- 随机浏览：池子 = 当前检索范围勾选的词典 -->
+            <RandomDictPanel
+              :pool-ids="randomPool"
+              :favorited-words="favoritedWords"
+              :favorite-loading="favoriteLoading"
+              @entry="searchFromEntry"
+              @toggle-favorite="toggleFavorite"
+              @unsupported-audio="onUnsupportedAudio"
+            />
+          </template>
 
           <template v-else-if="onlineMode">
             <!-- 面板自治：加载/错误/结果都在内部渲染，:key 保证换词重新发起查询 -->
@@ -807,12 +851,50 @@ function onRescroll(key: string) {
 
 /* 手机：容器真正吃满屏宽（水平零边距，词典卡片 100%），词条内容区由
    EntryPanel 自己留 8px 内边距（约 95% 可用宽度）。此前保留的 8px 容器边距
-   叠加 panel-body 内边距，实测词条内容只占屏宽 87%，仍显窄。 */
+   叠加 panel-body 内边距，实测词条内容只占屏宽 87%，仍显窄。
+   头部（搜索框/标签行/检索范围行）整体收紧，小屏一屏能多看一两行内容。 */
 @media (max-width: 640px) {
   .search-page {
     width: 100%;
     max-width: none;
-    padding: var(--space-4) 0;
+    padding: var(--space-3) 0;
+    gap: var(--space-3);
+  }
+
+  .search-head {
+    gap: var(--space-2);
+  }
+
+  /* 搜索栏高度约 -40%：48px 输入框 + 40px 按钮压到 28/26px */
+  .search-box input {
+    height: 28px;
+    font-size: var(--text-sm);
+  }
+
+  .search-box button {
+    flex-shrink: 0;
+    white-space: nowrap;
+    height: 26px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-xs);
+  }
+
+  /* 标签行上下收紧 */
+  .scope-tabs {
+    gap: var(--space-1);
+  }
+
+  .scope-tabs button {
+    padding: 2px var(--space-2);
+  }
+
+  /* 检索范围开关行上下收紧 */
+  .scope {
+    gap: var(--space-1);
+  }
+
+  .scope-toggle {
+    padding: 2px var(--space-2);
   }
 
   .search-box {
@@ -827,7 +909,7 @@ function onRescroll(key: string) {
   .search-box button {
     flex-shrink: 0;
     white-space: nowrap;
-    padding: 0 var(--space-4);
+    padding: 0 var(--space-3);
   }
 }
 </style>
