@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import EntryFrame from './EntryFrame.vue'
 import FavoriteButton from './FavoriteButton.vue'
-import { getEntryHtml, randomEntry } from '../api/dict'
+import { getEntryHtml, prefetchEntryHtml, randomEntry } from '../api/dict'
 import type { RandomEntry } from '../types/query'
 
 const props = defineProps<{
@@ -22,8 +22,11 @@ const emit = defineEmits<{
 const current = ref<RandomEntry | null>(null)
 const loading = ref(false)
 const failed = ref(false)
-// 换一个的触发器：自增一次就重挑一条
-const reroll = ref(0)
+// 预取流水线：当前词条一显示就随机挑好下一条并预取其文档，【换一个】瞬时切换。
+// poolKey 跟着词条走——池子变了（用户改了勾选）就作废重挑。
+const nextUp = ref<{ entry: RandomEntry; poolKey: string } | null>(null)
+
+const poolKey = computed(() => props.poolIds.join(','))
 
 async function run() {
   loading.value = true
@@ -31,6 +34,7 @@ async function run() {
   current.value = null
   try {
     current.value = await randomEntry(props.poolIds)
+    afterShow()
   } catch {
     failed.value = true
   } finally {
@@ -38,17 +42,42 @@ async function run() {
   }
 }
 
-function next() {
-  reroll.value += 1
+function afterShow() {
+  if (!nextUp.value) void prefetchNext()
+}
+
+async function prefetchNext() {
+  const keyAtStart = poolKey.value
+  try {
+    const entry = await randomEntry(props.poolIds)
+    if (poolKey.value !== keyAtStart) return // 池子在请求期间变了，这条作废
+    nextUp.value = { entry, poolKey: keyAtStart }
+    prefetchEntryHtml(entry.dictionary_id, entry.word, [entry.entry_id])
+  } catch {
+    /* 预取失败无所谓，点【换一个】时走同步路径 */
+  }
+}
+
+async function next() {
+  if (loading.value) return
+  const up = nextUp.value
+  if (up && up.poolKey === poolKey.value) {
+    failed.value = false
+    current.value = up.entry
+    nextUp.value = null
+    afterShow()
+    return
+  }
+  nextUp.value = null
+  await run()
 }
 
 onMounted(run)
-// 换一个
-watch(reroll, run)
-// 词典池变化（用户改了检索范围勾选）立即换一条，保证池子与内容一致
+// 池子变化（用户改了检索范围勾选）：作废预取、立即按新池换一条
 watch(
   () => props.poolIds.join(','),
   () => {
+    nextUp.value = null
     if (!loading.value) run()
   },
 )
