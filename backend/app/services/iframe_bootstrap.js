@@ -263,34 +263,41 @@
   var pending = false
   var ticks = 0
 
+  // 测量哨兵：0 高度的块元素，钉在 body 末尾。它的底边天然位于「全部内容 + 末元素
+  // 外距」之后——Range 边界盒不含外距（body 默认 8px + 末元素外距，实测少 8~24px），
+  // 盒子比内容矮一截，词条右侧就会出现滚动条；scrollHeight 又有「视口托底」（见下）
+  // 不能用。词典自己的脚本可能往 body 追加元素，所以每次测量前都把哨兵重新挪到末尾。
+  function ensureSentinel(doc) {
+    var sentinel = doc.getElementById('mydict-measure-end')
+    if (!sentinel) {
+      sentinel = doc.createElement('div')
+      sentinel.id = 'mydict-measure-end'
+      sentinel.style.cssText =
+        'display:block;height:0;margin:0;padding:0;border:0;visibility:hidden'
+    }
+    if (sentinel.parentElement !== doc.body) doc.body.appendChild(sentinel)
+    return sentinel
+  }
+
   function measure() {
     var docEl = document.documentElement
     var body = document.body
     if (!body) return 0
-    // 内容实高用 Range 边界盒量：scrollHeight 有「视口托底」（文档高度永不低于
-    // iframe 自身高度）——一旦某次测量虚高把盒子撑大（如 CSS 尚未加载完时按 300px
-    // 默认宽度排版），之后内容再矮，scrollHeight 也报不出更小的值，盒子永远缩不
-    // 回来，表现为词条尾部一大段空白。Range 量的是内容自身的底边位置，虚高后
-    // 能跟着缩回。
     var height = 0
-    if (document.createRange) {
-      try {
-        var range = document.createRange()
-        range.selectNodeContents(body)
-        var contentBottom = range.getBoundingClientRect().bottom
-        var bodyTop = body.getBoundingClientRect().top
-        var bodyStyle = window.getComputedStyle(body)
-        height =
-          contentBottom - bodyTop +
-          (parseFloat(bodyStyle.paddingBottom) || 0) +
-          (parseFloat(bodyStyle.marginBottom) || 0)
-      } catch (e) {
-        /* 老内核不支持时走下面的兜底 */
-      }
+    try {
+      var sentinel = ensureSentinel(document)
+      var docTop = docEl.getBoundingClientRect().top
+      var bodyStyle = window.getComputedStyle(body)
+      height =
+        sentinel.getBoundingClientRect().bottom - docTop +
+        (parseFloat(bodyStyle.paddingBottom) || 0) +
+        (parseFloat(bodyStyle.marginBottom) || 0)
+    } catch (e) {
+      /* 哨兵不可用时退回 scrollHeight（有视口托底，虚高但不会丢内容） */
     }
     if (height <= 0) {
+      height = Math.max(body.scrollHeight, body.offsetHeight)
       if (docEl) height = Math.max(height, docEl.scrollHeight, docEl.offsetHeight)
-      height = Math.max(height, body.scrollHeight, body.offsetHeight)
     }
     return height
   }

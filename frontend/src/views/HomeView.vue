@@ -67,7 +67,6 @@ const showScope = computed(() => authStore.isLoggedIn)
 
 const scopeSummary = computed(() => {
   if (onlineMode.value) return '在线词典'
-  if (randomMode.value) return '随机浏览'
   if (dictLoading.value) return '载入中…'
   if (!isFiltering.value) return `全部词典（${allIds.value.length}）`
   return `已选 ${checkedIds.value.size} / ${allIds.value.length} 部`
@@ -153,10 +152,9 @@ const LANGUAGE_SCOPE_CODES: Record<string, string[]> = {
   zh: ['zh', 'zh-Hans', 'zh-Hant'],
 }
 
-/** 侧边栏的「只看某种语言」：勾选该筛选范围下的全部词典 */
+/** 侧边栏的「只看某种语言」：勾选该筛选范围下的全部词典；随机模式下仅换池子 */
 function selectLanguage(scope: string) {
   onlineMode.value = false
-  randomMode.value = false
   const codes = LANGUAGE_SCOPE_CODES[scope] ?? [scope]
   setSelection(
     dictionaries.value.filter((item) => codes.includes(item.lang_from)).map((i) => i.id),
@@ -239,10 +237,10 @@ function scopeLabel(scope: string): string {
   return scope === 'zh' ? ZH_SCOPE_LABELS[activeZhScope.value ?? 'zh'] : langLabel(scope)
 }
 
-/** 标签行当前亮起的按钮：在线/随机各自独占，本地模式下亮「全部」或命中的语言 */
+/** 标签行当前亮起的按钮：在线独占；随机与本地范围标签可以同时点亮（用户要能看出
+ * 随机池用的是哪个组合），本地部分照常显示「全部」或命中的语言。 */
 const activeTab = computed<string>(() => {
   if (onlineMode.value) return 'online'
-  if (randomMode.value) return 'random'
   if (!isFiltering.value) return 'all'
   for (const scope of languageScopes.value) {
     if (matchesScope(scope)) return scope
@@ -274,20 +272,19 @@ const randomMode = ref(false)
 const randomPool = computed(() => (isFiltering.value ? filterIds.value ?? [] : allIds.value))
 
 function selectRandom() {
+  // 再点一次【随机】退出；进在线模式也会退出。本地范围选择只换池子不退出。
   onlineMode.value = false
-  randomMode.value = true
+  randomMode.value = !randomMode.value
 }
 
-// 本地范围选择（勾选/全部/不选）会退出在线模式；随机模式换池子但不退出
+// 本地范围选择（勾选/全部/不选）会退出在线模式；随机模式下只换池子不退出
 function onToggleDict(id: number) {
   onlineMode.value = false
-  randomMode.value = false
   toggleDictionary(id)
 }
 
 function onSelectAll() {
   onlineMode.value = false
-  randomMode.value = false
   selectAllOrClear()
 }
 
