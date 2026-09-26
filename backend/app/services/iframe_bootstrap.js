@@ -266,9 +266,32 @@
   function measure() {
     var docEl = document.documentElement
     var body = document.body
+    if (!body) return 0
+    // 内容实高用 Range 边界盒量：scrollHeight 有「视口托底」（文档高度永不低于
+    // iframe 自身高度）——一旦某次测量虚高把盒子撑大（如 CSS 尚未加载完时按 300px
+    // 默认宽度排版），之后内容再矮，scrollHeight 也报不出更小的值，盒子永远缩不
+    // 回来，表现为词条尾部一大段空白。Range 量的是内容自身的底边位置，虚高后
+    // 能跟着缩回。
     var height = 0
-    if (docEl) height = Math.max(height, docEl.scrollHeight, docEl.offsetHeight)
-    if (body) height = Math.max(height, body.scrollHeight, body.offsetHeight)
+    if (document.createRange) {
+      try {
+        var range = document.createRange()
+        range.selectNodeContents(body)
+        var contentBottom = range.getBoundingClientRect().bottom
+        var bodyTop = body.getBoundingClientRect().top
+        var bodyStyle = window.getComputedStyle(body)
+        height =
+          contentBottom - bodyTop +
+          (parseFloat(bodyStyle.paddingBottom) || 0) +
+          (parseFloat(bodyStyle.marginBottom) || 0)
+      } catch (e) {
+        /* 老内核不支持时走下面的兜底 */
+      }
+    }
+    if (height <= 0) {
+      if (docEl) height = Math.max(height, docEl.scrollHeight, docEl.offsetHeight)
+      height = Math.max(height, body.scrollHeight, body.offsetHeight)
+    }
     return height
   }
 
@@ -326,8 +349,10 @@
       },
       true
     )
-    // 部分词典的首屏内容由延迟脚本填充，定时补几次；有上限，不做无限轮询
-    ;[0, 60, 200, 600, 1500, 3000].forEach(function (delay) {
+    // 部分词典的首屏内容由延迟脚本填充，定时补几次；有上限，不做无限轮询。
+    // 最早一档 200ms：更早的测量会撞上「CSS 还没加载完、按 300px 默认宽度排版」
+    // 的虚高（见 measure 注释），把盒子一次性锁死在大值上。
+    ;[200, 600, 1500, 3000].forEach(function (delay) {
       setTimeout(report, delay)
     })
     var tail = setInterval(function () {
