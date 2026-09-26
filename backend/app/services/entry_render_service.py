@@ -128,6 +128,10 @@ _MULTI_ENTRY_STYLE = (
     "[data-mydict-theme='dark'] .mydict-entry-index{color:#7d8f89}"
     "[data-mydict-theme='dark'] .mydict-entry-word{color:#eaf1ee}"
     "[data-mydict-theme='dark'] .mydict-entry-phonetic{color:#7d8f89}"
+    # 跳过视口外分节的排版与绘制：多词条聚合文档（搜韵「毛泽东」82 首叠出 3.3 万像素）
+    # 首屏只排版可见的一两节，其余滚到哪画到哪。contain-intrinsic-size 给视口外的节
+    # 一个估高（真实高度在接近视口时修正），撑起总高度让 scrollHeight/锚点大体可用。
+    ".mydict-entry{content-visibility:auto;contain-intrinsic-size:auto 500px}"
     "</style>"
 )
 
@@ -157,13 +161,20 @@ def _head_snippet(
     theme: str | None = None,
     allow_lookup: bool = False,
     multi_entry: bool = False,
+    extra_head_assets: Sequence[tuple[str, str]] = (),
 ) -> str:
     """要插进文档最前面的内容：编码/Referer 策略 + 主题初值 + 样式 + 引导脚本。
 
     引导脚本必须排在词典自带脚本之前，否则词典脚本一旦先抛错，后面的高度上报、
     链接拦截就都装不上了。样式排在引导脚本之前：它不依赖脚本，早一步应用就少一帧白闪。
 
+    extra_head_assets 是 mdx 同名的 `.css`/`.js`（见 resource_service.same_name_assets）。
+    MDict 客户端与 django-mdict 都会自动加载这类文件；css `<link>` 排在引导脚本**之前**
+    ——内联脚本会等前面的样式表加载完才执行，引导脚本量高度、按暗色规则改写颜色时词典
+    样式就已生效；词典 js 则排在引导脚本之后。
+
     allow_lookup 为真时额外注入选中查词的菜单样式，并把开关告诉引导脚本。
+    生词本与管理端拿到的文档保持与之前字节级一致（extra_head_assets 为空时）。
     """
     bootstrap = (
         _bootstrap_source()
@@ -172,6 +183,16 @@ def _head_snippet(
     )
     lookup_style = _LOOKUP_STYLE if allow_lookup else ""
     multi_style = _MULTI_ENTRY_STYLE if multi_entry else ""
+    css_links = "".join(
+        f'<link rel="stylesheet" href="{url}">'
+        for name, url in extra_head_assets
+        if name.lower().endswith(".css")
+    )
+    js_scripts = "".join(
+        f'<script src="{url}"></script>'
+        for name, url in extra_head_assets
+        if name.lower().endswith(".js")
+    )
     return (
         '<meta charset="utf-8">'
         # 不把本站地址带给出站请求
@@ -182,8 +203,26 @@ def _head_snippet(
         f"{_NO_HSCROLL_STYLE}"
         f"{multi_style}"
         f"{lookup_style}"
+        f"{css_links}"
         f"<script>{bootstrap}</script>"
+        f"{js_scripts}"
     )
+
+
+def _filter_referenced_assets(
+    extra_head_assets: Sequence[tuple[str, str]], definitions: Sequence[str | None]
+) -> list[tuple[str, str]]:
+    """丢掉词条 HTML 里已经自己引用的同名资源，避免同一份文件加载两次。
+
+    大辞泉等词典的词条里本来就有 `<link href="oxbw.css">`（经资源改写后文件名仍会出现
+    在释义文本里），按「文件名是否出现在释义中」判断足够可靠，也省得逐条解析 HTML。
+    """
+    haystack = "\n".join((definition or "").lower() for definition in definitions)
+    return [
+        (name, url)
+        for name, url in extra_head_assets
+        if name.lower() not in haystack
+    ]
 
 
 def render_entry_document(
@@ -192,6 +231,7 @@ def render_entry_document(
     dictionary_id: int,
     theme: str | None = None,
     allow_lookup: bool = False,
+    extra_head_assets: Sequence[tuple[str, str]] = (),
 ) -> str:
     """把一条释义渲染成一个完整 HTML 文档。等价于 `render_entries_document` 传一条。"""
     return render_entries_document(
@@ -199,6 +239,7 @@ def render_entry_document(
         dictionary_id=dictionary_id,
         theme=theme,
         allow_lookup=allow_lookup,
+        extra_head_assets=extra_head_assets,
     )
 
 
@@ -208,6 +249,7 @@ def render_entries_document(
     dictionary_id: int,
     theme: str | None = None,
     allow_lookup: bool = False,
+    extra_head_assets: Sequence[tuple[str, str]] = (),
 ) -> str:
     """把一**组**词条渲染成一个完整 HTML 文档。
 
@@ -230,6 +272,9 @@ def render_entries_document(
     allow_lookup 只在**前台查询页**那条路径上传 True：选中文字弹【查词】需要有地方接住这个
     查询（最后由 iframe 发 mydict:entry 消息、父页发起新查询）。生词本与管理端预览没有查词
     框，传 False 让它们连菜单都不出现。
+
+    extra_head_assets 是 mdx 同名的 `.css`/`.js` 资源 `(文件名, URL)`（调用方用
+    resource_service.same_name_assets 算出来）；词条 HTML 已经引用了的会被过滤掉。
     """
     if not entries:
         return render_entry_document("", dictionary_id=dictionary_id, theme=theme)
@@ -247,9 +292,19 @@ def render_entries_document(
             dictionary_id=dictionary_id,
             theme=theme,
             allow_lookup=allow_lookup,
+            extra_head_assets=extra_head_assets,
         )
 
-    head = _head_snippet(dictionary_id, theme, allow_lookup, multi_entry=not single)
+    extra_head_assets = _filter_referenced_assets(
+        extra_head_assets, [definition for _, definition, _ in entries]
+    )
+    head = _head_snippet(
+        dictionary_id,
+        theme,
+        allow_lookup,
+        multi_entry=not single,
+        extra_head_assets=extra_head_assets,
+    )
 
     if single:
         definition = entries[0][1]

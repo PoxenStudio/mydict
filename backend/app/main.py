@@ -20,6 +20,8 @@ from app.api.v1.query import router as v1_query_router
 from app.api.v1.vocab import router as v1_vocab_router
 from app.api.web.auth import router as web_auth_router
 from app.api.web.dict import router as web_dict_router
+from app.api.web.online import router as web_online_router
+from app.api.web.random_pick import router as web_random_router
 from app.api.web.public_settings import router as web_public_settings_router
 from app.api.web.vocab import router as web_vocab_router
 from app.core import bootstrap
@@ -74,6 +76,8 @@ app.include_router(admin_tasks_router, prefix="/api")
 app.include_router(v1_query_router, prefix="/api")
 app.include_router(v1_vocab_router, prefix="/api")
 app.include_router(web_dict_router, prefix="/api")
+app.include_router(web_online_router, prefix="/api")
+app.include_router(web_random_router, prefix="/api")
 app.include_router(web_vocab_router, prefix="/api")
 app.include_router(web_public_settings_router, prefix="/api")
 
@@ -126,5 +130,12 @@ if (static_dir / "assets").is_dir():
     def spa_fallback(full_path: str) -> FileResponse:
         candidate = static_dir / full_path
         if candidate.is_file():
+            # 哈希命名的静态资源可以放心长缓存
             return FileResponse(candidate)
-        return FileResponse(static_dir / "index.html")
+        # index.html 本身没有哈希，必须 no-cache：否则浏览器启发式缓存旧页面，
+        # 部署新版本后用户还在跑上一版的 JS（勾选错位这类"修了没生效"就是这么来的）。
+        # no-cache 每次都带条件请求验证，没有 ETag/Last-Modified 时等价于每次拉取，
+        # 这个文件的代价可以忽略。
+        return FileResponse(
+            static_dir / "index.html", headers={"Cache-Control": "no-cache"}
+        )

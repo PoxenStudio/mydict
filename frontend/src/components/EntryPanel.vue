@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import EntryFrame from './EntryFrame.vue'
 import FavoriteButton from './FavoriteButton.vue'
-import { getEntryHtml } from '../api/dict'
+import { getEntryHtml, prefetchEntryHtml } from '../api/dict'
 import type { QueryResultItem } from '../types/query'
 
 const props = defineProps<{
@@ -25,6 +25,8 @@ const emit = defineEmits<{
   entry: [word: string]
   toggleFavorite: [word: string, dictionaryId: number]
   unsupportedAudio: []
+  /** 分批切换后请求把面板滚回视口顶部（HomeView 复用展开时的滚动逻辑） */
+  rescroll: []
 }>()
 
 const KNOWN_ARRAY_LABELS: Record<string, string> = {
@@ -50,6 +52,59 @@ const KNOWN_TEXT_LABELS: Record<string, string> = {
 
 const primary = computed(() => props.entries[0])
 const hasMultiple = computed(() => props.entries.length > 1)
+
+// --- 多词条分批加载 ---
+// 词条渲染接口对 entry_ids 有 200 条上限（防伪造，见后端 dict.py）；搜韵这类
+// 「每首诗一个词条」的词典对常见诗人就是几百条（李白 823）。每批一次独立的
+// 文档请求、换批重建 iframe（:key 切换），按钮由父级渲染在词条卡片底部——
+// 不进引导脚本协议，后端零改动。
+const BATCH_SIZE = 200
+const batchIndex = ref(0)
+const batchCount = computed(() => Math.max(1, Math.ceil(props.entries.length / BATCH_SIZE)))
+const currentBatchIds = computed(() =>
+  props.entries
+    .slice(batchIndex.value * BATCH_SIZE, (batchIndex.value + 1) * BATCH_SIZE)
+    .map((item) => item.id),
+)
+const batchLabel = computed(() => {
+  const start = batchIndex.value * BATCH_SIZE + 1
+  const end = Math.min((batchIndex.value + 1) * BATCH_SIZE, props.entries.length)
+  return `第 ${batchIndex.value + 1}/${batchCount.value} 批 · 第 ${start}-${end} 条`
+})
+
+// 换查询词/换结果集时归零，避免停在已不存在的批上
+watch(() => [props.queryWord, props.entries.length], () => {
+  batchIndex.value = 0
+})
+
+function gotoBatch(delta: number) {
+  const next = batchIndex.value + delta
+  if (next < 0 || next >= batchCount.value) return
+  batchIndex.value = next
+  emit('rescroll')
+}
+
+// 当前批挂载后就预取下一批：翻到批底部点【下一批】时文档已在手，基本瞬时
+watch([batchIndex, () => props.expanded], ([index, expanded]) => {
+  if (!expanded || index + 1 >= batchCount.value) return
+  const ids = props.entries
+    .slice((index + 1) * BATCH_SIZE, (index + 2) * BATCH_SIZE)
+    .map((item) => item.id)
+  prefetchEntryHtml(primary.value.dictionary_id, props.queryWord, ids)
+})
+
+/**
+ * 悬停/按下标题时预取词条文档：点击展开时 HTML 已在手，iframe 立即挂载。
+ * 指针事件在 click 之前触发（pointerdown 比 click 早一整次按压），局域网内足够把
+ * 请求往返藏进点击里；已展开/已挂载的没有意义，跳过。缓存去重由 api 层负责。
+ */
+function prefetch() {
+  if (props.expanded || !props.queryWord) return
+  const ids = hasMultiple.value
+    ? props.entries.map((item) => item.id)
+    : [primary.value.id]
+  prefetchEntryHtml(primary.value.dictionary_id, props.queryWord, ids)
+}
 
 function tagBadges(item: QueryResultItem): string[] {
   const tag = item.extra?.tag
@@ -99,6 +154,8 @@ function isLoading(word: string) {
       tabindex="0"
       :aria-expanded="expanded"
       @click="emit('toggle')"
+      @pointerdown="prefetch"
+      @mouseenter="prefetch"
       @keydown.enter.prevent="emit('toggle')"
       @keydown.space.prevent="emit('toggle')"
     >
@@ -135,11 +192,26 @@ function isLoading(word: string) {
       -->
       <EntryFrame
         v-if="hasMultiple"
-        :key="`${primary.dictionary_id}-${primary.word}`"
-        :loader="() => getEntryHtml(primary.dictionary_id, queryWord, entries.map((item) => item.id))"
+        :key="`${primary.dictionary_id}-${primary.word}-b${batchIndex}`"
+        :loader="() => getEntryHtml(primary.dictionary_id, queryWord, currentBatchIds)"
         @entry="emit('entry', $event)"
         @unsupported-audio="emit('unsupportedAudio')"
       />
+
+      <!-- 分批导航：只在多词条且超过一批时出现 -->
+      <nav v-if="hasMultiple && batchCount > 1" class="batch-nav">
+        <button type="button" :disabled="batchIndex === 0" @click="gotoBatch(-1)">
+          上一批
+        </button>
+        <span class="batch-label">{{ batchLabel }}</span>
+        <button
+          type="button"
+          :disabled="batchIndex >= batchCount - 1"
+          @click="gotoBatch(1)"
+        >
+          下一批
+        </button>
+      </nav>
 
       <!--
         单条：per-entry 的徽标（牛津3000 / 柯林斯星级 / extra 字段）只有 ECDICT 这类
@@ -308,5 +380,53 @@ function isLoading(word: string) {
   margin: var(--space-5) 0;
   border: none;
   border-top: 1px solid var(--color-border);
+}
+
+/* 手机：词典卡片吃满屏宽，词条内容区只留 8px 左右内边距（约 95% 可用宽度）。
+   之前的 95% 卡片 + 默认内边距叠加，实测仍然显得窄。 */
+@media (max-width: 640px) {
+  .panel {
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .panel-body {
+    padding: 0 var(--space-2) var(--space-3);
+  }
+}
+
+/* 分批导航：贴在词条内容下方，胶囊按钮与检索范围标签同款 */
+.batch-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 var(--space-3);
+}
+
+.batch-nav button {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-surface);
+  color: var(--color-brand-600);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-4);
+  cursor: pointer;
+}
+
+.batch-nav button:hover:not(:disabled) {
+  border-color: var(--color-brand-500);
+  background: var(--color-brand-50);
+}
+
+.batch-nav button:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+.batch-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
 }
 </style>

@@ -13,7 +13,8 @@ import unicodedata
 from functools import lru_cache
 
 # 扩展规则一有变化就递增，让查询缓存整体失效——否则旧结果会在 TTL 内继续被命中。
-EXPANSION_VERSION = 1
+# v2：search 加了「精确未命中 → 前缀兜底」，旧缓存里的空/少结果要整体作废。
+EXPANSION_VERSION = 2
 
 # 繁简转换是「一对多」的（发 → 發/髮），且不同地区用字不同，所以多取几个配置一起用，
 # 尽量覆盖各词典实际采用的写法。

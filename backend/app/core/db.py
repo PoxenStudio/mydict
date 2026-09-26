@@ -20,6 +20,12 @@ def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
     # 等待重试而不是立刻抛错。
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=5000")
+    # 让 LIKE '前缀%' 走索引区间定位。默认（OFF）时 LIKE 大小写不敏感，与 BINARY 索引
+    # 的排序对不上，规划器只能按 dictionary_id 收窄后**逐行**求值——搜韵 826 万条一条
+    # 前缀查询要扫数秒（实测查「毛泽东」词条加载 10 秒就是这么来的）。开成大小写敏感后
+    # 每个前缀查询都是索引区间读（实测 0.00s）。所有匹配键（word_lower 等）入库前都已
+    # lower()，大小写敏感不会漏掉任何应命中的行。
+    cursor.execute("PRAGMA case_sensitive_like=ON")
     cursor.close()
 
 

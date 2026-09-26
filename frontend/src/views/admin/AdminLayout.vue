@@ -11,6 +11,7 @@ const authStore = useAdminAuthStore()
 const drawerOpen = ref(false)
 
 const navItems = [
+  { to: '/', label: '回到首页', exact: true },
   { to: '/admin', label: '概览', exact: true },
   { to: '/admin/dictionaries', label: '词典管理' },
   { to: '/admin/tokens', label: 'Token 管理' },

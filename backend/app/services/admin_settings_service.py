@@ -5,16 +5,27 @@ from app.services import settings_service
 from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
 
-_BOOL_KEYS = {"open_access", "allow_registration"}
+_BOOL_KEYS = {"open_access", "allow_registration", "online_dict_enabled"}
 _INT_KEYS = {
     "token_default_daily_limit",
     "anonymous_ip_rate_limit_per_min",
     "user_ip_rate_limit_per_min",
 }
 _OPTIONAL_INT_KEYS = {"vocab_max_items_per_owner"}
-_STR_KEYS = {"site_name", "search_hint_text"}
+_STR_KEYS = {"site_name", "search_hint_text", "online_dict_proxy", "online_dict_sources"}
 
 _SEARCH_HINT_DEFAULT = "小搜一下, 大进一步"
+
+# 在线词典源的合法 id（与 online_dict_service.ALL_SOURCE_IDS 对应）；空值 = 全部启用
+_ONLINE_SOURCE_IDS = ("wikipedia", "wiktionary", "baike", "google", "urban", "merriam", "goodreads")
+
+
+def _normalize_online_sources(raw: str | None) -> str:
+    """把用户输入的 CSV 归一化成固定顺序的白名单 CSV；非法 id 忽略。"""
+    if not raw:
+        return ""
+    picked = {sid.strip() for sid in raw.split(",")}
+    return ",".join(sid for sid in _ONLINE_SOURCE_IDS if sid in picked)
 
 
 def get_all_settings(db: Session, defaults: Settings) -> dict:
@@ -24,6 +35,10 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         ),
         "allow_registration": settings_service.get_bool_setting(
             db, "allow_registration", defaults.allow_registration_default
+        ),
+        # 在线词典总开关：默认禁用（出站抓取第三方站点，是否开放由部署者决定）
+        "online_dict_enabled": settings_service.get_bool_setting(
+            db, "online_dict_enabled", False
         ),
         "token_default_daily_limit": settings_service.get_int_setting(
             db, "token_default_daily_limit", defaults.token_default_daily_limit
@@ -39,6 +54,12 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         "search_hint_text": settings_service.get_setting(
             db, "search_hint_text", _SEARCH_HINT_DEFAULT
         ),
+        "online_dict_proxy": settings_service.get_setting(
+            db, "online_dict_proxy", defaults.online_dict_proxy
+        ),
+        "online_dict_sources": _normalize_online_sources(
+            settings_service.get_setting(db, "online_dict_sources", "")
+        ),
     }
 
 
@@ -49,6 +70,10 @@ def get_public_settings(db: Session, defaults: Settings) -> dict:
         ),
         "allow_registration": settings_service.get_bool_setting(
             db, "allow_registration", defaults.allow_registration_default
+        ),
+        # 前台要靠它决定是否渲染【在线】标签
+        "online_dict_enabled": settings_service.get_bool_setting(
+            db, "online_dict_enabled", False
         ),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
         "initialized": is_initialized(db),
@@ -84,6 +109,8 @@ def update_settings(
         elif key in _INT_KEYS:
             settings_service.set_setting(db, key, str(value))
         else:
+            if key == "online_dict_sources":
+                value = _normalize_online_sources(value)
             settings_service.set_setting(db, key, value or "")
         changed[key] = value
 

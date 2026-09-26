@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -58,6 +58,17 @@ def set_allowed_dictionaries(
     admin: Admin = Depends(require_admin),
 ) -> TokenOut:
     return token_service.set_allowed_dictionaries(db, token_id, body.dictionary_ids, admin.id)
+
+
+@router.delete("/{token_id}", status_code=204)
+def delete_token(
+    token_id: int,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> Response:
+    """删除 Token；查询日志/统计保留但匿名化（token_id 置 NULL），生词本随级联清理。"""
+    token_service.delete_token(db, token_id, admin.id)
+    return Response(status_code=204)
 
 
 @router.get("/{token_id}/vocab-count")

@@ -28,6 +28,17 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "adminpass123"
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """限流计数器是进程内、按 IP 累积的，60 秒窗口跨测试文件不重置——前面测试文件
+    的消费量会把后面的测试顶到 429。每个用例前后各清一次，彻底隔离。"""
+    from app.core import rate_limiter
+
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()
+
+
 @pytest.fixture
 def db_session() -> Iterator:
     db = SessionLocal()

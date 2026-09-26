@@ -7,6 +7,7 @@ import RefreshButton from '../../components/admin/RefreshButton.vue'
 import DictionaryPickerDialog from '../../components/DictionaryPickerDialog.vue'
 import type { ApiTokenItem } from '../../types/token'
 import type { PublicDictionary } from '../../types/query'
+import { copyText } from '../../utils/clipboard'
 
 const tokens = ref<ApiTokenItem[]>([])
 const loading = ref(false)
@@ -123,13 +124,27 @@ function showRevealDialog(name: string, token: string) {
   revealVisible.value = true
 }
 
-async function copyToken() {
+async function confirmDeleteToken(token: ApiTokenItem) {
   try {
-    await navigator.clipboard.writeText(revealToken.value)
-    ElMessage.success('已复制到剪贴板')
+    await ElMessageBox.confirm(
+      `确定删除 Token「${token.name}」？删除后使用它调用的客户端将全部失效，且无法恢复。` +
+        '它的查询日志与统计会保留（匿名化），生词本会一并删除。',
+      '删除 Token',
+      { type: 'warning', confirmButtonText: '删除' },
+    )
   } catch {
-    ElMessage.warning('复制失败，请手动选中复制')
+    return
   }
+  await tokenApi.deleteToken(token.id)
+  tokens.value = tokens.value.filter((t) => t.id !== token.id)
+  ElMessage.success('已删除')
+}
+
+async function copyToken() {
+  // navigator.clipboard 只在 HTTPS/localhost 下存在；内网 http 访问必须走 execCommand 回退
+  const ok = await copyText(revealToken.value)
+  if (ok) ElMessage.success('已复制到剪贴板')
+  else ElMessage.warning('复制失败，请手动选中文本复制（Token 关闭弹窗后无法再查看）')
 }
 
 function formatDate(value: string | null) {
@@ -182,6 +197,7 @@ function formatDate(value: string | null) {
           >
             {{ token.status === 'active' ? '禁用' : '启用' }}
           </el-button>
+          <el-button text type="danger" @click="confirmDeleteToken(token)">删除</el-button>
         </span>
       </div>
       <div v-if="!loading && tokens.length === 0" class="empty">暂无 Token，点击右上角新建。</div>

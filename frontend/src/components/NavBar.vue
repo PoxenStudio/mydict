@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
@@ -11,11 +12,22 @@ import ChangePasswordDialog from './ChangePasswordDialog.vue'
 import DictionaryPickerDialog from './DictionaryPickerDialog.vue'
 import type { PublicDictionary } from '../types/query'
 
+const router = useRouter()
 const authStore = useUserAuthStore()
 const settingsStore = useSettingsStore()
 const changePasswordVisible = ref(false)
 const dictPickerVisible = ref(false)
 const availableDictionaries = ref<PublicDictionary[]>([])
+
+// 手机上「登录/注册/后台」折叠成一个下拉（桌面端仍平铺）
+const mobileQuery = window.matchMedia('(max-width: 640px)')
+const isMobile = ref(mobileQuery.matches)
+function onMobileChange(event: MediaQueryListEvent) {
+  isMobile.value = event.matches
+}
+onMounted(() => mobileQuery.addEventListener('change', onMobileChange))
+// SPA 常驻组件，监听随页面生命周期存在；onBeforeUnmount 兜底（热更新重建组件时防泄漏）
+onBeforeUnmount(() => mobileQuery.removeEventListener('change', onMobileChange))
 
 onMounted(() => {
   if (!settingsStore.loaded) settingsStore.load().catch(() => undefined)
@@ -30,6 +42,10 @@ async function handleUserCommand(command: string) {
   } else if (command === 'dictionaries') {
     availableDictionaries.value = await listDictionaries('all')
     dictPickerVisible.value = true
+  } else if (command === 'admin') {
+    router.push('/admin')
+  } else if (command === 'login' || command === 'register') {
+    router.push(`/${command}`)
   }
 }
 
@@ -50,7 +66,7 @@ async function saveAllowedDictionaries(ids: number[] | null) {
     <nav class="nav-links">
       <router-link to="/" exact-active-class="active">查询</router-link>
       <router-link to="/vocab" active-class="active">生词本</router-link>
-      <router-link to="/history" active-class="active">历史记录</router-link>
+      <router-link to="/history" active-class="active">历史</router-link>
     </nav>
 
     <div class="nav-actions">
@@ -65,7 +81,24 @@ async function saveAllowedDictionaries(ids: number[] | null) {
             <el-dropdown-menu>
               <el-dropdown-item command="dictionaries">词典选择</el-dropdown-item>
               <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
+              <el-dropdown-item command="admin">后台</el-dropdown-item>
               <el-dropdown-item command="logout" divided>退出</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
+      <template v-else-if="isMobile">
+        <!-- 手机：三个链接折叠成下拉，与登录态的用户名下拉同款交互 -->
+        <el-dropdown trigger="click" @command="handleUserCommand">
+          <span class="username-trigger">
+            菜单
+            <el-icon class="dropdown-icon"><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="login">登录</el-dropdown-item>
+              <el-dropdown-item command="register">注册</el-dropdown-item>
+              <el-dropdown-item command="admin">后台</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>

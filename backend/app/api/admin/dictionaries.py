@@ -27,7 +27,7 @@ from app.schemas.dictionary import (
     ReorderRequest,
     TestQueryEntryOut,
 )
-from app.services import dictionary_service, query_service
+from app.services import dictionary_service, query_service, resource_service
 from app.services.entry_render_service import render_entries_document
 
 router = APIRouter(prefix="/admin/dictionaries", tags=["admin-dictionaries"])
@@ -278,12 +278,30 @@ def test_query(
     return [_entry_to_out(e) for e in entries]
 
 
+@router.post("/{dictionary_id}/cleanup-uss-speakers", response_model=DictionaryImportTaskOut)
+def cleanup_uss_speakers(
+    dictionary_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _admin: Admin = Depends(require_admin),
+) -> DictionaryImportTaskOut:
+    """清理词典释义里「指向缺失 mp3」的红色美音例句喇叭（牛津9 的 uss 喇叭）。
+
+    文件存在性在后台任务里逐条解析（大小写不敏感兜底），文件还在的按钮保留。
+    """
+    if db.get(Dictionary, dictionary_id) is None:
+        raise NotFoundError("词典不存在")
+    task_id = dictionary_service.start_uss_cleanup(db, dictionary_id, settings)
+    return DictionaryImportTaskOut(task_id=task_id)
+
+
 @router.get("/{dictionary_id}/entry", response_class=HTMLResponse)
 def entry_document(
     dictionary_id: int,
     word: str,
     theme: Literal["light", "dark"] | None = None,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _admin: Admin = Depends(require_admin),
 ) -> HTMLResponse:
     """管理端预览单条词条，供「测试查询」弹窗放进隔离 iframe。
@@ -293,7 +311,8 @@ def entry_document(
     必须走 iframe 而不是 v-html：管理端 token 也在 localStorage 里，用 v-html 渲染
     第三方词典的 HTML 等于把权限最高的凭证暴露出去。
     """
-    if db.get(Dictionary, dictionary_id) is None:
+    dictionary = db.get(Dictionary, dictionary_id)
+    if dictionary is None:
         raise NotFoundError("词典不存在")
     # 与前台一致：同一词头的多条聚合进一个文档（见 query_service.get_entries_for_document）
     entries = query_service.get_entries_for_document(db, dictionary_id, word)
@@ -304,5 +323,10 @@ def entry_document(
             [(e.word, e.definition, e.phonetic) for e in entries],
             dictionary_id=dictionary_id,
             theme=theme,
+            extra_head_assets=resource_service.same_name_assets(
+                Path(settings.dictionary_storage_path) / str(dictionary_id) / "res",
+                dictionary_id,
+                dictionary.file_path,
+            ),
         )
     )

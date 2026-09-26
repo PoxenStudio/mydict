@@ -3,26 +3,34 @@
    优先采用标准属性，旧版走 ::-webkit-scrollbar。
 
    必须是全局样式：scoped 样式里的 `::-webkit-scrollbar` 会被编译加上属性选择器，
-   而滚动条伪元素不是真实元素，加了属性选择器就永远匹配不上。 */
+   而滚动条伪元素不是真实元素，加了属性选择器就永远匹配不上。
+
+   html 一份是给页面主滚动条的（否则首页右侧一直是浏览器默认的宽滚动条）；
+   颜色走主题变量，暗色模式自动切换。 */
+html,
 .app-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: var(--color-scrollbar-thumb) var(--color-scrollbar-track);
 }
 
+html::-webkit-scrollbar,
 .app-scrollbar::-webkit-scrollbar {
   width: var(--size-scrollbar-width);
   height: var(--size-scrollbar-width);
 }
 
+html::-webkit-scrollbar-track,
 .app-scrollbar::-webkit-scrollbar-track {
   background: var(--color-scrollbar-track);
 }
 
+html::-webkit-scrollbar-thumb,
 .app-scrollbar::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar-thumb);
   border-radius: var(--radius-full);
 }
 
+html::-webkit-scrollbar-thumb:hover,
 .app-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--color-scrollbar-thumb-hover);
 }

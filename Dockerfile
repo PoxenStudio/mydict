@@ -17,6 +17,11 @@ LABEL Author="PoxenStudio(poxenstudio@gmail.com)" \
 FROM docker.1ms.run/python:3.12-slim
 WORKDIR /app
 ARG GIT_BRANCH=dev
+# liblzo2 运行库：LZO 压缩的 mdx（读懂你的化验单、超级新华字典等 6 部）需要。
+# 不装 python-lzo（无预编译 wheel，编译不可靠），由 app/parsers/lzo_compat.py
+# 用 ctypes 直接调 liblzo2 的 lzo1x_decompress_safe。
+RUN apt-get update && apt-get install -y --no-install-recommends liblzo2-2 \
+    && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ .

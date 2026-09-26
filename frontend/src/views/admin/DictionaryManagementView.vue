@@ -208,6 +208,7 @@ async function onDrop(targetIndex: number) {
 // --- 从源文件修复（附属资源 + 样式标记）/ 重新解析（重灌词条）---
 const resourceRunning = ref(false)
 const reparseRunning = ref(false)
+const ussCleanupRunning = ref(false)
 
 /**
  * 从源文件修复：① 补源文件旁边的 CSS/字体/JS/图片；② 展开词条里的 `` `编号` `` 样式标记。
@@ -231,6 +232,42 @@ async function repairFromSource() {
     ElMessage.success(`修复完成：${parts.join('；')}`)
   } finally {
     resourceRunning.value = false
+  }
+}
+
+/**
+ * 清理缺失的美音例句喇叭：把释义里「指向不存在 mp3」的红色喇叭（audio-uss-liju）锚点
+ * 删掉，文件还在的保留。牛津高阶第9版的美音 mp3 源词典就基本没打包（实测 99% 缺失），
+ * 点红色喇叭必报「发音不存在或解码失败」；重新解析后需要重跑。
+ */
+async function cleanupUssSpeakers() {
+  const ids = selectedIds.value.length ? [...selectedIds.value] : dictionaries.value.map((d) => d.id)
+  const scope = selectedIds.value.length ? `所选的 ${ids.length} 部词典` : `全部 ${ids.length} 部词典（未勾选任何词典）`
+  try {
+    await ElMessageBox.confirm(
+      `将扫描${scope}的释义，删掉「指向缺失 mp3」的红色美音例句喇叭（牛津9 的 uss，` +
+        '实测其 99% 的音频文件源词典就没有打包）。蓝色英音喇叭与文件尚存的按钮不受影响。',
+      '清理缺失喇叭',
+      { type: 'warning', confirmButtonText: '开始清理' },
+    )
+  } catch {
+    return
+  }
+  ussCleanupRunning.value = true
+  try {
+    let entries = 0
+    let speakers = 0
+    for (const id of ids) {
+      const { task_id } = await dictApi.cleanupUssSpeakers(id)
+      const task = await waitForImportTask(task_id, 30 * 60 * 1000)
+      entries += resultNumber(task, 'entries') ?? 0
+      speakers += resultNumber(task, 'speakers') ?? 0
+    }
+    ElMessage.success(
+      `清理完成：${entries.toLocaleString()} 条词条删除了 ${speakers.toLocaleString()} 个失效喇叭`,
+    )
+  } finally {
+    ussCleanupRunning.value = false
   }
 }
 
@@ -304,6 +341,7 @@ async function runTestQuery() {
       </div>
       <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
       <el-button :loading="reparseRunning" @click="reparseDictionaries">重新解析</el-button>
+      <el-button :loading="ussCleanupRunning" @click="cleanupUssSpeakers">清理美音喇叭</el-button>
       <el-button @click="renameDialogVisible = true">批量重命名</el-button>
       <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
     </div>

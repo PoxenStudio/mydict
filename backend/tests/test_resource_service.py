@@ -5,6 +5,7 @@ import pytest
 
 from app.services.resource_service import (
     copy_sibling_resources,
+    same_name_assets,
     normalize_resource_path,
     resolve_resource_file,
     rewrite_resource_refs,
@@ -375,3 +376,25 @@ def test_rewrite_resource_refs_handles_mixed_document() -> None:
     assert 'href="/dict-res/12/res/audio/guo.spx"' in result
     assert 'href="https://example.com"' in result
     assert "<style>p{margin:0}</style>" in result
+
+
+def test_same_name_assets_finds_sibling_css_and_js(tmp_path: Path) -> None:
+    """mdx 同名的 .css/.js 是 MDict 客户端自动加载的（搜韵的全部配色都来自同名 css，
+    词条里一个 <link> 都没有）；django-mdict 的 check_same_name_css_js 也是这么补的。"""
+    (tmp_path / "搜韵诗词全文检索版.css").write_text("div.comment{background:#faf1cf}")
+    (tmp_path / "搜韵诗词全文检索版.js").write_text("alert(1)")
+    (tmp_path / "unrelated.png").write_bytes(b"png")
+
+    assets = same_name_assets(
+        tmp_path, 63, "/data/dicts/搜韵诗词全文检索版/搜韵诗词全文检索版.mdx"
+    )
+    assert [name for name, _ in assets] == [
+        "搜韵诗词全文检索版.css",
+        "搜韵诗词全文检索版.js",
+    ]
+    # URL 要编码：词条 iframe 里 <link href> 得能直接命中非 ASCII 文件名
+    assert all(url.startswith("/dict-res/63/res/%") for _, url in assets)
+
+
+def test_same_name_assets_returns_empty_without_same_name_files(tmp_path: Path) -> None:
+    assert same_name_assets(tmp_path, 1, "/d/某词典.mdx") == []

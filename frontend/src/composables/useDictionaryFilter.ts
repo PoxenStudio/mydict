@@ -94,6 +94,14 @@ export function useDictionaryFilter() {
     const current = new Set(selectedIds.value)
     if (current.has(id)) current.delete(id)
     else current.add(id)
+    if (!current.size) {
+      // 取消最后一部时回到「视觉全不选」，而不是跳回全部勾选——用户刚看到的是
+      // 只有这一部勾着，取消后的预期自然是回到空勾选的起点（语义仍是不限制）。
+      selectedIds.value = []
+      persist(selectedIds.value)
+      clearedView.value = true
+      return
+    }
     setSelection([...current])
   }
 

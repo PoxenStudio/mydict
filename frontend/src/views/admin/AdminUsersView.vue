@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { copyText } from '../../utils/clipboard'
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as userApi from '../../api/admin/users'
@@ -104,7 +105,9 @@ const tempPasswordValue = ref('')
 
 async function copyTempPassword() {
   try {
-    await navigator.clipboard.writeText(tempPasswordValue.value)
+    const ok = await copyText(tempPasswordValue.value)
+    if (ok) ElMessage.success('已复制到剪贴板')
+    else ElMessage.warning('复制失败，请手动选中文本复制')
     ElMessage.success('已复制到剪贴板')
   } catch {
     ElMessage.warning('复制失败，请手动选中复制')

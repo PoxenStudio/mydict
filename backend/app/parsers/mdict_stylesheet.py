@@ -34,6 +34,12 @@
 是纯文本扫描、不解析 HTML（与 MDict 客户端一致）：理论上 `` `1` `` 若出现在属性值里也会被
 展开成标签。真实语料里不存在这种写法（10 万条逐条核过，0 命中），为它加一套属性值区间
 判断不划算。
+
+**门控**：反引号标记只在 mdx 头部 `Compact=Yes` 时才有意义（MDict 规范：Compact 格式的
+正文用 `` `编号` `` 引用样式表）。非 Compact 的词典里反引号数字是巧合文本，一个字节都不动。
+Compact 但样式表为空时（超级新华字典：Compact=Yes、StyleSheet 空）标记直接剔除——
+django-mdict 的 `substitute_stylesheet` 对空表就是 `re.sub(r'`\d+`', '', txt)`，呈现的紧凑
+排版即剔除后的效果；同理 Compact 且编号没定义时也剔除标记而不是原样显示。
 """
 
 import re
@@ -41,6 +47,18 @@ from collections.abc import Mapping
 
 # `` `12` `` 这种标记；\d+ 贪婪匹配，所以 `12` 不会被拆成 `1` + 2`
 _MARKER_RE = re.compile(r"`(\d+)`")
+
+
+def is_compact(mdx) -> bool:
+    """`.mdx` 头部 `Compact=Yes`（键大小写不规范的老词典按不区分大小写兜底）。"""
+    header = getattr(mdx, "header", None) or {}
+    for key, value in header.items():
+        key_str = key.decode() if isinstance(key, bytes) else str(key)
+        if key_str.lower() != "compact":
+            continue
+        value_str = value.decode() if isinstance(value, bytes) else str(value)
+        return value_str.strip().lower() == "yes"
+    return False
 
 
 def parse_stylesheet(raw: str | None) -> dict[str, tuple[str, str]]:
@@ -67,30 +85,34 @@ def parse_stylesheet(raw: str | None) -> dict[str, tuple[str, str]]:
     return sheet
 
 
-def expand_style_markers(text: str, sheet: Mapping[str, tuple[str, str]]) -> str:
+def expand_style_markers(
+    text: str, sheet: Mapping[str, tuple[str, str]], *, compact: bool
+) -> str:
     """把正文里的 `` `编号` `` 展开成对应的 HTML 标签。
 
-    没有样式表、没有标记、或标记编号都没定义时原样返回，所以对不依赖这个机制的词典
-    （也是绝大多数）是零行为变化。
+    `compact` 是 mdx 头部的 Compact=Yes 门控（见模块注释）：非 Compact 词典原样返回，
+    对不依赖这个机制的词典（也是绝大多数）是零行为变化。Compact 但样式表为空时剔除
+    全部标记（django-mdict 同款行为）；编号没定义时也剔除标记——MDict 客户端不会把
+    标记原样显示。
     """
-    if not text or not sheet or "`" not in text:
+    if not text or not compact or "`" not in text:
         return text
+    if not sheet:
+        return _MARKER_RE.sub("", text)
 
     parts: list[str] = []
     pending = ""
     last = 0
     for match in _MARKER_RE.finditer(text):
         rule = sheet.get(match.group(1))
-        if rule is None:
-            continue  # 编号没定义：原样保留，也不影响「待补」状态
         parts.append(text[last : match.start()])
         parts.append(pending)
-        parts.append(rule[0])
-        pending = rule[1]
+        pending = ""
+        if rule is not None:
+            parts.append(rule[0])
+            pending = rule[1]
         last = match.end()
 
-    if not parts:
-        return text  # 一个都没命中
     parts.append(text[last:])
     parts.append(pending)
     return "".join(parts)
