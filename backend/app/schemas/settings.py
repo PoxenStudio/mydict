@@ -10,6 +10,7 @@ class SystemSettingsOut(BaseModel):
     vocab_max_items_per_owner: int | None
     site_name: str
     search_hint_text: str
+    online_dict_proxy: str
 
 
 class PublicSettingsOut(BaseModel):
@@ -31,3 +32,4 @@ class SystemSettingsUpdateRequest(BaseModel):
     vocab_max_items_per_owner: int | None = None
     site_name: str | None = None
     search_hint_text: str | None = Field(default=None, max_length=100)
+    online_dict_proxy: str | None = Field(default=None, max_length=300)

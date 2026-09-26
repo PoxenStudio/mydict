@@ -171,6 +171,18 @@ async def test_settings_get_and_partial_update(
     )
     assert resp.json()["vocab_max_items_per_owner"] is None
 
+    # 在线词典代理：PUT 后 GET 一致；显式 null 清空为空串（回落 env 默认）
+    resp = await client.put(
+        "/api/admin/settings",
+        json={"online_dict_proxy": "http://192.168.5.197:7890"},
+        headers=admin_headers,
+    )
+    assert resp.json()["online_dict_proxy"] == "http://192.168.5.197:7890"
+    resp = await client.put(
+        "/api/admin/settings", json={"online_dict_proxy": None}, headers=admin_headers
+    )
+    assert resp.json()["online_dict_proxy"] == ""
+
     resp = await client.put(
         "/api/admin/settings", json={"site_name": "MyDict"}, headers=admin_headers
     )

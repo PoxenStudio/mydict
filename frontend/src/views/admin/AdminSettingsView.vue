@@ -16,6 +16,7 @@ const form = reactive({
   vocab_max_items_per_owner: null as number | null,
   site_name: 'MyDict',
   search_hint_text: '小搜一下, 大进一步',
+  online_dict_proxy: '',
 })
 
 const vocabUnlimited = computed({
@@ -122,6 +123,22 @@ async function save() {
             style="width: 320px"
           />
         </el-form-item>
+      </section>
+
+      <section class="panel">
+        <h2>在线词典</h2>
+        <el-form-item label="出站代理服务器">
+          <el-input
+            v-model="form.online_dict_proxy"
+            maxlength="300"
+            placeholder="留空直连；如 http://192.168.5.197:7890"
+            style="width: 420px"
+          />
+        </el-form-item>
+        <p class="hint">
+          维基百科/维基词典的查询经由该代理发出（百度百科直连即可）。保存后立即生效，无需重启。
+          未设置时回落到部署环境变量 ONLINE_DICT_PROXY。
+        </p>
       </section>
 
       <el-button type="primary" :loading="saving" @click="save">保存设置</el-button>

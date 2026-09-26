@@ -138,6 +138,11 @@ function selectLanguage(scope: string) {
 // 并给出 Google 等外部搜索链接。任何本地范围的选择（语言标签/全部/勾选）都会退出该模式。
 const onlineMode = ref(false)
 
+/** 侧栏勾选态：在线模式下本地词典都不参与，显示为全不勾（原勾选保留在 selectedIds，切回即恢复） */
+const sidebarCheckedIds = computed(() =>
+  onlineMode.value ? new Set<number>() : checkedIds.value,
+)
+
 function selectOnline() {
   // 面板自治：挂载/ watch word 时自己发起请求
   onlineMode.value = true
@@ -359,11 +364,11 @@ function onUnsupportedAudio() {
         </button>
         <DictionarySidebar
           :dictionaries="dictionaries"
-          :checked-ids="checkedIds"
+          :checked-ids="sidebarCheckedIds"
           :loading="dictLoading"
           :is-filtering="isFiltering"
           :cleared="clearedView"
-          :online="onlineMode"
+          :mode="onlineMode ? 'online' : 'local'"
           :mobile-open="mobileOpen"
             @toggle="onToggleDict"
             @select-all="onSelectAll"

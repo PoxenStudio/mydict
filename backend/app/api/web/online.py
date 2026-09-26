@@ -18,7 +18,7 @@ from app.core.db import get_db
 from app.core.deps import WebCaller, get_web_caller
 from app.core.exceptions import RateLimitedError
 from app.schemas.query import OnlineLookupResponse
-from app.services import online_dict_service
+from app.services import online_dict_service, settings_service
 router = APIRouter(prefix="/dict", tags=["web-dict"])
 
 # 在线抓取比本地查询贵得多（出站 HTTP + 第三方站点的耐受度），限额收紧到按 IP
@@ -44,8 +44,10 @@ def online_lookup(
             retry_after=rate_limiter.seconds_to_next_minute(),
         )
 
-    # 出站代理按配置热同步（改 Settings 后无需重启；变了才动，免得反复清缓存）
-    proxy = settings.online_dict_proxy.strip()
+    # 出站代理：管理后台设置（DB）覆盖 env 默认值，热同步（变了才动，免得反复清缓存）
+    proxy = settings_service.get_setting(
+        db, "online_dict_proxy", settings.online_dict_proxy
+    ).strip()
     if proxy != online_dict_service.active_proxy():
         online_dict_service.configure_proxy(proxy or None)
 

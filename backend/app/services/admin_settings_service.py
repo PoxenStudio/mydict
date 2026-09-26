@@ -12,7 +12,7 @@ _INT_KEYS = {
     "user_ip_rate_limit_per_min",
 }
 _OPTIONAL_INT_KEYS = {"vocab_max_items_per_owner"}
-_STR_KEYS = {"site_name", "search_hint_text"}
+_STR_KEYS = {"site_name", "search_hint_text", "online_dict_proxy"}
 
 _SEARCH_HINT_DEFAULT = "小搜一下, 大进一步"
 
@@ -38,6 +38,9 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
         "search_hint_text": settings_service.get_setting(
             db, "search_hint_text", _SEARCH_HINT_DEFAULT
+        ),
+        "online_dict_proxy": settings_service.get_setting(
+            db, "online_dict_proxy", defaults.online_dict_proxy
         ),
     }
 

@@ -12,7 +12,8 @@ const props = defineProps<{
   /** 「全部」按钮第二下进入的视觉清空态：复选框全空但语义仍是不限制 */
   cleared: boolean
   /** 当前是否处于「在线词典」模式（在线按钮点亮） */
-  online: boolean
+  /** 当前模式：online 时本地词典都不参与（勾选全空、语言标签全灭），严格与语言标签互斥 */
+  mode: 'local' | 'online'
   /** 移动端由外层控制显示 */
   mobileOpen: boolean
 }>()
@@ -117,25 +118,29 @@ function selectScope(scope: string) {
       <button type="button" class="close-mobile" aria-label="收起" @click="emit('closeMobile')">
         ×
       </button>
-      <span class="count">{{ checkedCount }} / {{ dictionaries.length }}</span>
+      <span class="count">{{ mode === 'online' ? '在线' : `${checkedCount} / ${dictionaries.length}` }}</span>
     </header>
 
     <input v-model="keyword" class="search" type="search" placeholder="筛选词典名" />
 
     <div class="actions">
-      <button type="button" :class="{ active: !isFiltering }" @click="emit('selectAll')">
+      <button
+        type="button"
+        :class="{ active: mode === 'local' && !isFiltering }"
+        @click="emit('selectAll')"
+      >
         {{ cleared ? '不选' : '全部' }}
       </button>
       <button
         v-for="scope in languageScopes"
         :key="scope"
         type="button"
-        :class="{ active: matchesScope(scope) }"
+        :class="{ active: mode === 'local' && matchesScope(scope) }"
         @click="selectScope(scope)"
       >
         {{ scopeLabel(scope) }}
       </button>
-      <button type="button" :class="{ active: online }" @click="emit('selectOnline')">
+      <button type="button" :class="{ active: mode === 'online' }" @click="emit('selectOnline')">
         在线
       </button>
     </div>

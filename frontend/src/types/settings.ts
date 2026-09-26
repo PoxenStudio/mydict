@@ -15,6 +15,8 @@ export interface SystemSettings {
   vocab_max_items_per_owner: number | null
   site_name: string
   search_hint_text: string
+  /** 在线词典出站代理；空串表示直连 */
+  online_dict_proxy: string
 }
 
 export type SystemSettingsUpdate = Partial<SystemSettings>
