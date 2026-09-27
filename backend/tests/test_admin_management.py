@@ -171,13 +171,13 @@ async def test_settings_get_and_partial_update(
     )
     assert resp.json()["vocab_max_items_per_owner"] is None
 
-    # 在线词典代理：PUT 后 GET 一致；显式 null 清空为空串（回落 env 默认）
+    # 在线词典代理：PUT 后 GET 一致；显式 null 与 env 默认（测试环境为空）相同，回落 env
     resp = await client.put(
         "/api/admin/settings",
-        json={"online_dict_proxy": "http://192.168.5.197:7890"},
+        json={"online_dict_proxy": "http://127.0.0.1:7890"},
         headers=admin_headers,
     )
-    assert resp.json()["online_dict_proxy"] == "http://192.168.5.197:7890"
+    assert resp.json()["online_dict_proxy"] == "http://127.0.0.1:7890"
     resp = await client.put(
         "/api/admin/settings", json={"online_dict_proxy": None}, headers=admin_headers
     )
@@ -532,3 +532,53 @@ async def test_token_delete_anonymizes_history(
 async def test_token_delete_requires_admin(client: AsyncClient) -> None:
     resp = await client.delete("/api/admin/tokens/1")
     assert resp.status_code == 401
+
+
+async def test_online_dict_proxy_falls_back_to_env(
+    client: AsyncClient, admin_headers: dict[str, str], db_session, monkeypatch
+) -> None:
+    """与 env 相同的值不单独保存，env 之后变了也跟着变；不同的值（含清空为直连）才存为覆盖。"""
+    from app.core.config import get_settings
+    from app.services.settings_service import get_setting
+
+    monkeypatch.setattr(get_settings(), "online_dict_proxy", "http://env-proxy:8080")
+
+    async def put(value):
+        resp = await client.put(
+            "/api/admin/settings", json={"online_dict_proxy": value}, headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()["online_dict_proxy"]
+
+    # 设置页原样保存 env 的值：不产生覆盖项
+    assert await put("http://env-proxy:8080") == "http://env-proxy:8080"
+    assert get_setting(db_session, "online_dict_proxy") is None
+    monkeypatch.setattr(get_settings(), "online_dict_proxy", "http://env-proxy:9090")
+    resp = await client.get("/api/admin/settings", headers=admin_headers)
+    assert resp.json()["online_dict_proxy"] == "http://env-proxy:9090"
+
+    # 清空 = 在配了 env 代理的部署上改为直连，要存为覆盖
+    assert await put("") == ""
+    resp = await client.get("/api/admin/settings", headers=admin_headers)
+    assert resp.json()["online_dict_proxy"] == ""
+
+    # 改回 env 的值：删掉覆盖项
+    assert await put(" http://env-proxy:9090 ") == "http://env-proxy:9090"
+    assert get_setting(db_session, "online_dict_proxy") is None
+
+
+async def test_online_dict_proxy_rejects_unsupported_url(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """非 http(s) 代理拒绝保存，且同一请求里的其它字段也不写入。"""
+    before = (await client.get("/api/admin/settings", headers=admin_headers)).json()
+    for bad in ("socks5://127.0.0.1:1080", "127.0.0.1:7890", "http://"):
+        resp = await client.put(
+            "/api/admin/settings",
+            json={"site_name": "不该被保存", "online_dict_proxy": bad},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422, bad
+        assert resp.json()["code"] == "validation_error"
+    after = (await client.get("/api/admin/settings", headers=admin_headers)).json()
+    assert after["site_name"] == before["site_name"]

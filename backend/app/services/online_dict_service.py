@@ -104,21 +104,31 @@ def _external_links(word: str) -> list[dict[str, str]]:
     ]
 
 
+class SourceUnavailableError(Exception):
+    """在线源这次没能给出结论（网络错误、非预期状态码、被人机验证拦下），区别于「查无此词」。"""
+
+
+def _found(response: httpx.Response) -> bool:
+    """200 为查到、404 为查无此词，其余状态码都算源不可用。"""
+    if response.status_code == 404:
+        return False
+    if response.status_code != 200:
+        raise SourceUnavailableError(f"HTTP {response.status_code}")
+    return True
+
+
+# 抓取函数：查无此词返回 None；源不可用时抛异常，由 lookup_online 记日志、跳过缓存
 def _fetch_wikipedia(word: str, lang: str) -> dict | None:
-    try:
-        response = httpx.get(
-            f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(word)}",
-            headers=_WIKI_HEADERS,
-            timeout=_HTTP_TIMEOUT,
-            follow_redirects=True,
-            proxy=_proxy_url,
-        )
-        if response.status_code != 200:
-            return None
-        data = response.json()
-    except Exception:
-        logger.warning("Wikipedia 查询失败 %r", word, exc_info=True)
+    response = httpx.get(
+        f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(word)}",
+        headers=_WIKI_HEADERS,
+        timeout=_HTTP_TIMEOUT,
+        follow_redirects=True,
+        proxy=_proxy_url,
+    )
+    if not _found(response):
         return None
+    data = response.json()
     extract = (data.get("extract") or "").strip()
     if not extract:
         return None
@@ -147,19 +157,15 @@ def _pick_wiktionary_lang(data: dict, lang: str) -> list | None:
 
 
 def _fetch_wiktionary(word: str, lang: str) -> dict | None:
-    try:
-        response = httpx.get(
-            f"https://en.wiktionary.org/api/rest_v1/page/definition/{quote(word)}",
-            headers=_WIKI_HEADERS,
-            timeout=_HTTP_TIMEOUT,
-            proxy=_proxy_url,
-        )
-        if response.status_code != 200:
-            return None
-        data = response.json()
-    except Exception:
-        logger.warning("Wiktionary 查询失败 %r", word, exc_info=True)
+    response = httpx.get(
+        f"https://en.wiktionary.org/api/rest_v1/page/definition/{quote(word)}",
+        headers=_WIKI_HEADERS,
+        timeout=_HTTP_TIMEOUT,
+        proxy=_proxy_url,
+    )
+    if not _found(response):
         return None
+    data = response.json()
     results = _pick_wiktionary_lang(data, lang)
     if not results:
         return None
@@ -191,25 +197,23 @@ def _fetch_wiktionary(word: str, lang: str) -> dict | None:
 
 
 def _fetch_baike(word: str) -> dict | None:
-    try:
-        response = httpx.get(
-            "https://baike.baidu.com/search/word",
-            params={"pic": "1", "enc": "utf-8", "word": word},
-            headers={
-                "User-Agent": _BAIKE_UA,
-                "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.6",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            },
-            timeout=_HTTP_TIMEOUT,
-            follow_redirects=True,
-        )
-        if response.status_code != 200:
-            return None
-        html = response.text
-    except Exception:
-        logger.warning("百度百科查询失败 %r", word, exc_info=True)
+    response = httpx.get(
+        "https://baike.baidu.com/search/word",
+        params={"pic": "1", "enc": "utf-8", "word": word},
+        headers={
+            "User-Agent": _BAIKE_UA,
+            "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.6",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        },
+        timeout=_HTTP_TIMEOUT,
+        follow_redirects=True,
+    )
+    if not _found(response):
         return None
-    if _BAIKE_NOT_FOUND in html or "<title>验证" in html:
+    html = response.text
+    if "<title>验证" in html:
+        raise SourceUnavailableError("百度安全验证")
+    if _BAIKE_NOT_FOUND in html:
         return None
     description = _meta(html, "og:description")
     if not description:
@@ -250,7 +254,8 @@ def lookup_online(
     """查询在线词典，返回 {word, sections, links}；单个源失败不影响其它源。
 
     `enabled_sources` 是管理后台「在线词典」开关的白名单（None/空集 = 全部启用），
-    id 取值见 ALL_SOURCE_IDS。
+    id 取值见 ALL_SOURCE_IDS。有源失败时结果照常返回但不入缓存——网络抖动、代理配错
+    的那一刻不该让「查不到」在 10 分钟里一直被复用。
     """
     if not enabled_sources:
         enabled_sources = ALL_SOURCE_IDS
@@ -262,7 +267,17 @@ def lookup_online(
     wanted = {sid: fn for sid, fn in _SECTION_SOURCES.items() if sid in enabled_sources}
     with concurrent.futures.ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
         futures = {sid: pool.submit(fn, word, lang) for sid, fn in wanted.items()}
-        sections = [f.result() for f in futures.values() if f.result()]
+        sections = []
+        failed = False
+        for sid, future in futures.items():
+            try:
+                section = future.result()
+            except Exception:
+                logger.warning("在线词典源 %s 查询失败 %r", sid, word, exc_info=True)
+                failed = True
+                continue
+            if section:
+                sections.append(section)
 
     result = {
         "word": word,
@@ -272,5 +287,6 @@ def lookup_online(
             link for link in _external_links(word) if link["id"] in enabled_sources
         ],
     }
-    _CACHE[key] = result
+    if not failed:
+        _CACHE[key] = result
     return result

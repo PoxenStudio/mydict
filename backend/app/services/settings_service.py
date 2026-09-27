@@ -35,3 +35,10 @@ def set_setting(db: Session, key: str, value: str) -> None:
     else:
         row.value = value
     db.commit()
+
+
+def delete_setting(db: Session, key: str) -> None:
+    row = db.get(SystemSetting, key)
+    if row is not None:
+        db.delete(row)
+        db.commit()
