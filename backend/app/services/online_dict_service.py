@@ -26,6 +26,11 @@ from urllib.parse import quote
 
 import httpx
 from cachetools import TTLCache
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+from app.core.exceptions import ForbiddenError
+from app.services import settings_service
 
 logger = logging.getLogger("mydict.online")
 
@@ -244,8 +249,10 @@ _SECTION_SOURCES: dict[str, "Any"] = {
     "baike": lambda word, lang: _fetch_baike(word),
 }
 
-# 全部可开关的源 id（section 源 + 外链）。管理后台「在线词典」开关的合法取值。
-ALL_SOURCE_IDS = frozenset(_SECTION_SOURCES) | {"google", "urban", "merriam", "goodreads"}
+# 全部可开关的源 id（section 源 + 外链），管理后台「在线词典」开关的合法取值；
+# 顺序即设置里 CSV 的规范顺序
+SOURCE_IDS = (*_SECTION_SOURCES, *(link["id"] for link in _external_links("")))
+ALL_SOURCE_IDS = frozenset(SOURCE_IDS)
 
 
 def lookup_online(
@@ -290,3 +297,26 @@ def lookup_online(
     if not failed:
         _CACHE[key] = result
     return result
+
+
+def lookup_with_settings(db: Session, defaults: Settings, word: str, lang: str) -> dict:
+    """按管理后台设置查询：总开关、出站代理（DB 覆盖 env）、源白名单。"""
+    # 总开关：管理后台默认禁用；关着时直接拒绝（前端标签也已隐藏，这里是双保险）
+    if not settings_service.get_bool_setting(db, "online_dict_enabled", False):
+        raise ForbiddenError("在线词典功能未启用，请联系管理员在系统设置中开启")
+
+    # 代理热同步：变了才重配，免得反复清缓存
+    proxy = settings_service.get_setting(
+        db, "online_dict_proxy", defaults.online_dict_proxy
+    ).strip()
+    if proxy != active_proxy():
+        configure_proxy(proxy or None)
+
+    word = word.strip()[:100]
+    if not word:
+        return {"word": word, "lang": lang, "sections": [], "links": []}
+
+    # 源白名单（CSV；空 = 全部启用）
+    raw = settings_service.get_setting(db, "online_dict_sources", "").strip()
+    enabled = {sid for sid in raw.split(",") if sid in ALL_SOURCE_IDS}
+    return lookup_online(word, lang, enabled or None)

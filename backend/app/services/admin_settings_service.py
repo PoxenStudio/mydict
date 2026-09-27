@@ -7,6 +7,7 @@ from app.core.exceptions import ValidationAppError
 from app.services import settings_service
 from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
+from app.services.online_dict_service import SOURCE_IDS
 
 _BOOL_KEYS = {"open_access", "allow_registration", "online_dict_enabled"}
 _INT_KEYS = {
@@ -19,16 +20,14 @@ _STR_KEYS = {"site_name", "search_hint_text", "online_dict_sources"}
 
 _SEARCH_HINT_DEFAULT = "小搜一下, 大进一步"
 
-# 在线词典源的合法 id（与 online_dict_service.ALL_SOURCE_IDS 对应）；空值 = 全部启用
-_ONLINE_SOURCE_IDS = ("wikipedia", "wiktionary", "baike", "google", "urban", "merriam", "goodreads")
 
 
 def _normalize_online_sources(raw: str | None) -> str:
-    """把用户输入的 CSV 归一化成固定顺序的白名单 CSV；非法 id 忽略。"""
+    """把用户输入的 CSV 归一化成固定顺序的白名单 CSV；非法 id 忽略，空值 = 全部启用。"""
     if not raw:
         return ""
     picked = {sid.strip() for sid in raw.split(",")}
-    return ",".join(sid for sid in _ONLINE_SOURCE_IDS if sid in picked)
+    return ",".join(sid for sid in SOURCE_IDS if sid in picked)
 
 
 def _normalize_proxy(raw: str | None) -> str:
