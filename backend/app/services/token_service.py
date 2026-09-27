@@ -165,8 +165,11 @@ def _assign_secret(token: ApiToken) -> str:
     return raw
 
 
-def issue_user_token(db: Session, user: User, admin_id: int) -> ApiToken:
-    """为用户签发 Token；已有则换新密钥（旧值立即失效）。每日上限用系统默认值。"""
+def issue_user_token(db: Session, user: User, admin_id: int | None) -> ApiToken:
+    """为用户签发 Token；已有则换新密钥（旧值立即失效）。每日上限用系统默认值。
+
+    admin_id 为空表示用户在前台自助分配：与其它自助操作一样不写审计日志（审计表只记录
+    管理员与系统操作）。"""
     token = db.query(ApiToken).filter(ApiToken.user_id == user.id).first()
     action = "token.regenerate"
     if token is None:
@@ -176,14 +179,15 @@ def issue_user_token(db: Session, user: User, admin_id: int) -> ApiToken:
     _assign_secret(token)
     db.commit()
     db.refresh(token)
-    log_action(
-        db,
-        actor_type="admin",
-        actor_id=admin_id,
-        action=action,
-        target=str(token.id),
-        detail={"user_id": user.id},
-    )
+    if admin_id is not None:
+        log_action(
+            db,
+            actor_type="admin",
+            actor_id=admin_id,
+            action=action,
+            target=str(token.id),
+            detail={"user_id": user.id},
+        )
     return token
 
 

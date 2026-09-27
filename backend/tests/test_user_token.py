@@ -172,3 +172,26 @@ async def test_plain_token_keeps_its_own_vocab_and_no_plaintext(
 
     with SessionLocal() as db:
         assert db.get(ApiToken, body["id"]).token_plain is None
+
+
+async def test_user_self_service_api_token(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """前台用户菜单「Token 管理」：查看、分配、重新分配自己的 Token。"""
+    user = await _create_user(client, admin_headers)
+    assert (await client.get("/api/auth/api-token")).status_code == 401
+
+    resp = await client.get("/api/auth/api-token", headers=user["headers"])
+    assert resp.status_code == 200 and resp.json() == {"api_token": None}
+
+    first = (await client.post("/api/auth/api-token", headers=user["headers"])).json()["api_token"]
+    assert first and first.startswith("sk-")
+    resp = await client.get("/api/auth/api-token", headers=user["headers"])
+    assert resp.json()["api_token"] == first
+    assert (await _admin_user_row(client, admin_headers, user))["api_token"] == first
+    assert (await client.get("/api/v1/dictionaries", headers=_bearer(first))).status_code == 200
+
+    second = (await client.post("/api/auth/api-token", headers=user["headers"])).json()["api_token"]
+    assert second != first
+    assert (await client.get("/api/v1/dictionaries", headers=_bearer(first))).status_code == 401
+    assert (await client.get("/api/v1/dictionaries", headers=_bearer(second))).status_code == 200
