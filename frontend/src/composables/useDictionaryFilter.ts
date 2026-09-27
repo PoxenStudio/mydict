@@ -40,15 +40,6 @@ export function useDictionaryFilter() {
   const loading = ref(false)
   const loaded = ref(false)
 
-  /**
-   * 「全部」按钮第二下进入的「视觉清空」态。
-   *
-   * 语义上仍是不限制——后端无法表达「限制到零部词典」（`parse_dict_ids` 把空值当作不限制），
-   * 所以「一个都不选」不是一个能查的状态。这里只把复选框的勾全部清掉，方便用户从零开始挑；
-   * 一旦勾了任意一部，就回到正常的「收窄范围」。
-   */
-  const clearedView = ref(false)
-
   async function load() {
     loading.value = true
     try {
@@ -71,7 +62,6 @@ export function useDictionaryFilter() {
   }
 
   function setSelection(ids: number[]) {
-    clearedView.value = false
     const unique = [...new Set(ids)].sort((a, b) => a - b)
     // 空集与全集都收敛成「不限制」：后端无法表达「限制到零部词典」（parse_dict_ids 对空值
     // 返回 None），把它当成限制反而会出现「勾光了却查出全部」的矛盾状态。界面上这一栏会
@@ -85,7 +75,7 @@ export function useDictionaryFilter() {
   }
 
   function toggle(id: number) {
-    // 当前没有显式勾选（不限制，或刚被「全部」按钮清空）时，点某一部是「我就要看这一部」。
+    // 当前没有显式勾选（不限制）时，点某一部是「我就要看这一部」。
     // 旧行为是从全集里把它去掉——想只留一部反而得先点掉其余几十部。
     if (!selectedIds.value.length) {
       setSelection([id])
@@ -94,24 +84,13 @@ export function useDictionaryFilter() {
     const current = new Set(selectedIds.value)
     if (current.has(id)) current.delete(id)
     else current.add(id)
-    if (!current.size) {
-      // 取消最后一部时回到「视觉全不选」，而不是跳回全部勾选——用户刚看到的是
-      // 只有这一部勾着，取消后的预期自然是回到空勾选的起点（语义仍是不限制）。
-      selectedIds.value = []
-      persist(selectedIds.value)
-      clearedView.value = true
-      return
-    }
+    // 取消最后一部时回到全部：一部都不选在后端就是不限制
     setSelection([...current])
   }
 
-  /** 「全部」按钮：有限制时清掉限制回到全部；已经是全部时，再点一下把勾选清空（见 clearedView） */
-  function selectAllOrClear() {
-    if (selectedIds.value.length) {
-      setSelection([])
-      return
-    }
-    clearedView.value = !clearedView.value
+  /** 「全部」按钮：清掉限制，回到检索全部词典 */
+  function selectAll() {
+    setSelection([])
   }
 
   const allIds = computed(() => dictionaries.value.map((item) => item.id))
@@ -119,11 +98,9 @@ export function useDictionaryFilter() {
   /** 传给查询接口的范围；undefined 表示不限制 */
   const filterIds = computed(() => (selectedIds.value.length ? selectedIds.value : undefined))
 
-  /** 勾选态：未设置限制时视为全选；被「全部」按钮清空时显示为空 */
-  const checkedIds = computed(() =>
-    clearedView.value
-      ? new Set<number>()
-      : new Set(selectedIds.value.length ? selectedIds.value : allIds.value),
+  /** 勾选态：未设置限制时视为全选 */
+  const checkedIds = computed(
+    () => new Set(selectedIds.value.length ? selectedIds.value : allIds.value),
   )
 
   const isFiltering = computed(() => selectedIds.value.length > 0)
@@ -135,12 +112,11 @@ export function useDictionaryFilter() {
     allIds,
     filterIds,
     isFiltering,
-    clearedView,
     loading,
     loaded,
     load,
     toggle,
     setSelection,
-    selectAllOrClear,
+    selectAll,
   }
 }

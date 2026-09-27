@@ -33,12 +33,11 @@ const {
   allIds,
   filterIds,
   isFiltering,
-  clearedView,
   loading: dictLoading,
   load: loadDictionaryFilter,
   toggle: toggleDictionary,
   setSelection,
-  selectAllOrClear,
+  selectAll,
 } = useDictionaryFilter()
 
 // 同时保留的 iframe 文档数上限：折叠时不立刻销毁（声音还在放、内部滚动位置也要留住），
@@ -197,7 +196,7 @@ function selectRandom() {
   randomMode.value = !randomMode.value
 }
 
-// 本地范围选择（勾选/全部/不选）会退出在线模式；随机模式下只换池子不退出
+// 本地范围选择（勾选/全部）会退出在线模式；随机模式下只换池子不退出
 function onToggleDict(id: number) {
   onlineMode.value = false
   toggleDictionary(id)
@@ -205,7 +204,7 @@ function onToggleDict(id: number) {
 
 function onSelectAll() {
   onlineMode.value = false
-  selectAllOrClear()
+  selectAll()
 }
 
 function touchLive(key: string) {
@@ -427,7 +426,7 @@ function onRescroll(key: string) {
             :class="{ active: activeTab === 'all' }"
             @click="onSelectAll"
           >
-            {{ clearedView ? '不选' : '全部' }}
+            全部
           </button>
           <button
             v-for="scope in languageScopes"
