@@ -12,12 +12,12 @@ import RandomDictPanel from '../components/RandomDictPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { searchWord } from '../api/dict'
-import { langLabel } from '../utils/language'
 import { getSystemInfo } from '../api/system'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useSettingsStore } from '../stores/settings'
 import { useFavorites } from '../composables/useFavorites'
 import { useDictionaryFilter } from '../composables/useDictionaryFilter'
+import { useLanguageScopes } from '../composables/useLanguageScopes'
 import { prefersReducedMotion } from '../utils/motion'
 import type { QueryResultItem } from '../types/query'
 
@@ -145,22 +145,6 @@ watch(
   },
 )
 
-// 侧边栏语言按钮传来的「筛选范围」→ 对应的 lang_from 取值。
-// 「zh」（中文）覆盖简繁与早期数据里的裸 zh：查询路由本来就不区分它们（输入汉字时三种码
-// 都算优先语言），所以这里也不该让用户为简繁多点一次。
-const LANGUAGE_SCOPE_CODES: Record<string, string[]> = {
-  zh: ['zh', 'zh-Hans', 'zh-Hant'],
-}
-
-/** 侧边栏的「只看某种语言」：勾选该筛选范围下的全部词典；随机模式下仅换池子 */
-function selectLanguage(scope: string) {
-  onlineMode.value = false
-  const codes = LANGUAGE_SCOPE_CODES[scope] ?? [scope]
-  setSelection(
-    dictionaries.value.filter((item) => codes.includes(item.lang_from)).map((i) => i.id),
-  )
-}
-
 // --- 在线词典模式 ---
 // 【在线】打开后，查询不再走本地词典库，而是服务端代理去查维基百科/维基词典/百度百科，
 // 并给出 Google 等外部搜索链接。任何本地范围的选择（语言标签/全部/勾选）都会退出该模式。
@@ -172,90 +156,26 @@ const sidebarCheckedIds = computed(() =>
 )
 
 // --- 检索范围标签行（常驻在搜索框下方，不受折叠面板影响） ---
-// 从 DictionaryScopePanel 迁出：语言/在线切换是高频操作，不该藏在折叠面板里；
-// 面板只留「挑具体词典」这个低频动作。
-
-// 中文系（含早期数据里的裸 zh）在界面上合成一个按钮：查询路由本来就不区分简繁
-// （输入汉字时三种码都算「优先语言」），拆成两个按钮只会让「只看中文词典」要点两次。
-// ZH_CODES 与词典管理页的语种 tab 共用同一份定义，避免两处各写一遍。
-// 中文按钮的循环顺序：中文（全部）→ 简中 → 繁中 → 中文…
-const ZH_SCOPES = ['zh', 'zh-Hans', 'zh-Hant']
-const ZH_SCOPE_LABELS: Record<string, string> = {
-  zh: '中文',
-  'zh-Hans': '简中',
-  'zh-Hant': '繁中',
-}
-
-/** 每个筛选范围对应的 lang_from 取值；不在表里的按原样精确匹配 */
-const SCOPE_CODES: Record<string, string[]> = {
-  zh: ['zh', 'zh-Hans', 'zh-Hant'],
-  'zh-Hans': ['zh-Hans'],
-  'zh-Hant': ['zh-Hant'],
-}
-
-/** 库里出现过的语言筛选项，按出现顺序去重；中文系合并成一项 */
-const languageScopes = computed(() => {
-  const scopes: string[] = []
-  let zhAdded = false
-  for (const item of dictionaries.value) {
-    const code = item.lang_from
-    if (SCOPE_CODES.zh.includes(code)) {
-      if (!zhAdded) {
-        zhAdded = true
-        scopes.push('zh')
-      }
-      continue
-    }
-    if (!scopes.includes(code)) scopes.push(code)
-  }
-  return scopes
+// 语言/在线切换是高频操作，不该藏在折叠面板里；面板只留「挑具体词典」这个低频动作。
+const { languageScopes, activeLanguageScope, scopeLabel, selectScope } = useLanguageScopes({
+  dictionaries,
+  checkedIds,
+  isFiltering,
+  setSelection,
 })
-
-/** 当前勾选集是否恰好等于某个筛选范围的全部词典 */
-function matchesScope(scope: string): boolean {
-  const codes = SCOPE_CODES[scope] ?? [scope]
-  const ids = dictionaries.value
-    .filter((item) => codes.includes(item.lang_from))
-    .map((item) => item.id)
-  return (
-    ids.length > 0 &&
-    ids.length === checkedIds.value.size &&
-    ids.every((id) => checkedIds.value.has(id))
-  )
-}
-
-/** 中文按钮当前落在哪一态；不在任何一种中文范围里时为 null（按钮显示默认的「中文」） */
-const activeZhScope = computed<string | null>(() => {
-  if (!isFiltering.value) return null
-  for (const scope of ZH_SCOPES) {
-    if (matchesScope(scope)) return scope
-  }
-  return null
-})
-
-function scopeLabel(scope: string): string {
-  return scope === 'zh' ? ZH_SCOPE_LABELS[activeZhScope.value ?? 'zh'] : langLabel(scope)
-}
 
 /** 标签行当前亮起的按钮：在线独占；随机与本地范围标签可以同时点亮（用户要能看出
  * 随机池用的是哪个组合），本地部分照常显示「全部」或命中的语言。 */
 const activeTab = computed<string>(() => {
   if (onlineMode.value) return 'online'
   if (!isFiltering.value) return 'all'
-  for (const scope of languageScopes.value) {
-    if (matchesScope(scope)) return scope
-  }
-  return ''
+  return activeLanguageScope.value ?? ''
 })
 
-function selectScope(scope: string) {
-  if (scope !== 'zh') {
-    selectLanguage(scope)
-    return
-  }
-  // 中文按钮：在三种范围之间循环
-  const index = activeZhScope.value ? ZH_SCOPES.indexOf(activeZhScope.value) : -1
-  selectLanguage(ZH_SCOPES[(index + 1) % ZH_SCOPES.length])
+/** 语言标签：勾选该语言的全部词典并退出在线模式；随机模式下仅换池子 */
+function onSelectScope(scope: string) {
+  onlineMode.value = false
+  selectScope(scope)
 }
 
 function selectOnline() {
@@ -514,7 +434,7 @@ function onRescroll(key: string) {
             :key="scope"
             type="button"
             :class="{ active: activeTab === scope }"
-            @click="selectScope(scope)"
+            @click="onSelectScope(scope)"
           >
             {{ scopeLabel(scope) }}
           </button>
