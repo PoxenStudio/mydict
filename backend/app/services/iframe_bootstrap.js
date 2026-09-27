@@ -38,6 +38,9 @@
   // 暗色下正文直接看不见（搜韵诗词全文检索版）。
   var TEXT_MIN_LUMINANCE = 0.45
   var TEXT_BOOST_LIGHTNESS = 66
+  // 暗色主题前景色：与注入样式（entry_render_service）里的暗色文字同值——iframe 是独立文档，
+  // 读不到父页的 --color-text-primary
+  var DARK_FOREGROUND = '#eaf1ee'
   // 大词条可能有上万个元素，逐个读计算样式要花时间，超过这个数就只处理前一批
   var TEXT_SCAN_LIMIT = 5000
   var boostedText = []
@@ -116,7 +119,7 @@
         // 灰阶没有色相，提亮成主题前景色。此前刻意跳过灰阶、指望注入的 CSS 规则兜底，
         // 但那些规则只覆盖 #000 精确值与内联样式——词典样式表里的 #111/#333（搜韵诗词
         // 正文的 div.content{color:#111111}）漏网，暗色下深灰字配深底直接看不见。
-        el.style.color = '#eaf1ee'
+        el.style.color = DARK_FOREGROUND
       } else {
         el.style.color =
           'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'
@@ -266,16 +269,18 @@
   // 测量哨兵：0 高度的块元素，钉在 body 末尾。它的底边天然位于「全部内容 + 末元素
   // 外距」之后——Range 边界盒不含外距（body 默认 8px + 末元素外距，实测少 8~24px），
   // 盒子比内容矮一截，词条右侧就会出现滚动条；scrollHeight 又有「视口托底」（见下）
-  // 不能用。词典自己的脚本可能往 body 追加元素，所以每次测量前都把哨兵重新挪到末尾。
+  // 不能用。词典自己的脚本可能往 body 追加元素，所以每次测量前都把哨兵重新挪到末尾；
+  // clear:both 让它落在末尾浮动元素的下方，否则浮动内容不计入高度。
+  // 挪动会触发 MutationObserver 再测一次，那次它已在末尾、不再挪动，不会循环。
   function ensureSentinel(doc) {
     var sentinel = doc.getElementById('mydict-measure-end')
     if (!sentinel) {
       sentinel = doc.createElement('div')
       sentinel.id = 'mydict-measure-end'
       sentinel.style.cssText =
-        'display:block;height:0;margin:0;padding:0;border:0;visibility:hidden'
+        'display:block;clear:both;height:0;margin:0;padding:0;border:0;visibility:hidden'
     }
-    if (sentinel.parentElement !== doc.body) doc.body.appendChild(sentinel)
+    if (doc.body.lastChild !== sentinel) doc.body.appendChild(sentinel)
     return sentinel
   }
 

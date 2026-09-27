@@ -25,3 +25,9 @@ class UserPublic(BaseModel):
     allowed_dictionary_ids: list[int] | None = None
 
     model_config = {"from_attributes": True}
+
+
+class UserApiTokenOut(BaseModel):
+    """当前用户自己的 API Token 明文；没有时为空。"""
+
+    api_token: str | None

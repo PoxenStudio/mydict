@@ -161,7 +161,7 @@ const poolLabel = computed(() =>
 .random-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 

@@ -1,5 +1,5 @@
-from typing import Literal
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse

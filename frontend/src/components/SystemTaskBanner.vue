@@ -22,12 +22,12 @@ const dismissed = ref(false)
   padding: var(--space-4) var(--space-4) 0;
 }
 
-/* 与首页 .search-page 的内容区同宽（1180px 减去两侧 space-4 内边距） */
+/* 与首页 .search-page 的内容区同宽（--size-content-md 减去两侧 space-4 内边距） */
 .banner {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: calc(1180px - 2 * var(--space-4));
+  max-width: calc(var(--size-content-md) - 2 * var(--space-4));
   margin: 0 auto;
   padding: var(--space-2) var(--space-4);
   background: var(--color-bg-surface);

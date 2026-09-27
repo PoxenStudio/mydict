@@ -21,8 +21,8 @@ from app.api.v1.vocab import router as v1_vocab_router
 from app.api.web.auth import router as web_auth_router
 from app.api.web.dict import router as web_dict_router
 from app.api.web.online import router as web_online_router
-from app.api.web.random_pick import router as web_random_router
 from app.api.web.public_settings import router as web_public_settings_router
+from app.api.web.random_pick import router as web_random_router
 from app.api.web.vocab import router as web_vocab_router
 from app.core import bootstrap
 from app.core.config import get_settings

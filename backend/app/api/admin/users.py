@@ -12,6 +12,7 @@ from app.schemas.admin_user import (
     AdminUserOut,
     ResetPasswordResponse,
 )
+from app.schemas.dictionary import AllowedDictionaryIdsRequest
 from app.services import user_admin_service
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
@@ -69,3 +70,27 @@ def reset_password(
 ) -> ResetPasswordResponse:
     temp = user_admin_service.reset_user_password(db, user_id, admin.id)
     return ResetPasswordResponse(temporary_password=temp)
+
+
+@router.put("/{user_id}/allowed-dictionaries", response_model=AdminUserOut)
+def set_allowed_dictionaries(
+    user_id: int,
+    body: AllowedDictionaryIdsRequest,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(require_admin),
+) -> AdminUserOut:
+    return user_admin_service.set_allowed_dictionaries(db, user_id, body.dictionary_ids, admin.id)
+
+
+@router.post("/{user_id}/token", response_model=AdminUserOut)
+def generate_token(
+    user_id: int, db: Session = Depends(get_db), admin: Admin = Depends(require_admin)
+) -> AdminUserOut:
+    return user_admin_service.generate_token(db, user_id, admin.id)
+
+
+@router.delete("/{user_id}/token", response_model=AdminUserOut)
+def delete_token(
+    user_id: int, db: Session = Depends(get_db), admin: Admin = Depends(require_admin)
+) -> AdminUserOut:
+    return user_admin_service.delete_token(db, user_id, admin.id)

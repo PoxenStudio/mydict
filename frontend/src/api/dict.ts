@@ -48,15 +48,20 @@ export function listDictionaries(scope: 'usable' | 'all' = 'usable') {
  * 同一部词典里同一词头可以有多条内容不同的条目（MDict 允许），这时整组条目会聚合进
  * **一个**文档返回——逐条各建 iframe 的话，搜韵这类词典展开一次就要挂载 82 个沙箱文档。
  * `entryIds` 告诉后端要渲染哪些条目（查询结果里带回的 id，单条也传），保证 iframe 里的内容
- * 与结果列表一一对应。`word` 是用户查询输入的词：后端只在它的变体及前缀范围内认这些 id
- * （搜索有前缀兜底，命中的词头如「あ【亜】」以查询词开头但不是它的等价变体）；
+ * 与结果列表一一对应。`word` 是用户查询输入的词：后端只认搜索可能返回的那些 id（它的变体，
+ * 或精确未命中时前缀兜底的那几条，如以「あ」开头的「あ【亜】」）；
  * id 都对不上（词典被重新解析过、条目 id 已换新）时后端退回按词取。
  *
  * 必须走 axios 取回再塞 srcdoc，而不是让 iframe 直接 src 到这个地址：
  * iframe 导航不会带 Authorization 头，端点就只能匿名开放，会绕过 Token 的
  * 「可用词典」限制。
  */
-export function getEntryHtml(dictionaryId: number, word: string, entryIds?: number[]) {
+export function getEntryHtml(
+  dictionaryId: number,
+  word: string,
+  entryIds?: number[],
+  options: { silent?: boolean } = {},
+) {
   const key = `${dictionaryId}|${word}|${entryIds && entryIds.length ? entryIds.join(',') : ''}`
   const cached = ENTRY_HTML_CACHE.get(key)
   if (cached) {
@@ -72,6 +77,7 @@ export function getEntryHtml(dictionaryId: number, word: string, entryIds?: numb
       theme: currentTheme(),
     },
     responseType: 'text',
+    silent: options.silent,
   })
   ENTRY_HTML_CACHE.set(key, pending)
   // 失败的预取别留在缓存里，用户真点开时还能重试
@@ -90,9 +96,12 @@ export function getEntryHtml(dictionaryId: number, word: string, entryIds?: numb
 const ENTRY_HTML_CACHE = new Map<string, Promise<string>>()
 const ENTRY_HTML_CACHE_MAX = 24
 
-/** 后台预取词条文档（悬停/按下时调用）；失败静默，等真正展开时再走正常重试路径 */
+/**
+ * 后台预取词条文档（悬停/按下时调用）；失败静默（限流等也不弹提示），失败的请求已出缓存，
+ * 真正展开时会重新发起、按正常路径提示。
+ */
 export function prefetchEntryHtml(dictionaryId: number, word: string, entryIds?: number[]) {
-  getEntryHtml(dictionaryId, word, entryIds).catch(() => undefined)
+  getEntryHtml(dictionaryId, word, entryIds, { silent: true }).catch(() => undefined)
 }
 
 /**

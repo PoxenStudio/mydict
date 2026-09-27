@@ -81,6 +81,8 @@ async function saveTokenAllowedDictionaries(ids: number[] | null) {
 }
 
 function allowedDictionariesLabel(token: ApiTokenItem) {
+  // 用户 Token 的可用词典跟随所属用户，在用户管理里设置
+  if (token.user_id !== null) return '跟随用户'
   return token.allowed_dictionary_ids === null
     ? '全部'
     : `${token.allowed_dictionary_ids.length} 部`
@@ -175,7 +177,10 @@ function formatDate(value: string | null) {
         <span class="col-actions">操作</span>
       </div>
       <div v-for="token in tokens" :key="token.id" class="token-row">
-        <span>{{ token.name }}</span>
+        <span class="col-name">
+          {{ token.name }}
+          <el-tag v-if="token.user_id !== null" size="small" type="info">用户 Token</el-tag>
+        </span>
         <span class="mono">{{ token.token_prefix }}</span>
         <span>{{ token.daily_limit ?? '系统默认' }}</span>
         <span>{{ allowedDictionariesLabel(token) }}</span>
@@ -187,8 +192,12 @@ function formatDate(value: string | null) {
           </el-tag>
         </span>
         <span class="col-actions">
-          <el-button text @click="openDictPicker(token)">可用词典</el-button>
-          <el-button text @click="showVocabCount(token)">收藏数</el-button>
+          <el-button v-if="token.user_id === null" text @click="openDictPicker(token)">
+            可用词典
+          </el-button>
+          <el-button v-if="token.user_id === null" text @click="showVocabCount(token)">
+            收藏数
+          </el-button>
           <el-button text @click="regenerate(token)">重新生成</el-button>
           <el-button
             text
@@ -301,8 +310,15 @@ function formatDate(value: string | null) {
   background: var(--color-hover-tint);
 }
 
+.col-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .mono {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-family-mono);
   color: var(--color-text-secondary);
 }
 

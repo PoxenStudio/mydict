@@ -59,6 +59,10 @@ def _resolve_api_token(credentials: HTTPAuthorizationCredentials, db: Session) -
         raise UnauthorizedError("Token 无效")
     if token.status != "active":
         raise ForbiddenError("Token 已被禁用")
+    if token.user_id is not None:
+        owner = db.get(User, token.user_id)
+        if owner is None or owner.status != "active":
+            raise ForbiddenError("Token 所属账号已被禁用")
     token.last_used_at = datetime.now(timezone.utc)
     db.commit()
     return token
@@ -73,10 +77,19 @@ def require_api_token(credentials: Credentials, db: Session = Depends(get_db)) -
 
 @dataclass
 class ApiCaller:
-    """查询类接口的调用方：token 非空表示已鉴权的第三方；为空表示「开放使用」放行的匿名调用。"""
+    """查询类接口的调用方：token 非空表示已鉴权的第三方；为空表示「开放使用」放行的匿名调用。
+    user 非空表示这是用户 Token，调用以该用户身份进行。"""
 
     token: ApiToken | None
     ip: str | None
+    user: User | None = None
+
+    @property
+    def allowed_dictionary_ids(self) -> list[int] | None:
+        """用户 Token 跟随用户的「可用词典」，普通 Token 用自己的。"""
+        if self.user is not None:
+            return self.user.allowed_dictionary_ids
+        return self.token.allowed_dictionary_ids if self.token else None
 
 
 def get_api_caller(
@@ -86,7 +99,9 @@ def get_api_caller(
     settings: Settings = Depends(get_settings),
 ) -> ApiCaller:
     if credentials is not None:
-        return ApiCaller(token=_resolve_api_token(credentials, db), ip=None)
+        token = _resolve_api_token(credentials, db)
+        user = db.get(User, token.user_id) if token.user_id is not None else None
+        return ApiCaller(token=token, ip=None, user=user)
     if not get_bool_setting(db, "open_access", settings.open_access_default):
         raise UnauthorizedError("需要提供有效的 Token，或由管理员开启「开放使用」")
     ip = request.client.host if request.client else "unknown"

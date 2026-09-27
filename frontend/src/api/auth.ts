@@ -25,3 +25,13 @@ export function setAllowedDictionaries(dictionaryIds: number[] | null) {
     dictionary_ids: dictionaryIds,
   })
 }
+
+/** 当前用户自己的 API Token（以本人身份调用对外 API），没有时 api_token 为 null */
+export function getApiToken() {
+  return request.get<never, { api_token: string | null }>('/auth/api-token')
+}
+
+/** 分配 API Token；已有则重新分配，旧值立即失效 */
+export function issueApiToken() {
+  return request.post<never, { api_token: string }>('/auth/api-token')
+}

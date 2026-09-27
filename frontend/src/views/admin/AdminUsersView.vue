@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { copyText } from '../../utils/clipboard'
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, DocumentCopy } from '@element-plus/icons-vue'
 import * as userApi from '../../api/admin/users'
+import { listDictionaries } from '../../api/admin/dictionaries'
 import RefreshButton from '../../components/admin/RefreshButton.vue'
+import DictionaryPickerDialog from '../../components/DictionaryPickerDialog.vue'
 import type { AdminUserDetail, AdminUserItem } from '../../types/adminUser'
+import type { PublicDictionary } from '../../types/query'
+import { copyText } from '../../utils/clipboard'
 
 const users = ref<AdminUserItem[]>([])
 const total = ref(0)
@@ -75,13 +79,67 @@ async function submitCreate() {
   }
 }
 
+function replaceUser(updated: AdminUserItem) {
+  const index = users.value.findIndex((u) => u.id === updated.id)
+  if (index !== -1) users.value[index] = updated
+}
+
 async function toggleStatus(user: AdminUserItem) {
-  const updated =
+  replaceUser(
     user.status === 'active'
       ? await userApi.disableUser(user.id)
-      : await userApi.enableUser(user.id)
-  const index = users.value.findIndex((u) => u.id === user.id)
-  if (index !== -1) users.value[index] = updated
+      : await userApi.enableUser(user.id),
+  )
+}
+
+// --- 用户 Token：以该用户身份调用对外 API（可用词典、查询历史、生词本都算在用户名下）---
+function maskToken(token: string) {
+  return `${token.slice(0, 7)}…${token.slice(-4)}`
+}
+
+async function generateToken(user: AdminUserItem) {
+  replaceUser(await userApi.generateUserToken(user.id))
+  ElMessage.success('Token 已生成')
+}
+
+async function copyToken(user: AdminUserItem) {
+  if (!user.api_token) return
+  if (await copyText(user.api_token)) ElMessage.success('Token 已复制到剪贴板')
+  else ElMessage.warning('复制失败，请手动复制')
+}
+
+async function deleteToken(user: AdminUserItem) {
+  try {
+    await ElMessageBox.confirm(
+      `删除后「${user.username}」的 Token 立即失效，正在使用它的工具将无法再调用 API。`,
+      '删除 Token',
+      { type: 'warning', confirmButtonText: '删除' },
+    )
+  } catch {
+    return
+  }
+  replaceUser(await userApi.deleteUserToken(user.id))
+  ElMessage.success('Token 已删除')
+}
+
+// --- 可用词典 ---
+const dictPickerVisible = ref(false)
+const dictPickerTarget = ref<AdminUserItem | null>(null)
+const availableDictionaries = ref<PublicDictionary[]>([])
+
+async function openDictPicker(user: AdminUserItem) {
+  if (availableDictionaries.value.length === 0) {
+    const all = await listDictionaries()
+    availableDictionaries.value = all.filter((d) => d.status === 'enabled')
+  }
+  dictPickerTarget.value = user
+  dictPickerVisible.value = true
+}
+
+async function saveAllowedDictionaries(ids: number[] | null) {
+  if (!dictPickerTarget.value) return
+  replaceUser(await userApi.setUserAllowedDictionaries(dictPickerTarget.value.id, ids))
+  ElMessage.success('已保存')
 }
 
 async function resetPassword(user: AdminUserItem) {
@@ -104,14 +162,8 @@ const tempPasswordUsername = ref('')
 const tempPasswordValue = ref('')
 
 async function copyTempPassword() {
-  try {
-    const ok = await copyText(tempPasswordValue.value)
-    if (ok) ElMessage.success('已复制到剪贴板')
-    else ElMessage.warning('复制失败，请手动选中文本复制')
-    ElMessage.success('已复制到剪贴板')
-  } catch {
-    ElMessage.warning('复制失败，请手动选中复制')
-  }
+  if (await copyText(tempPasswordValue.value)) ElMessage.success('已复制到剪贴板')
+  else ElMessage.warning('复制失败，请手动选中文本复制')
 }
 
 // --- 详情 ---
@@ -155,8 +207,9 @@ function formatDate(value: string | null) {
         <span>邮箱</span>
         <span>注册时间</span>
         <span>最近登录</span>
-        <span>生词/查询</span>
+        <span class="col-token-head">Token</span>
         <span>状态</span>
+        <span>生词/查询</span>
         <span class="col-actions">操作</span>
       </div>
       <div v-for="user in users" :key="user.id" class="user-row">
@@ -164,14 +217,44 @@ function formatDate(value: string | null) {
         <span>{{ user.email ?? '—' }}</span>
         <span>{{ formatDate(user.created_at) }}</span>
         <span>{{ formatDate(user.last_login_at) }}</span>
-        <span>{{ user.vocab_count }} / {{ user.query_count }}</span>
+        <span class="col-token">
+          <template v-if="user.api_token">
+            <span class="mono" :title="user.api_token">{{ maskToken(user.api_token) }}</span>
+            <span class="token-actions">
+              <el-button
+                text
+                circle
+                size="small"
+                :icon="DocumentCopy"
+                title="复制 Token"
+                aria-label="复制 Token"
+                @click="copyToken(user)"
+              />
+              <el-button
+                text
+                circle
+                size="small"
+                type="danger"
+                :icon="Delete"
+                title="删除 Token"
+                aria-label="删除 Token"
+                @click="deleteToken(user)"
+              />
+            </span>
+          </template>
+          <el-button v-else text size="small" type="primary" @click="generateToken(user)">
+            生成
+          </el-button>
+        </span>
         <span>
           <el-tag :type="user.status === 'active' ? 'success' : 'info'" size="small">
             {{ user.status === 'active' ? '正常' : '禁用' }}
           </el-tag>
         </span>
+        <span>{{ user.vocab_count }} / {{ user.query_count }}</span>
         <span class="col-actions">
           <el-button text @click="openDetail(user)">详情</el-button>
+          <el-button text @click="openDictPicker(user)">可用词典</el-button>
           <el-button text @click="resetPassword(user)">重置密码</el-button>
           <el-button
             text
@@ -243,6 +326,13 @@ function formatDate(value: string | null) {
         <el-button size="small" @click="copyTempPassword">复制</el-button>
       </div>
     </el-dialog>
+
+    <DictionaryPickerDialog
+      v-model:visible="dictPickerVisible"
+      :dictionaries="availableDictionaries"
+      :current-ids="dictPickerTarget?.allowed_dictionary_ids ?? null"
+      @confirm="saveAllowedDictionaries"
+    />
   </div>
 </template>
 
@@ -295,7 +385,7 @@ function formatDate(value: string | null) {
 .user-list-header,
 .user-row {
   display: grid;
-  grid-template-columns: 1fr 1.4fr 1fr 1fr 0.9fr 0.8fr 1.6fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr 0.6fr 0.8fr 1.6fr;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -315,6 +405,37 @@ function formatDate(value: string | null) {
 
 .user-row:hover {
   background: var(--color-hover-tint);
+}
+
+/* Token 值一行、复制/删除图标另起一行，都居中 */
+.col-token {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.col-token-head {
+  text-align: center;
+}
+
+.token-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.token-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.mono {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .col-actions {

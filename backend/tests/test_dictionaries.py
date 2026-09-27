@@ -2109,23 +2109,13 @@ async def test_entry_document_has_its_own_rate_limit(
     finally:
         db.close()
     rate_limiter.reset()
-    try:
-        for _ in range(10):
-            resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
-            assert resp.status_code == 200
+    for _ in range(10):
         resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
-        assert resp.status_code == 429
-        assert "Retry-After" in resp.headers
-
-        # 取了 11 次词条文档，查询配额（1 次/分钟）仍然没被动过
-        resp = await client.get(
-            "/api/dict/search", params={"word": "沁园春", "dict": str(dict_id)}
-        )
         assert resp.status_code == 200
-    finally:
-        db = SessionLocal()
-        try:
-            set_setting(db, "anonymous_ip_rate_limit_per_min", "60")
-        finally:
-            db.close()
-        rate_limiter.reset()
+    resp = await client.get(f"/api/dict/entry/{dict_id}", params={"word": "沁园春"})
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers
+
+    # 取了 11 次词条文档，查询配额（1 次/分钟）仍然没被动过
+    resp = await client.get("/api/dict/search", params={"word": "沁园春", "dict": str(dict_id)})
+    assert resp.status_code == 200

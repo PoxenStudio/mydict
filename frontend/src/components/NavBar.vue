@@ -8,6 +8,7 @@ import { useSettingsStore } from '../stores/settings'
 import { listDictionaries } from '../api/dict'
 import { setAllowedDictionaries } from '../api/auth'
 import ThemeToggle from './ThemeToggle.vue'
+import ApiTokenDialog from './ApiTokenDialog.vue'
 import ChangePasswordDialog from './ChangePasswordDialog.vue'
 import DictionaryPickerDialog from './DictionaryPickerDialog.vue'
 import type { PublicDictionary } from '../types/query'
@@ -16,6 +17,7 @@ const router = useRouter()
 const authStore = useUserAuthStore()
 const settingsStore = useSettingsStore()
 const changePasswordVisible = ref(false)
+const apiTokenVisible = ref(false)
 const dictPickerVisible = ref(false)
 const availableDictionaries = ref<PublicDictionary[]>([])
 
@@ -37,6 +39,8 @@ onMounted(() => {
 async function handleUserCommand(command: string) {
   if (command === 'change-password') {
     changePasswordVisible.value = true
+  } else if (command === 'api-token') {
+    apiTokenVisible.value = true
   } else if (command === 'logout') {
     authStore.logout()
   } else if (command === 'dictionaries') {
@@ -80,6 +84,7 @@ async function saveAllowedDictionaries(ids: number[] | null) {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="dictionaries">词典选择</el-dropdown-item>
+              <el-dropdown-item command="api-token">Token 管理</el-dropdown-item>
               <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
               <el-dropdown-item command="admin">后台</el-dropdown-item>
               <el-dropdown-item command="logout" divided>退出</el-dropdown-item>
@@ -111,6 +116,7 @@ async function saveAllowedDictionaries(ids: number[] | null) {
     </div>
 
     <ChangePasswordDialog v-model:visible="changePasswordVisible" />
+    <ApiTokenDialog v-model:visible="apiTokenVisible" />
     <DictionaryPickerDialog
       v-model:visible="dictPickerVisible"
       :dictionaries="availableDictionaries"

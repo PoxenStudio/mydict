@@ -1,6 +1,7 @@
 """在线词典查询端点的用例。出站抓取打桩，只验证聚合/鉴权/链接生成。"""
 
 import httpx
+import pytest
 from httpx import AsyncClient
 
 from app.services import online_dict_service
@@ -107,3 +108,37 @@ async def test_online_lookup_requires_open_access_or_login(
     set_setting(db_session, "open_access", "false")
     resp = await client.get("/api/dict/online/lookup", params={"word": "x"})
     assert resp.status_code == 401
+
+
+def test_failed_source_result_is_not_cached(monkeypatch) -> None:
+    """有源失败时结果照常返回但不入缓存，下一次查询会重新打出去；全部成功才缓存。"""
+    calls = {"wikipedia": 0}
+    outcomes = [online_dict_service.SourceUnavailableError("HTTP 503"), None]
+
+    def flaky_wikipedia(word, lang):
+        calls["wikipedia"] += 1
+        outcome = outcomes.pop(0) if outcomes else None
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"id": "wikipedia", "name": "Wikipedia", "title": word, "text": "摘要"}
+
+    monkeypatch.setattr(online_dict_service, "_fetch_wikipedia", flaky_wikipedia)
+    monkeypatch.setattr(online_dict_service, "_fetch_wiktionary", lambda w, lang: None)
+    monkeypatch.setattr(online_dict_service, "_fetch_baike", lambda w: None)
+    word = f"抖动{id(monkeypatch)}"
+
+    first = online_dict_service.lookup_online(word, "zh")
+    assert first["sections"] == [] and len(first["links"]) == 4
+    second = online_dict_service.lookup_online(word, "zh")
+    assert [s["id"] for s in second["sections"]] == ["wikipedia"]
+    online_dict_service.lookup_online(word, "zh")
+    assert calls["wikipedia"] == 2
+
+
+def test_found_distinguishes_missing_from_unavailable() -> None:
+    request = httpx.Request("GET", "https://example.org")
+    assert online_dict_service._found(httpx.Response(200, request=request)) is True
+    assert online_dict_service._found(httpx.Response(404, request=request)) is False
+    for status in (403, 429, 503):
+        with pytest.raises(online_dict_service.SourceUnavailableError):
+            online_dict_service._found(httpx.Response(status, request=request))

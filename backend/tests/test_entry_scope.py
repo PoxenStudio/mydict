@@ -9,7 +9,11 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models.dictionary import DictEntry
-from app.services.entry_scope import current_generation_only, in_dictionary_for_id_window
+from app.services.entry_scope import (
+    current_generation_only,
+    in_dictionary_for_id_window,
+    word_lower_prefix,
+)
 
 
 def _plan(db: Session, statement) -> str:
@@ -49,3 +53,16 @@ def test_search_uses_dictionary_word_index(db_session: Session) -> None:
         .statement,
     )
     assert "ix_dict_entries_dict_word_lower (dictionary_id=? AND word_lower=?)" in plan, plan
+
+
+def test_word_prefix_reads_dictionary_word_index_range(db_session: Session) -> None:
+    """前缀匹配必须是 (dictionary_id, word_lower) 的索引区间读，而不是按词典收窄后逐行比较。"""
+    single = select(DictEntry.id).where(DictEntry.dictionary_id == 7, word_lower_prefix("ab"))
+    plan = _plan(db_session, single.order_by(DictEntry.word_lower).limit(8))
+    assert "(dictionary_id=? AND word_lower>? AND word_lower<?)" in plan, plan
+
+    many = select(DictEntry.word).where(
+        DictEntry.dictionary_id.in_([1, 2]), word_lower_prefix("ab")
+    )
+    plan = _plan(db_session, many.order_by(DictEntry.word_lower).limit(30))
+    assert "(dictionary_id=? AND word_lower>? AND word_lower<?)" in plan, plan

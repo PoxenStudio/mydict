@@ -133,6 +133,20 @@
 | `--size-control-md` | 32px | 与 Element Plus 默认控件同高的行/图标列宽度 |
 | `--size-control-lg` | 44px | 悬浮按钮（回到顶部/回到底部）的圆形直径，单指可稳妥点中 |
 | `--size-scrollbar-width` | 8px | 细滚动条宽度 |
+| `--size-search-input` | 48px | 首页搜索框输入区高度 |
+| `--size-search-button` | 40px | 首页查询按钮高度（比输入区矮一圈，嵌在圆角搜索框内） |
+| `--size-search-input-compact` | 30px | 窄屏（< 640px）搜索框输入区高度 |
+| `--size-search-button-compact` | 26px | 窄屏查询按钮高度 |
+
+### 5.2 动效（Motion）
+
+状态切换的过渡时长与缓动取下列 Token，不在组件里写死秒数：
+
+| Token | 取值 | 用途 |
+| --- | --- | --- |
+| `--motion-duration-fast` | 150ms | 颜色/描边/阴影等状态切换（hover、focus、主题切换） |
+| `--motion-duration-base` | 200ms | 小幅位移或旋转（如展开箭头） |
+| `--motion-ease-standard` | ease | 默认缓动 |
 
 ## 6. 字体与排版
 
@@ -146,8 +160,9 @@
 ## 7. 核心组件风格指南
 
 ### 7.1 查询首页搜索框
-- 页面视觉焦点，采用较大尺寸（高度 ≥ 48px）、`--radius-full` 圆角。浅色主题下页面底色与白色搜索框很接近，只靠浅阴影会“融进背景”，所以常显 `--color-border-hover` 描边 + `--shadow-elevation-2` 阴影；hover 时描边转 `--color-brand-300`，获得焦点时描边转 `--color-brand-500`、阴影升到 `--shadow-elevation-3`。占位文字用 `--color-text-tertiary`。
+- 页面视觉焦点，采用较大尺寸（输入区 `--size-search-input`，≥ 48px）、`--radius-full` 圆角。浅色主题下页面底色与白色搜索框很接近，只靠浅阴影会“融进背景”，所以常显 `--color-border-hover` 描边 + `--shadow-elevation-2` 阴影；hover 时描边转 `--color-brand-300`，获得焦点时描边转 `--color-brand-500`、阴影升到 `--shadow-elevation-3`。占位文字用 `--color-text-tertiary`。
 - 查询按钮是 7.3 主按钮的例外：底色用 `--color-brand-600`（白字在 `--color-brand-500` 上对比度只有约 2.3:1，看不清），hover `--color-brand-700`、active `--color-brand-900`，文字 `--font-weight-medium`，带 `--shadow-elevation-1`；禁用态为 `--color-border` 底 + `--color-text-tertiary` 字。
+- 窄屏（< 640px）例外：为了让首屏多容纳几行结果，输入区降为 `--size-search-input-compact`（30px）、查询按钮降为 `--size-search-button-compact`（26px），检索范围标签行与展开开关的上下内边距收到 `--space-1`。输入框字号保持 `--text-md`（16px）不缩小：低于 16px 时 iOS Safari 聚焦输入框会自动放大整个页面。
 - 页面为单列居中布局（最大宽度 `--size-content-md`）：自上而下依次是站名标语、搜索框、检索范围、结果列表；搜索提示语与部署版本号收在页面底部的页脚（`.site-footer`）。
 - 检索范围只对登录用户显示（列出其可用词典），访客（开放使用）没有这一行。默认收起，搜索框下方居中显示一行摘要（「检索范围：全部词典（N）」或「已选 x / N 部」）与右箭头；点击后箭头转向下方，在摘要下方展开与搜索框同宽的面板（筛选框、语言快捷按钮、词典列表）。词典项以「[语言]词典名」的紧凑形式显示（语言部分用次要文字色，整项超长时一起省略），列表按 240px 最小列宽自动排成多列，超过 `--size-scroll-md` 时在列表内滚动；复选框用 `accent-color: --color-brand-500`。
 

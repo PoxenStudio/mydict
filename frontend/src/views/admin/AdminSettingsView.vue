@@ -182,13 +182,13 @@ async function save() {
           <el-input
             v-model="form.online_dict_proxy"
             maxlength="300"
-            placeholder="留空直连；如 http://192.168.5.197:7890"
-            style="width: 420px"
+            placeholder="留空直连；如 http://127.0.0.1:7890"
           />
         </el-form-item>
         <p class="hint">
-          维基百科/维基词典的查询经由该代理发出（百度百科直连即可）。保存后立即生效，无需重启。
-          未设置时回落到部署环境变量 ONLINE_DICT_PROXY。
+          维基百科/维基词典的查询经由该代理发出（百度百科直连即可），只支持 http:// 或 https://
+          地址。保存后立即生效，无需重启。默认显示部署环境变量 ONLINE_DICT_PROXY 的值；
+          改成其它值（包括清空为直连）才会单独保存。
         </p>
         <el-form-item label="启用的源">
           <el-checkbox-group

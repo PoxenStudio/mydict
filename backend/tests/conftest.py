@@ -39,6 +39,28 @@ def _reset_rate_limiter():
     rate_limiter.reset()
 
 
+@pytest.fixture(autouse=True)
+def _restore_system_settings():
+    """用例里改的系统设置（开放使用、限额、在线词典开关…）结束后按快照还原，
+    否则会漏到后面的用例里（如限额留在 1，后续匿名请求全部 429）。"""
+    from app.models.settings import SystemSetting
+
+    with SessionLocal() as db:
+        snapshot = {row.key: row.value for row in db.query(SystemSetting)}
+    yield
+    with SessionLocal() as db:
+        for row in db.query(SystemSetting):
+            if row.key not in snapshot:
+                db.delete(row)
+            elif row.value != snapshot[row.key]:
+                row.value = snapshot[row.key]
+        present = {key for (key,) in db.query(SystemSetting.key)}
+        for key, value in snapshot.items():
+            if key not in present:
+                db.add(SystemSetting(key=key, value=value))
+        db.commit()
+
+
 @pytest.fixture
 def db_session() -> Iterator:
     db = SessionLocal()

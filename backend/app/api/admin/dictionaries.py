@@ -289,8 +289,6 @@ def cleanup_uss_speakers(
 
     文件存在性在后台任务里逐条解析（大小写不敏感兜底），文件还在的按钮保留。
     """
-    if db.get(Dictionary, dictionary_id) is None:
-        raise NotFoundError("词典不存在")
     task_id = dictionary_service.start_uss_cleanup(db, dictionary_id, settings)
     return DictionaryImportTaskOut(task_id=task_id)
 

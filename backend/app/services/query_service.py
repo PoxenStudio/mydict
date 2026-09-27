@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core import query_cache
 from app.models.dictionary import DictEntry, Dictionary
-from app.services.entry_scope import current_generation_only
+from app.services.entry_scope import current_generation_only, word_lower_prefix
 from app.services.query_expand import EXPANSION_VERSION, expand_word
 
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}
@@ -256,10 +256,10 @@ def _prefix_fallback_entries(
     为什么需要：不少词典的 MDict 词头带注记后缀（Japanese Education Vocabulary 的
     「あ【亜】」「み【味】」、搜韵的「中国【ちゅうごく①】」），对它们做**精确**匹配永远
     打不中，而 MDict 客户端与 django-mdict 的搜索都是前缀式的，用户因此觉得「明明有这部
-    词典却查不到」。管理端测试查询本来就是前缀 LIKE（dictionary_service.test_query）。
+    词典却查不到」。管理端测试查询本来就是前缀匹配（dictionary_service.test_query）。
 
-    查询走 (dictionary_id, word_lower) 复合索引：未命中的词典一次索引范围读，只取前几条，
-    代价可忽略；有精确命中的词典根本不进这条路径。
+    查询走 (dictionary_id, word_lower) 复合索引（见 word_lower_prefix）：未命中的词典一次
+    索引范围读，只取前几条，代价可忽略；有精确命中的词典根本不进这条路径。
     """
     if not prefix_lower:
         return []
@@ -267,7 +267,7 @@ def _prefix_fallback_entries(
         current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id == dictionary_id,
-            DictEntry.word_lower.like(f"{prefix_lower}%"),
+            word_lower_prefix(prefix_lower),
         )
         .order_by(DictEntry.word_lower)
         .limit(_PREFIX_FALLBACK_LIMIT)
@@ -395,37 +395,56 @@ def get_entries_for_document(
     「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
 
     `entry_ids` 给了就按它取——前端把查询结果里那一组的条目 id 显式传过来，保证 iframe 里
-    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里
-    **或以任一变体开头**的条目（与 search_word 的匹配范围一致——搜索有前缀兜底，命中的
-    词条词头如「あ【亜】」并不是查询词「あ」的等价变体，而是以它开头）：`entry_ids` 是
-    客户端输入，不加这层约束的话随便填 id 就能逐段拉走整部词典，绕过查询配额。
+    的条数与「共 N 条」一致。`entry_ids` 是客户端输入，只认 search_word 可能返回的那些条目：
+    词头落在 `expand_word(word)` 变体集合里的，或这部词典精确未命中时前缀兜底返回的那几条
+    （词头如「あ【亜】」以查询词「あ」开头，但不是它的变体）。只按「以查询词开头」放行的话，
+    拿单个字当 word 就能逐批拉走整部词典，绕过查询配额。
 
     `entry_ids` 一条都对不上时退回按词取：词典被重新解析后条目 id 整体换新，页面上还开着的
     旧查询结果带的是旧 id，不该因此显示「词条不存在」。
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
+    word_lower = word.strip().lower()
+    if not word_lower:
+        return []
     variants = expand_word(word)
     variants_lower = {variant.lower() for variant in variants}
 
+    def exact_entries() -> list[DictEntry]:
+        return (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.dictionary_id == dictionary_id)
+            .filter(DictEntry.word_lower.in_(variants))
+            .order_by(DictEntry.id)
+            .all()
+        )
+
+    prefix_ids: set[int] | None = None
+
+    def search_prefix_ids() -> set[int]:
+        """search_word 对这部词典会返回的前缀兜底条目；精确命中时搜索不走兜底，为空集。"""
+        nonlocal prefix_ids
+        if prefix_ids is None:
+            prefix_ids = (
+                set()
+                if exact_entries()
+                else {e.id for e in _prefix_fallback_entries(db, word_lower, dictionary_id)}
+            )
+        return prefix_ids
+
     def authorized(entry: DictEntry) -> bool:
-        """id 归属校验：词条属于目标词典，且词头是查询词的等价变体或以任一变体开头
-        （搜索有前缀兜底，命中的词条词头如「あ【亜】」并不是查询词「あ」的变体，
-        而是以它开头）。词典归属放在 Python 侧而不是 SQL 里——
-        `dictionary_id=? AND id IN (…)` 会让规划器放弃主键、走词典覆盖索引全扫
-        （搜韵 826 万行，实测 770ms；纯主键 IN 只要 1ms）。"""
+        """词典归属放在 Python 侧而不是 SQL 里——`dictionary_id=? AND id IN (…)` 会让规划器
+        放弃主键、走词典覆盖索引全扫（搜韵 826 万行，实测 770ms；纯主键 IN 只要 1ms）。"""
         if entry.dictionary_id != dictionary_id:
             return False
-        word_lower = entry.word_lower or ""
-        return word_lower in variants_lower or any(
-            word_lower.startswith(variant) for variant in variants_lower
-        )
+        if (entry.word_lower or "") in variants_lower:
+            return True
+        return entry.id in search_prefix_ids()
 
     entries: list[DictEntry] = []
     if entry_ids:
-        # 纯主键取回（瞬时），归属与词典校验都在 Python 里做——不要把 dictionary_id
-        # 塞进这条查询（见 authorized 注释），也不要把十几个前缀 LIKE 塞进一条 OR
-        # 查询：都会让规划器放弃索引、退化成整部词典扫描。
+        # 纯主键取回（瞬时），归属与词典校验都在 Python 里做（见 authorized 注释）
         candidates = (
             current_generation_only(db.query(DictEntry))
             .filter(DictEntry.id.in_(entry_ids))
@@ -434,21 +453,9 @@ def get_entries_for_document(
         )
         entries = [entry for entry in candidates if authorized(entry)]
     if not entries:
-        # 没传 id（或全都不在授权范围内，如词典被重新解析后条目 id 整体换新）时退回按词取
-        statement = (
-            current_generation_only(db.query(DictEntry))
-            .filter(DictEntry.dictionary_id == dictionary_id)
-            .filter(DictEntry.word_lower.in_(variants))
-        )
-        entries = statement.order_by(DictEntry.id).all()
-        if not entries:
-            # 精确未命中退回前缀（case_sensitive_like=ON 时走索引区间，见 core/db.py）
-            statement = (
-                current_generation_only(db.query(DictEntry))
-                .filter(DictEntry.dictionary_id == dictionary_id)
-                .filter(DictEntry.word_lower.like(f"{word.strip().lower()}%"))
-            )
-            entries = statement.order_by(DictEntry.id).all()
+        # 没传 id（或全都不在授权范围内，如词典被重新解析后条目 id 整体换新）时退回按词取，
+        # 精确未命中再退回前缀，与 search_word 的兜底同一查询、同一上限
+        entries = exact_entries() or _prefix_fallback_entries(db, word_lower, dictionary_id)
     # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
     resolved: dict[int, DictEntry] = {}
     for entry in entries:
@@ -472,7 +479,7 @@ def suggest_prefix(
         current_generation_only(db.query(DictEntry.word))
         .filter(
             DictEntry.dictionary_id.in_([d.id for d in dictionaries]),
-            DictEntry.word_lower.like(f"{prefix_lower}%"),
+            word_lower_prefix(prefix_lower),
         )
         .order_by(DictEntry.word_lower)
         .limit(limit * 3)

@@ -28,8 +28,13 @@ from app.services.definition_repair import (
     expand_stored_styles,
     remove_missing_uss_speakers,
 )
-from app.services.entry_scope import current_generation_only, in_dictionary_for_id_window
+from app.services.entry_scope import (
+    current_generation_only,
+    in_dictionary_for_id_window,
+    word_lower_prefix,
+)
 from app.services.language_detect import detect_language
+from app.services.random_entry_service import invalidate_bounds as invalidate_random_bounds
 from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 
 logger = logging.getLogger("mydict.dictionary")
@@ -635,6 +640,8 @@ def _reparse_one(
     invalidate_query_cache()
 
     _purge_generations(db, dict_id, DictEntry.generation != next_generation)
+    # 旧一代清完后主键区间才稳定；在这之前失效的话，区间可能又按旧一代算回缓存
+    invalidate_random_bounds()
     return count
 
 
@@ -807,10 +814,15 @@ def _run_uss_cleanup_in_background(
     try:
         res_dir = Path(storage_path) / str(dictionary_id) / "res"
 
-        def on_progress(entries_changed: int, anchors_removed: int) -> None:
+        def on_progress(done: int, total: int, entries_changed: int, anchors_removed: int) -> None:
             background_tasks.update_progress(
                 task_id,
-                {"entries": entries_changed, "speakers": anchors_removed},
+                {
+                    "done": done,
+                    "total": total,
+                    "entries": entries_changed,
+                    "speakers": anchors_removed,
+                },
             )
 
         entries, speakers = remove_missing_uss_speakers(
@@ -1220,6 +1232,7 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
         storage_root.rmdir()
 
     invalidate_query_cache()
+    invalidate_random_bounds()
     # VACUUM 要重写整个数据库文件，库越大越慢（实测 200MB 库跑到 40+ 秒），同步跑在
     # 删除请求里会让前端 10 秒超时误以为删除没生效（其实后端还在继续跑、最终会删成功，
     # 只是响应没能在超时前返回）；丢到后台线程异步执行，删除接口本身只做行删除和文件
@@ -1266,7 +1279,7 @@ def test_query(db: Session, dictionary_id: int, word: str, limit: int = 20) -> l
     return (
         current_generation_only(db.query(DictEntry))
         .filter(
-            DictEntry.dictionary_id == dictionary_id, DictEntry.word_lower.like(f"{word_lower}%")
+            DictEntry.dictionary_id == dictionary_id, word_lower_prefix(word_lower)
         )
         .order_by(DictEntry.word_lower)
         .limit(limit)

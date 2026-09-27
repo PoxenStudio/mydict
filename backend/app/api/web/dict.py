@@ -6,59 +6,22 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.core import rate_limiter
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.deps import WebCaller, get_web_caller, require_user
-from app.core.exceptions import NotFoundError, RateLimitedError
+from app.core.exceptions import NotFoundError
 from app.models.dictionary import Dictionary
 from app.models.user import User
 from app.schemas.query import PublicDictionaryOut, QueryHistoryResponse, WebQueryResponse
-from app.services import query_log_service, query_service, resource_service
+from app.services import (
+    query_log_service,
+    query_service,
+    resource_service,
+    web_rate_limit_service,
+)
 from app.services.entry_render_service import render_entries_document
-from app.services.settings_service import get_int_setting
 
 router = APIRouter(prefix="/dict", tags=["web-dict"])
-
-# 词条文档的每分钟限额 = 查询限额 × 这个倍数。一次查询之后要展开多部词典、用 ←/→ 来回
-# 切换，每次都会取一次词条文档，所以给得比查询宽得多；但不能不限——否则它就成了绕过
-# 查询配额的抓取入口。
-_ENTRY_RATE_MULTIPLIER = 10
-
-
-def _ip_rate_limit(db: Session, caller: WebCaller, settings: Settings) -> tuple[str, int]:
-    """返回 (计数 key, 每分钟限额)。
-
-    访客与匿名 API 调用共用同一套按 IP 限流规则；登录用户走单独的（通常更宽松的）按 IP
-    限流阈值。计数 key 按登录态区分前缀，避免同一 IP 下匿名与登录用户互相挤占对方的配额。
-    """
-    ip = caller.ip or "unknown"
-    if caller.user is None:
-        limit = get_int_setting(
-            db, "anonymous_ip_rate_limit_per_min", settings.anonymous_ip_rate_limit_per_min
-        )
-        return f"anon:{ip}", limit
-    limit = get_int_setting(db, "user_ip_rate_limit_per_min", settings.user_ip_rate_limit_per_min)
-    return f"user:{ip}", limit
-
-
-def _enforce_web_rate_limit(db: Session, caller: WebCaller, settings: Settings, word: str) -> None:
-    counter_key, limit = _ip_rate_limit(db, caller, settings)
-    if rate_limiter.check_and_increment(counter_key, limit):
-        return
-    query_log_service.log_query(
-        db,
-        source="web",
-        word=word,
-        status="rate_limited",
-        duration_ms=0,
-        user_id=caller.user.id if caller.user else None,
-        ip=caller.ip,
-    )
-    raise RateLimitedError(
-        "查询过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
-    )
-
 
 @router.get("/dictionaries", response_model=list[PublicDictionaryOut])
 def list_dictionaries(
@@ -83,7 +46,7 @@ def search(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> WebQueryResponse:
-    _enforce_web_rate_limit(db, caller, settings, word)
+    web_rate_limit_service.enforce_query_limit(db, caller, settings, word)
 
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
     started = time.perf_counter()
@@ -109,16 +72,6 @@ def search(
         ip=caller.ip,
     )
     return WebQueryResponse(results=results)
-
-
-def _enforce_entry_rate_limit(db: Session, caller: WebCaller, settings: Settings) -> None:
-    """词条文档单独计数，不占查询配额（见 _ENTRY_RATE_MULTIPLIER）。超限不写 query_logs：
-    它不是一次查词，记进去会污染查询统计。"""
-    counter_key, limit = _ip_rate_limit(db, caller, settings)
-    if not rate_limiter.check_and_increment(f"entry:{counter_key}", limit * _ENTRY_RATE_MULTIPLIER):
-        raise RateLimitedError(
-            "词条加载过于频繁，请稍后再试", retry_after=rate_limiter.seconds_to_next_minute()
-        )
 
 
 def _parse_entry_ids(raw: str | None) -> list[int] | None:
@@ -157,13 +110,13 @@ def entry_document(
     「展开 N 部词典」变成 N+1 次配额。但它有自己的、宽得多的按 IP 限额，否则就成了绕过
     查询配额的抓取入口。
 
-    `word` 必须是用户查询时输入的那个词：`entry_ids` 只在 `expand_word(word)` 的变体范围内
-    生效——与 /search 的匹配范围完全一致，所以正常请求不受影响，而伪造的 id 取不到别的词条。
+    `word` 必须是用户查询时输入的那个词：`entry_ids` 只认 /search 可能返回的条目（`word` 的
+    变体，或精确未命中时前缀兜底的那几条），所以正常请求不受影响，而伪造的 id 取不到别的词条。
 
     theme 由前端按当前主题带上：直接写进文档，iframe 首屏就是正确的明暗，不必等父页的
     postMessage 到达再变色（那会有一次肉眼可见的闪变）。
     """
-    _enforce_entry_rate_limit(db, caller, settings)
+    web_rate_limit_service.enforce_entry_limit(db, caller, settings)
 
     dictionary = db.get(Dictionary, dictionary_id)
     allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None

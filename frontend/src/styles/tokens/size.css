@@ -10,4 +10,8 @@
   --size-control-md: 32px;
   --size-control-lg: 44px;
   --size-scrollbar-width: 8px;
+  --size-search-input: 48px;
+  --size-search-button: 40px;
+  --size-search-input-compact: 30px;
+  --size-search-button-compact: 26px;
 }

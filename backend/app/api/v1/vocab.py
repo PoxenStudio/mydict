@@ -10,6 +10,13 @@ from app.services import vocab_service
 router = APIRouter(prefix="/v1/vocab", tags=["v1-vocab"])
 
 
+def _owner(token: ApiToken) -> tuple[vocab_service.OwnerKind, int]:
+    """用户 Token 读写该用户的网页生词本，普通 Token 读写自己独立的生词本。"""
+    if token.user_id is not None:
+        return "user", token.user_id
+    return "token", token.id
+
+
 @router.get("", response_model=VocabListResponse)
 def list_vocab(
     search: str | None = None,
@@ -19,7 +26,7 @@ def list_vocab(
     db: Session = Depends(get_db),
 ) -> VocabListResponse:
     items, total = vocab_service.list_vocab_items(
-        db, "token", token.id, search, page, min(page_size, 100)
+        db, *_owner(token), search, page, min(page_size, 100)
     )
     return VocabListResponse(items=items, total=total, page=page, page_size=page_size)
 
@@ -31,7 +38,7 @@ def add_vocab(
     db: Session = Depends(get_db),
 ) -> VocabItemOut:
     return vocab_service.add_vocab_item(
-        db, "token", token.id, body.word, body.dictionary_id, body.note
+        db, *_owner(token), body.word, body.dictionary_id, body.note
     )
 
 
@@ -41,5 +48,5 @@ def delete_vocab(
     token: ApiToken = Depends(require_api_token),
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
-    vocab_service.delete_vocab_item(db, "token", token.id, item_id)
+    vocab_service.delete_vocab_item(db, *_owner(token), item_id)
     return {"ok": True}

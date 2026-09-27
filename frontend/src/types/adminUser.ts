@@ -9,6 +9,10 @@ export interface AdminUserItem {
   last_login_at: string | null
   vocab_count: number
   query_count: number
+  /** 可用词典，null 为不限制 */
+  allowed_dictionary_ids: number[] | null
+  /** 用户 Token 明文（以该用户身份调用对外 API），没有时为 null */
+  api_token: string | null
 }
 
 export interface AdminUserListResponse {

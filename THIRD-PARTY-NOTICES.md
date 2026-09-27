@@ -26,6 +26,7 @@
 | greenlet | 3.5.5 | MIT AND PSF-2.0 |
 | h11 | 0.16.0 | MIT |
 | httptools | 0.8.0 | MIT |
+| httpx | 0.28.1 | BSD-3-Clause |
 | idna | 3.19 | BSD-3-Clause |
 | mdict-utils | 1.3.14 | MIT |
 | opencc-python-reimplemented | 0.1.7 | Apache-2.0 |
@@ -45,6 +46,16 @@
 | watchfiles | 1.2.0 | MIT |
 | websockets | 17.1 | BSD-3-Clause |
 | xxhash | 4.0.1 | BSD-2-Clause |
+
+## 镜像内的系统库（`Dockerfile` 中 apt 安装）
+
+基础镜像 `python:3.12-slim` 自带的 Debian 系统包不在此逐一列出；以下是本项目额外安装、且被应用代码直接使用的系统库。
+
+| 包 | 用途 | 许可证 |
+|---|---|---|
+| `liblzo2-2`（[LZO](https://www.oberhumer.com/opensource/lzo/)） | 解压 LZO 压缩的 MDict 词典（引擎版本 <2.0 的老词典）。应用代码不链接、不包含它的源码，由 `backend/app/parsers/lzo_compat.py` 在运行时通过 ctypes 动态加载 | **GPL-2.0-or-later** |
+
+> 本项目代码以 MIT 授权；`liblzo2` 作为独立的系统库随镜像分发，其源码可从 Debian 的 `lzo2` 源码包或上游获取。不需要 LZO 支持的部署方可以从 `Dockerfile` 中去掉这一行 apt 安装，届时 LZO 词典导入会得到明确的「当前构建未启用 LZO 支持」提示，其它功能不受影响。
 
 ## 前端运行时依赖（打包进构建产物，见 `frontend/package.json` dependencies）
 

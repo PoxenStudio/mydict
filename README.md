@@ -29,9 +29,10 @@
 
 - **词典导入**：支持 MDict（`.mdx`+`.mdd`）、StarDict（`.ifo/.idx/.dict`）、ECDICT（CSV）三种格式；网页上传或服务器目录导入两种方式，后者适合 GB 级大文件。
 - **对外 API**：`Authorization: Bearer <token>` 鉴权，查询/联想/词典列表/生词本增删查；管理员可开启「开放使用」允许匿名查询（按 IP 限流）。
-- **网页词典**：标准查询体验，登录后可收藏生词、查看生词本；访客模式可配置。结果按词典分组、排序第一的默认展开，`entry://` 词条内跳转与发音链接可直接点击；左侧「检索范围」可临时只查某几部词典（或按语言快速筛选），只影响当前浏览器、不改动词典的启用状态。
+- **网页词典**：标准查询体验，登录后可收藏生词、查看生词本；访客模式可配置。结果按词典分组、排序第一的默认展开，`entry://` 词条内跳转与发音链接可直接点击；搜索框下方的「检索范围」可临时只查某几部词典（或按语言快速筛选），只影响当前浏览器、不改动词典的启用状态。精确查不到时自动退回前缀匹配，词头带注记（如「あ【亜】」）的词典也能查到。
+- **在线词典与随机浏览**：检索范围里的【在线】查维基百科、维基词典、百度百科并给出 Google 等外部搜索链接（默认关闭，由管理员开启）；【随机】在所选词典里随机翻看词条。
 - **繁简通搜**：查询词会自动展开成繁简、全角/半角等价写法后一并匹配，输入简体也能查到只收繁体的词典（反之亦然）。
-- **管理后台**：Token 管理、用户管理、用量统计（按 Token/用户/日期/来源，支持 CSV 导出）、系统设置（限流阈值、开放使用开关等）。
+- **管理后台**：Token 管理、用户管理、用量统计（按 Token/用户/日期/来源，支持 CSV 导出）、系统设置（限流阈值、开放使用开关、在线词典等）。
 - **安全**：词典释义渲染在隔离 iframe 里（`sandbox` 不含 `allow-same-origin`），第三方词典自带的样式与脚本既不会污染界面、也碰不到登录凭证。
 - **单容器部署**：前端构建产物由后端 FastAPI 直接托管，SQLite 内置数据库，无需额外部署数据库/缓存服务。
 
@@ -57,7 +58,25 @@ docker build -t poxenstudio/mydict .
 docker run -d --name mydict -p 8000:8000 -v $(pwd)/data:/data poxenstudio/mydict
 ```
 
-或使用 `docker compose up -d`（等价于上面两步，配置见 `docker-compose.yml`）。
+或使用 `docker compose up -d`（等价于上面两步，配置见 `docker-compose.yml`）：
+
+```
+services:
+  mydict:
+    image: poxenstudio/mydict:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+```
 
 所有配置项均有合理默认值，无需任何 `.env` 文件即可直接运行。如需覆盖（如自定义限流阈值），执行 `cp .env.example .env` 后取消对应行注释修改，再启动时加上 `--env-file .env`（`docker compose` 会自动读取同目录下的 `.env`，存在则用，不存在则跳过)。
 
@@ -131,11 +150,11 @@ docker compose up -d
 
 **导入时报「服务器内部错误」怎么办？**
 
-先看日志 `/data/logs/mydict.log`（容器内）里那条堆栈。目前最常见的一种是**很老的 MDict 词典**：
+先看日志 `/data/logs/mydict.log`（容器内）里那条堆栈，按报错内容处理。
 
-MDict 引擎版本低于 2.0 的词典用 LZO 压缩数据块（2.0 以后才用 zlib），而 mydict 依赖的 `mdict-utils` 只有在额外装了 `python-lzo` 时才支持 LZO。`python-lzo` 和它依赖的 `liblzo2` 都是 **GPL**，与本项目 MIT 授权不兼容，所以没有内置——日志里会看到 `RuntimeError: LZO compression is not supported`，导入界面则会显示「该词典使用了 LZO 压缩（MDict 引擎版本低于 2.0），当前构建未启用 LZO 支持」。
+**很老的 MDict 词典（引擎版本低于 2.0）能导入吗？**
 
-这类词典可以**离线转换**后再导入：仓库里的 `scripts/mdict_lzo_to_ecdict.py` 把它们导出成 ECDICT 格式 CSV，再走正常的 ECDICT 通道（该脚本是运维工具，不属于运行时代码，只有运行它才需要 GPL 的 python-lzo）：
+能。这类词典用 LZO 压缩数据块（2.0 以后才用 zlib），官方镜像内置了 `liblzo2` 运行库来解压（`liblzo2` 以 GPL 授权，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)）。如果你自己构建镜像时去掉了它，导入界面会提示「该词典使用了 LZO 压缩（MDict 引擎版本低于 2.0），当前构建未启用 LZO 支持」，这时可以把词典**离线转换**后再导入：仓库里的 `scripts/mdict_lzo_to_ecdict.py` 把它们导出成 ECDICT 格式 CSV，再走正常的 ECDICT 通道：
 
 ```bash
 pip install python-lzo mdict-utils
@@ -187,6 +206,10 @@ docker restart mydict
 原样显示了。同样是「从源文件修复」那个按钮——它会读源文件里的 `StyleSheet` 把已入库的释义
 就地展开，**不必重新导入**。只对「词条里真的含反引号」的词典打开 `.mdx`（打开一次要几秒到
 十几秒），其余不受影响。
+
+**查询页没有【在线】标签？在线词典怎么开启？**
+
+在线词典默认关闭（它由服务器代你访问维基百科、百度百科等第三方站点）。在后台「系统设置 → 在线词典」打开总开关，前台检索范围里就会出现【在线】标签；同一处可以勾选启用哪些来源。服务器直连不了维基的话，在「出站代理服务器」填一个 `http://` 或 `https://` 代理（也可以用环境变量 `ONLINE_DICT_PROXY` 设默认值，后台改的值优先），保存后立即生效；百度百科始终直连。
 
 **扫描版词典（辞海这类）的字太小看不清？**
 

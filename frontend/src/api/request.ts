@@ -3,6 +3,13 @@ import { ElMessage } from 'element-plus'
 import router from '../router'
 import { clearTokens, getAccessToken } from '../utils/authStorage'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** 后台请求（预取等）：失败时不弹提示、不跳登录页，由真正发起的那次请求处理 */
+    silent?: boolean
+  }
+}
+
 let maintenanceHandler: (() => void) | undefined
 
 // 服务启动流程未就绪时业务接口统一返回 503 maintenance，由系统状态 store 接手展示维护页
@@ -37,6 +44,8 @@ request.interceptors.response.use(
     // 误判成会话过期，静默跳回同一个登录页，界面上看起来像“点了没反应”）
     if (status === 503 && code === 'maintenance') {
       maintenanceHandler?.()
+    } else if (error.config?.silent) {
+      // 静默请求不打扰用户
     } else if (status === 401 && code === 'unauthorized') {
       clearTokens(isAdminApi ? 'admin' : 'user')
       router.push(isAdminApi ? '/admin/login' : '/login')

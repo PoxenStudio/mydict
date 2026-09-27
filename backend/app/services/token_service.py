@@ -1,10 +1,11 @@
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.core.security import generate_api_token, hash_api_token, token_display_prefix
 from app.core.timeutil import today_str
 from app.models.query import QueryLog, QueryStatsDaily
 from app.models.token import ApiToken
+from app.models.user import User
 from app.models.vocab import TokenVocabItem
 from app.services.audit_service import log_action
 from app.services.query_service import filter_existing_dictionary_ids
@@ -41,7 +42,16 @@ def _usage_maps(db: Session) -> tuple[dict[int, int], dict[int, int]]:
     return today_map, total_map
 
 
-def _to_out(token: ApiToken, today_count: int, total_count: int) -> dict:
+def _usernames(db: Session, tokens: list[ApiToken]) -> dict[int, str]:
+    user_ids = {t.user_id for t in tokens if t.user_id is not None}
+    if not user_ids:
+        return {}
+    return dict(db.query(User.id, User.username).filter(User.id.in_(user_ids)).all())
+
+
+def _to_out(
+    token: ApiToken, today_count: int, total_count: int, username: str | None = None
+) -> dict:
     return {
         "id": token.id,
         "name": token.name,
@@ -53,13 +63,19 @@ def _to_out(token: ApiToken, today_count: int, total_count: int) -> dict:
         "today_count": today_count,
         "total_count": total_count,
         "allowed_dictionary_ids": token.allowed_dictionary_ids,
+        "user_id": token.user_id,
+        "username": username,
     }
 
 
 def list_tokens(db: Session) -> list[dict]:
     tokens = db.query(ApiToken).order_by(ApiToken.created_at.desc()).all()
     today_map, total_map = _usage_maps(db)
-    return [_to_out(t, today_map.get(t.id, 0), total_map.get(t.id, 0)) for t in tokens]
+    names = _usernames(db, tokens)
+    return [
+        _to_out(t, today_map.get(t.id, 0), total_map.get(t.id, 0), names.get(t.user_id))
+        for t in tokens
+    ]
 
 
 def _get_or_404(db: Session, token_id: int) -> ApiToken:
@@ -72,7 +88,7 @@ def _get_or_404(db: Session, token_id: int) -> ApiToken:
 def get_token_out(db: Session, token_id: int) -> dict:
     token = _get_or_404(db, token_id)
     today_count, total_count = _usage(db, token_id)
-    return _to_out(token, today_count, total_count)
+    return _to_out(token, today_count, total_count, _usernames(db, [token]).get(token.user_id))
 
 
 def create_token(
@@ -105,6 +121,8 @@ def set_allowed_dictionaries(
     db: Session, token_id: int, dictionary_ids: list[int] | None, admin_id: int
 ) -> dict:
     token = _get_or_404(db, token_id)
+    if token.user_id is not None:
+        raise ConflictError("用户 Token 的可用词典跟随所属用户，请在用户管理里设置")
     token.allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
     db.commit()
     log_action(
@@ -130,15 +148,51 @@ def set_token_status(db: Session, token_id: int, status: str, admin_id: int) -> 
 
 def regenerate_token(db: Session, token_id: int, admin_id: int) -> dict:
     token = _get_or_404(db, token_id)
-    raw = generate_api_token()
-    token.token_hash = hash_api_token(raw)
-    token.token_prefix = token_display_prefix(raw)
+    raw = _assign_secret(token)
     db.commit()
     log_action(
         db, actor_type="admin", actor_id=admin_id, action="token.regenerate", target=str(token_id)
     )
-    today_count, total_count = _usage(db, token_id)
-    return {**_to_out(token, today_count, total_count), "token": raw}
+    return {**get_token_out(db, token_id), "token": raw}
+
+
+def _assign_secret(token: ApiToken) -> str:
+    """换一个新密钥，返回明文；用户 Token 同时保存明文供后台随时复制。"""
+    raw = generate_api_token()
+    token.token_hash = hash_api_token(raw)
+    token.token_prefix = token_display_prefix(raw)
+    token.token_plain = raw if token.user_id is not None else None
+    return raw
+
+
+def issue_user_token(db: Session, user: User, admin_id: int | None) -> ApiToken:
+    """为用户签发 Token；已有则换新密钥（旧值立即失效）。每日上限用系统默认值。
+
+    admin_id 为空表示用户在前台自助分配：与其它自助操作一样不写审计日志（审计表只记录
+    管理员与系统操作）。"""
+    token = db.query(ApiToken).filter(ApiToken.user_id == user.id).first()
+    action = "token.regenerate"
+    if token is None:
+        token = ApiToken(name=f"用户 {user.username}", user_id=user.id, created_by=admin_id)
+        db.add(token)
+        action = "token.create"
+    _assign_secret(token)
+    db.commit()
+    db.refresh(token)
+    if admin_id is not None:
+        log_action(
+            db,
+            actor_type="admin",
+            actor_id=admin_id,
+            action=action,
+            target=str(token.id),
+            detail={"user_id": user.id},
+        )
+    return token
+
+
+def find_user_token(db: Session, user_id: int) -> ApiToken | None:
+    return db.query(ApiToken).filter(ApiToken.user_id == user_id).first()
 
 
 def delete_token(db: Session, token_id: int, admin_id: int) -> None:

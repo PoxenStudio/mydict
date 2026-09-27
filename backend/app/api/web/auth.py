@@ -11,10 +11,12 @@ from app.schemas.auth import RefreshRequest, TokenPairResponse
 from app.schemas.dictionary import AllowedDictionaryIdsRequest
 from app.schemas.user import (
     ChangePasswordRequest,
+    UserApiTokenOut,
     UserLoginRequest,
     UserPublic,
     UserRegisterRequest,
 )
+from app.services import token_service
 from app.services.user_auth_service import (
     authenticate_user,
     change_password,
@@ -72,3 +74,21 @@ def set_allowed_dictionaries_route(
     db: Session = Depends(get_db),
 ) -> User:
     return set_allowed_dictionaries(db, user, body.dictionary_ids)
+
+
+@router.get("/api-token", response_model=UserApiTokenOut)
+def get_api_token(
+    user: User = Depends(require_user), db: Session = Depends(get_db)
+) -> UserApiTokenOut:
+    """当前用户自己的 API Token（以本人身份调用对外 API），没有时 api_token 为空。"""
+    token = token_service.find_user_token(db, user.id)
+    return UserApiTokenOut(api_token=token.token_plain if token else None)
+
+
+@router.post("/api-token", response_model=UserApiTokenOut)
+def issue_api_token(
+    user: User = Depends(require_user), db: Session = Depends(get_db)
+) -> UserApiTokenOut:
+    """自助分配 API Token；已有则重新分配，旧值立即失效。"""
+    token = token_service.issue_user_token(db, user, admin_id=None)
+    return UserApiTokenOut(api_token=token.token_plain)

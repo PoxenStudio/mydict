@@ -32,7 +32,8 @@ def log_query(
 
 
 def get_recent_history(db: Session, user_id: int, limit: int = 100) -> list[dict]:
-    """登录用户最近的查询历史（仅 Web 端查询会写 user_id，第三方 Token 调用不计入）；
+    """登录用户最近的查询历史（Web 端查询与该用户 Token 的 API 查询会写 user_id，
+    普通 Token 不计入）；
     只取查到结果的记录——未命中时没有 dictionary_id，收藏不了，历史里意义不大。"""
     rows = (
         db.query(QueryLog, Dictionary.name)
