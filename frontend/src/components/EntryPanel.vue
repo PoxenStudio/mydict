@@ -97,12 +97,11 @@ watch([batchIndex, () => props.expanded], ([index, expanded]) => {
  * 悬停/按下标题时预取词条文档：点击展开时 HTML 已在手，iframe 立即挂载。
  * 指针事件在 click 之前触发（pointerdown 比 click 早一整次按压），局域网内足够把
  * 请求往返藏进点击里；已展开/已挂载的没有意义，跳过。缓存去重由 api 层负责。
+ * 多词条取的是展开后要挂载的那一批（与 EntryFrame 的 loader 同一组 id），缓存 key 才对得上。
  */
 function prefetch() {
   if (props.expanded || !props.queryWord) return
-  const ids = hasMultiple.value
-    ? props.entries.map((item) => item.id)
-    : [primary.value.id]
+  const ids = hasMultiple.value ? currentBatchIds.value : [primary.value.id]
   prefetchEntryHtml(primary.value.dictionary_id, props.queryWord, ids)
 }
 
