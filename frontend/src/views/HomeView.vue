@@ -609,7 +609,7 @@ function onRescroll(key: string) {
 }
 
 .scope-arrow {
-  transition: transform 0.2s ease;
+  transition: transform var(--motion-duration-base) var(--motion-ease-standard);
 }
 
 .scope-arrow.open {
@@ -683,8 +683,8 @@ function onRescroll(key: string) {
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
   border: 1px solid var(--color-border-hover);
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .search-box:hover {
@@ -705,8 +705,7 @@ function onRescroll(key: string) {
   border: none;
   outline: none;
   background: transparent;
-  /* 搜索框是首屏视觉焦点，高度不低于 48px */
-  height: 48px;
+  height: var(--size-search-input);
   font-size: var(--text-md);
   color: var(--color-text-primary);
 }
@@ -717,8 +716,7 @@ function onRescroll(key: string) {
 
 /* 用 brand-600 而非 brand-500 打底：白字在 brand-500 上对比度只有约 2.3:1，看不清 */
 .search-box button {
-  /* 比输入框矮一圈，嵌在圆角搜索框内 */
-  height: 40px;
+  height: var(--size-search-button);
   padding: 0 var(--space-6);
   border: none;
   border-radius: var(--radius-full);
@@ -729,7 +727,7 @@ function onRescroll(key: string) {
   font-size: var(--text-base);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .search-box button:hover {
@@ -782,51 +780,33 @@ function onRescroll(key: string) {
     gap: var(--space-2);
   }
 
-  /* 搜索栏高度约 -40%：48px 输入框 + 40px 按钮压到 28/26px */
-  .search-box input {
-    height: 28px;
-    font-size: var(--text-sm);
-  }
-
-  .search-box button {
-    flex-shrink: 0;
-    white-space: nowrap;
-    height: 26px;
-    padding: 0 var(--space-3);
-    font-size: var(--text-xs);
-  }
-
-  /* 标签行上下收紧 */
-  .scope-tabs {
-    gap: var(--space-1);
-  }
-
-  .scope-tabs button {
-    padding: 2px var(--space-2);
-  }
-
-  /* 检索范围开关行上下收紧 */
-  .scope {
-    gap: var(--space-1);
-  }
-
-  .scope-toggle {
-    padding: 2px var(--space-2);
-  }
-
   .search-box {
     flex-wrap: nowrap;
   }
 
+  /* 字号不缩：低于 16px 时 iOS Safari 聚焦输入框会放大整个页面 */
   .search-box input {
     flex: 1;
     min-width: 0;
+    height: var(--size-search-input-compact);
   }
 
   .search-box button {
     flex-shrink: 0;
     white-space: nowrap;
+    height: var(--size-search-button-compact);
     padding: 0 var(--space-3);
+    font-size: var(--text-xs);
+  }
+
+  .scope-tabs,
+  .scope {
+    gap: var(--space-1);
+  }
+
+  .scope-tabs button,
+  .scope-toggle {
+    padding: var(--space-1) var(--space-2);
   }
 }
 </style>

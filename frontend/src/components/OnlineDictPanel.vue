@@ -138,7 +138,7 @@ watch(() => props.word, run)
 }
 
 .card-subtitle {
-  margin: 2px 0 0;
+  margin: var(--space-1) 0 0;
   font-size: var(--text-sm);
   color: var(--color-text-tertiary);
 }
@@ -150,12 +150,12 @@ watch(() => props.word, run)
   color: var(--color-text-tertiary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  padding: 1px var(--space-2);
+  padding: 0 var(--space-2);
 }
 
 .card-text {
   margin: 0;
-  line-height: 1.7;
+  line-height: var(--leading-body);
   color: var(--color-text-primary);
   font-size: var(--text-sm);
 }
@@ -173,15 +173,15 @@ watch(() => props.word, run)
 
 .wt-senses {
   margin: 0;
-  padding-left: 1.5em;
+  padding-left: var(--space-5);
   color: var(--color-text-primary);
   font-size: var(--text-sm);
-  line-height: 1.7;
+  line-height: var(--leading-body);
 }
 
 .wt-examples {
   margin: var(--space-1) 0 0;
-  padding-left: 1.2em;
+  padding-left: var(--space-4);
   list-style-type: disc;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);

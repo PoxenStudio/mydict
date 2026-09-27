@@ -38,6 +38,9 @@
   // 暗色下正文直接看不见（搜韵诗词全文检索版）。
   var TEXT_MIN_LUMINANCE = 0.45
   var TEXT_BOOST_LIGHTNESS = 66
+  // 暗色主题前景色：与注入样式（entry_render_service）里的暗色文字同值——iframe 是独立文档，
+  // 读不到父页的 --color-text-primary
+  var DARK_FOREGROUND = '#eaf1ee'
   // 大词条可能有上万个元素，逐个读计算样式要花时间，超过这个数就只处理前一批
   var TEXT_SCAN_LIMIT = 5000
   var boostedText = []
@@ -116,7 +119,7 @@
         // 灰阶没有色相，提亮成主题前景色。此前刻意跳过灰阶、指望注入的 CSS 规则兜底，
         // 但那些规则只覆盖 #000 精确值与内联样式——词典样式表里的 #111/#333（搜韵诗词
         // 正文的 div.content{color:#111111}）漏网，暗色下深灰字配深底直接看不见。
-        el.style.color = '#eaf1ee'
+        el.style.color = DARK_FOREGROUND
       } else {
         el.style.color =
           'hsl(from rgb(' + rgb.join(',') + ') h s ' + TEXT_BOOST_LIGHTNESS + '%)'

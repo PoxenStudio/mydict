@@ -183,7 +183,6 @@ async function save() {
             v-model="form.online_dict_proxy"
             maxlength="300"
             placeholder="留空直连；如 http://127.0.0.1:7890"
-            style="width: 420px"
           />
         </el-form-item>
         <p class="hint">
