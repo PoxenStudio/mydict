@@ -50,7 +50,7 @@ def query_word(
 ) -> QueryResponse:
     _enforce_rate_limit(db, caller, settings, word)
 
-    allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
+    allowed_ids = caller.allowed_dictionary_ids
     started = time.perf_counter()
     results = query_service.search_word(
         db, word, query_service.parse_dict_ids(dict), from_, to, allowed_ids
@@ -69,6 +69,7 @@ def query_word(
         status="success" if results else "not_found",
         duration_ms=duration_ms,
         token_id=caller.token.id if caller.token else None,
+        user_id=caller.user.id if caller.user else None,
         dictionary_id=results[0]["dictionary_id"] if results else None,
         ip=caller.ip,
     )
@@ -85,7 +86,7 @@ def suggest(
     settings: Settings = Depends(get_settings),
 ) -> SuggestResponse:
     _enforce_rate_limit(db, caller, settings, prefix)
-    allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
+    allowed_ids = caller.allowed_dictionary_ids
     words = query_service.suggest_prefix(
         db, prefix, query_service.parse_dict_ids(dict), min(limit, 50), allowed_ids
     )
@@ -99,5 +100,5 @@ def list_dictionaries(
     settings: Settings = Depends(get_settings),
 ) -> list[PublicDictionaryOut]:
     _enforce_rate_limit(db, caller, settings)
-    allowed_ids = caller.token.allowed_dictionary_ids if caller.token else None
+    allowed_ids = caller.allowed_dictionary_ids
     return query_service.list_public_dictionaries(db, allowed_ids)

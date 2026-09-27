@@ -20,6 +20,9 @@ class TokenOut(BaseModel):
     today_count: int
     total_count: int
     allowed_dictionary_ids: list[int] | None
+    # 用户 Token 的所属用户；普通 Token 为空
+    user_id: int | None = None
+    username: str | None = None
 
 
 class TokenCreateResponse(TokenOut):

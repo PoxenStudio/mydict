@@ -4,9 +4,12 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.security import generate_temp_password, hash_password
 from app.models.query import QueryLog
+from app.models.token import ApiToken
 from app.models.user import User
 from app.models.vocab import VocabItem
+from app.services import token_service
 from app.services.audit_service import log_action
+from app.services.query_service import filter_existing_dictionary_ids
 
 
 def _usage_maps(db: Session, user_ids: list[int]) -> tuple[dict[int, int], dict[int, int]]:
@@ -27,7 +30,17 @@ def _usage_maps(db: Session, user_ids: list[int]) -> tuple[dict[int, int], dict[
     return vocab_map, query_map
 
 
-def _to_out(user: User, vocab_count: int, query_count: int) -> dict:
+def _token_map(db: Session, user_ids: list[int]) -> dict[int, str | None]:
+    if not user_ids:
+        return {}
+    return dict(
+        db.query(ApiToken.user_id, ApiToken.token_plain)
+        .filter(ApiToken.user_id.in_(user_ids))
+        .all()
+    )
+
+
+def _to_out(user: User, vocab_count: int, query_count: int, api_token: str | None = None) -> dict:
     return {
         "id": user.id,
         "username": user.username,
@@ -37,7 +50,19 @@ def _to_out(user: User, vocab_count: int, query_count: int) -> dict:
         "last_login_at": user.last_login_at,
         "vocab_count": vocab_count,
         "query_count": query_count,
+        "allowed_dictionary_ids": user.allowed_dictionary_ids,
+        "api_token": api_token,
     }
+
+
+def _out(db: Session, user: User) -> dict:
+    vocab_map, query_map = _usage_maps(db, [user.id])
+    return _to_out(
+        user,
+        vocab_map.get(user.id, 0),
+        query_map.get(user.id, 0),
+        _token_map(db, [user.id]).get(user.id),
+    )
 
 
 def list_users(
@@ -53,8 +78,12 @@ def list_users(
     users = (
         query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     )
-    vocab_map, query_map = _usage_maps(db, [u.id for u in users])
-    rows = [_to_out(u, vocab_map.get(u.id, 0), query_map.get(u.id, 0)) for u in users]
+    user_ids = [u.id for u in users]
+    vocab_map, query_map = _usage_maps(db, user_ids)
+    tokens = _token_map(db, user_ids)
+    rows = [
+        _to_out(u, vocab_map.get(u.id, 0), query_map.get(u.id, 0), tokens.get(u.id)) for u in users
+    ]
     return rows, total
 
 
@@ -84,8 +113,7 @@ def set_user_status(db: Session, user_id: int, status: str, admin_id: int) -> di
     log_action(
         db, actor_type="admin", actor_id=admin_id, action=f"user.{status}", target=str(user_id)
     )
-    vocab_map, query_map = _usage_maps(db, [user_id])
-    return _to_out(user, vocab_map.get(user_id, 0), query_map.get(user_id, 0))
+    return _out(db, user)
 
 
 def reset_user_password(db: Session, user_id: int, admin_id: int) -> str:
@@ -116,7 +144,43 @@ def get_user_detail(db: Session, user_id: int, recent_limit: int = 20) -> dict:
         .all()
     )
     return {
-        "user": _to_out(user, len(vocab_items), total_query_count),
+        "user": _to_out(
+            user, len(vocab_items), total_query_count, _token_map(db, [user_id]).get(user_id)
+        ),
         "vocab_items": vocab_items,
         "recent_queries": recent_queries,
     }
+
+
+def set_allowed_dictionaries(
+    db: Session, user_id: int, dictionary_ids: list[int] | None, admin_id: int
+) -> dict:
+    """管理员配置用户的「可用词典」（None 为不限制），与用户在前台自助设置的是同一个字段。"""
+    user = _get_or_404(db, user_id)
+    user.allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
+    db.commit()
+    log_action(
+        db,
+        actor_type="admin",
+        actor_id=admin_id,
+        action="user.set_allowed_dictionaries",
+        target=str(user_id),
+        detail={"dictionary_ids": user.allowed_dictionary_ids},
+    )
+    return _out(db, user)
+
+
+def generate_token(db: Session, user_id: int, admin_id: int) -> dict:
+    """生成（已有则重新生成）用户 Token：以该用户身份调用对外 API。"""
+    user = _get_or_404(db, user_id)
+    token_service.issue_user_token(db, user, admin_id)
+    return _out(db, user)
+
+
+def delete_token(db: Session, user_id: int, admin_id: int) -> dict:
+    user = _get_or_404(db, user_id)
+    token = token_service.find_user_token(db, user_id)
+    if token is None:
+        raise NotFoundError("该用户没有 Token")
+    token_service.delete_token(db, token.id, admin_id)
+    return _out(db, user)

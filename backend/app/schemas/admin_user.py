@@ -19,6 +19,10 @@ class AdminUserOut(BaseModel):
     last_login_at: datetime | None
     vocab_count: int
     query_count: int
+    # None 表示不限制
+    allowed_dictionary_ids: list[int] | None = None
+    # 用户 Token 明文（以该用户身份调用对外 API）；没有时为空
+    api_token: str | None = None
 
 
 class AdminUserCreateResponse(BaseModel):

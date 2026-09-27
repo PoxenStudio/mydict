@@ -25,3 +25,9 @@ class ApiToken(Base):
     # 用原生 JSON 列类型（ORM 层自动序列化成 Python list），不是别处那种手动 json.dumps
     # 的 TEXT 列，因为这里就是单纯的 id 列表，没有 detail/extra 那种自由结构需要透传。
     allowed_dictionary_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    # 用户 Token：以该用户身份调用 API（可用词典、查询历史、生词本都算在用户名下），
+    # 每个用户至多一个；明文另存一份供管理后台随时复制，普通 Token 为空、只存哈希
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, unique=True, index=True
+    )
+    token_plain: Mapped[str | None] = mapped_column(String(128), nullable=True)
