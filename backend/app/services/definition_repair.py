@@ -270,13 +270,16 @@ def remove_missing_uss_speakers(
     res_dir: Path,
     *,
     batch_size: int = DEFAULT_BATCH_SIZE,
-    on_progress: Callable[[int, int], None] | None = None,
+    on_progress: Callable[[int, int, int, int], None] | None = None,
 ) -> tuple[int, int]:
     """删掉「指向缺失 mp3」的红色美音喇叭锚点，返回 (改动词条数, 删除的喇叭数)。
 
     只删锚点本身：包裹它的 <audio-wr>、蓝色英音喇叭与例句文本一概不动。文件存在性
     走 resolve_resource_file（大小写不敏感兜底），与 /dict-res 路由的解析完全一致——
     路由能取到的文件就不删按钮。
+
+    与样式展开同样按主键区间分批（in_dictionary_for_id_window）：直接写 dictionary_id = ?
+    会让每批都把整部词典的索引扫一遍。`on_progress(已扫区间, 区间总长, 改动词条数, 删除喇叭数)`。
     """
     from app.services.resource_service import resolve_resource_file
 
@@ -299,23 +302,28 @@ def remove_missing_uss_speakers(
         .values(definition=bindparam("new_definition"))
     )
 
+    lowest, highest = db.execute(
+        select(func.min(DictEntry.id), func.max(DictEntry.id)).where(
+            DictEntry.dictionary_id == dictionary_id
+        )
+    ).one()
+    if lowest is None or highest is None:
+        return 0, 0
+
     entries_changed = 0
     anchors_removed = 0
-    cursor = -1
-    while True:
+    cursor = lowest - 1
+    while cursor < highest:
+        window_end = min(cursor + batch_size, highest)
         rows = db.execute(
-            select(DictEntry.id, DictEntry.definition)
-            .where(
+            select(DictEntry.id, DictEntry.definition).where(
                 DictEntry.id > cursor,
-                DictEntry.dictionary_id == dictionary_id,
+                DictEntry.id <= window_end,
+                in_dictionary_for_id_window(dictionary_id),
                 DictEntry.definition.like("%audio-uss-liju%"),
             )
-            .order_by(DictEntry.id)
-            .limit(batch_size)
         ).all()
-        if not rows:
-            break
-        cursor = rows[-1][0]
+        cursor = window_end
         updates = []
         for row_id, definition in rows:
             cleaned, removed = clean(definition or "")
@@ -327,7 +335,7 @@ def remove_missing_uss_speakers(
             db.commit()
             entries_changed += len(updates)
         if on_progress is not None:
-            on_progress(entries_changed, anchors_removed)
+            on_progress(cursor - lowest + 1, highest - lowest + 1, entries_changed, anchors_removed)
     logger.info(
         "词典 %s 红色例句喇叭清理完成：改动 %s 条词条、删除 %s 个喇叭",
         dictionary_id,

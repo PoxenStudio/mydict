@@ -246,7 +246,10 @@ async function cleanupUssSpeakers() {
   try {
     await ElMessageBox.confirm(
       `将扫描${scope}的释义，删掉「指向缺失 mp3」的红色美音例句喇叭（牛津9 的 uss，` +
-        '实测其 99% 的音频文件源词典就没有打包）。蓝色英音喇叭与文件尚存的按钮不受影响。',
+        '实测其 99% 的音频文件源词典就没有打包）。蓝色英音喇叭与文件尚存的按钮不受影响。' +
+        (selectedIds.value.length
+          ? ''
+          : '逐部读一遍全部词典的释义，大型词库要很久；只需清理牛津9 时请先勾选它。'),
       '清理缺失喇叭',
       { type: 'warning', confirmButtonText: '开始清理' },
     )

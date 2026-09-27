@@ -5,6 +5,7 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   dictionary_import: '词典导入',
   dictionary_source_repair: '从源文件修复',
   dictionary_reparse: '重新解析词典',
+  dictionary_uss_cleanup: '清理美音喇叭',
 }
 
 export function taskLabel(task: BackgroundTask) {
