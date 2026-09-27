@@ -196,6 +196,15 @@ function selectRandom() {
   randomMode.value = !randomMode.value
 }
 
+// 总开关被管理员关掉时收起随机模式与标签：设置页保存后前台刷新一次即可看到，
+// 但已停留在随机页面的会话不该留着一个已经拒绝服务的面板
+watch(
+  () => settingsStore.randomBrowseEnabled,
+  (enabled) => {
+    if (!enabled) randomMode.value = false
+  },
+)
+
 // 本地范围选择（勾选/全部）会退出在线模式；随机模式下只换池子不退出
 function onToggleDict(id: number) {
   onlineMode.value = false
@@ -446,8 +455,9 @@ function onRescroll(key: string) {
           >
             在线
           </button>
-          <!-- 随机浏览：池子 = 当前检索范围勾选的词典 -->
+          <!-- 随机浏览：池子 = 当前检索范围勾选的词典。总开关（管理后台默认禁用）关着时连标签都不出现 -->
           <button
+            v-if="settingsStore.randomBrowseEnabled"
             type="button"
             :class="{ active: randomMode }"
             @click="selectRandom"
