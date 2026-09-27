@@ -44,6 +44,7 @@ def query_word(
     from_: str | None = Query(None, alias="from"),
     to: str | None = None,
     full_style: bool = False,
+    all_langs: bool = False,
     caller: ApiCaller = Depends(get_api_caller),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -53,7 +54,8 @@ def query_word(
     allowed_ids = caller.allowed_dictionary_ids
     started = time.perf_counter()
     results = query_service.search_word(
-        db, word, query_service.parse_dict_ids(dict), from_, to, allowed_ids
+        db, word, query_service.parse_dict_ids(dict), from_, to, allowed_ids,
+        all_langs=all_langs,
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
 
