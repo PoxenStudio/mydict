@@ -39,3 +39,19 @@ export function disableUser(id: number) {
 export function resetUserPassword(id: number) {
   return request.post<never, { temporary_password: string }>(`/admin/users/${id}/reset-password`)
 }
+
+/** 设置用户的「可用词典」，null 为不限制 */
+export function setUserAllowedDictionaries(id: number, dictionaryIds: number[] | null) {
+  return request.put<never, AdminUserItem>(`/admin/users/${id}/allowed-dictionaries`, {
+    dictionary_ids: dictionaryIds,
+  })
+}
+
+/** 生成用户 Token（已有则重新生成，旧值立即失效） */
+export function generateUserToken(id: number) {
+  return request.post<never, AdminUserItem>(`/admin/users/${id}/token`)
+}
+
+export function deleteUserToken(id: number) {
+  return request.delete<never, AdminUserItem>(`/admin/users/${id}/token`)
+}
