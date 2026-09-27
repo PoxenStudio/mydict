@@ -207,9 +207,9 @@ function formatDate(value: string | null) {
         <span>邮箱</span>
         <span>注册时间</span>
         <span>最近登录</span>
-        <span>生词/查询</span>
-        <span>Token</span>
+        <span class="col-token-head">Token</span>
         <span>状态</span>
+        <span>生词/查询</span>
         <span class="col-actions">操作</span>
       </div>
       <div v-for="user in users" :key="user.id" class="user-row">
@@ -217,29 +217,30 @@ function formatDate(value: string | null) {
         <span>{{ user.email ?? '—' }}</span>
         <span>{{ formatDate(user.created_at) }}</span>
         <span>{{ formatDate(user.last_login_at) }}</span>
-        <span>{{ user.vocab_count }} / {{ user.query_count }}</span>
         <span class="col-token">
           <template v-if="user.api_token">
             <span class="mono" :title="user.api_token">{{ maskToken(user.api_token) }}</span>
-            <el-button
-              text
-              circle
-              size="small"
-              :icon="DocumentCopy"
-              title="复制 Token"
-              aria-label="复制 Token"
-              @click="copyToken(user)"
-            />
-            <el-button
-              text
-              circle
-              size="small"
-              type="danger"
-              :icon="Delete"
-              title="删除 Token"
-              aria-label="删除 Token"
-              @click="deleteToken(user)"
-            />
+            <span class="token-actions">
+              <el-button
+                text
+                circle
+                size="small"
+                :icon="DocumentCopy"
+                title="复制 Token"
+                aria-label="复制 Token"
+                @click="copyToken(user)"
+              />
+              <el-button
+                text
+                circle
+                size="small"
+                type="danger"
+                :icon="Delete"
+                title="删除 Token"
+                aria-label="删除 Token"
+                @click="deleteToken(user)"
+              />
+            </span>
           </template>
           <el-button v-else text size="small" type="primary" @click="generateToken(user)">
             生成
@@ -250,6 +251,7 @@ function formatDate(value: string | null) {
             {{ user.status === 'active' ? '正常' : '禁用' }}
           </el-tag>
         </span>
+        <span>{{ user.vocab_count }} / {{ user.query_count }}</span>
         <span class="col-actions">
           <el-button text @click="openDetail(user)">详情</el-button>
           <el-button text @click="openDictPicker(user)">可用词典</el-button>
@@ -383,7 +385,7 @@ function formatDate(value: string | null) {
 .user-list-header,
 .user-row {
   display: grid;
-  grid-template-columns: 0.9fr 1.2fr 1fr 1fr 0.7fr 1.7fr 0.6fr 1.6fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr 0.6fr 0.8fr 1.6fr;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -405,14 +407,26 @@ function formatDate(value: string | null) {
   background: var(--color-hover-tint);
 }
 
+/* Token 值一行、复制/删除图标另起一行，都居中 */
 .col-token {
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
 }
 
-.col-token .el-button + .el-button {
+.col-token-head {
+  text-align: center;
+}
+
+.token-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.token-actions .el-button + .el-button {
   margin-left: 0;
 }
 
