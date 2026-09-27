@@ -395,10 +395,10 @@ def get_entries_for_document(
     「毛泽东」有 82 条），把它们合成一个文档只要一个 iframe。
 
     `entry_ids` 给了就按它取——前端把查询结果里那一组的条目 id 显式传过来，保证 iframe 里
-    的条数与「共 N 条」一致。无论给没给，都只取词头落在 `expand_word(word)` 变体集合里
-    **或以任一变体开头**的条目（与 search_word 的匹配范围一致——搜索有前缀兜底，命中的
-    词条词头如「あ【亜】」并不是查询词「あ」的等价变体，而是以它开头）：`entry_ids` 是
-    客户端输入，不加这层约束的话随便填 id 就能逐段拉走整部词典，绕过查询配额。
+    的条数与「共 N 条」一致。`entry_ids` 是客户端输入，只认 search_word 可能返回的那些条目：
+    词头落在 `expand_word(word)` 变体集合里的，或这部词典精确未命中时前缀兜底返回的那几条
+    （词头如「あ【亜】」以查询词「あ」开头，但不是它的变体）。只按「以查询词开头」放行的话，
+    拿单个字当 word 就能逐批拉走整部词典，绕过查询配额。
 
     `entry_ids` 一条都对不上时退回按词取：词典被重新解析后条目 id 整体换新，页面上还开着的
     旧查询结果带的是旧 id，不该因此显示「词条不存在」。
@@ -411,24 +411,40 @@ def get_entries_for_document(
     variants = expand_word(word)
     variants_lower = {variant.lower() for variant in variants}
 
+    def exact_entries() -> list[DictEntry]:
+        return (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.dictionary_id == dictionary_id)
+            .filter(DictEntry.word_lower.in_(variants))
+            .order_by(DictEntry.id)
+            .all()
+        )
+
+    prefix_ids: set[int] | None = None
+
+    def search_prefix_ids() -> set[int]:
+        """search_word 对这部词典会返回的前缀兜底条目；精确命中时搜索不走兜底，为空集。"""
+        nonlocal prefix_ids
+        if prefix_ids is None:
+            prefix_ids = (
+                set()
+                if exact_entries()
+                else {e.id for e in _prefix_fallback_entries(db, word_lower, dictionary_id)}
+            )
+        return prefix_ids
+
     def authorized(entry: DictEntry) -> bool:
-        """id 归属校验：词条属于目标词典，且词头是查询词的等价变体或以任一变体开头
-        （搜索有前缀兜底，命中的词条词头如「あ【亜】」并不是查询词「あ」的变体，
-        而是以它开头）。词典归属放在 Python 侧而不是 SQL 里——
-        `dictionary_id=? AND id IN (…)` 会让规划器放弃主键、走词典覆盖索引全扫
-        （搜韵 826 万行，实测 770ms；纯主键 IN 只要 1ms）。"""
+        """词典归属放在 Python 侧而不是 SQL 里——`dictionary_id=? AND id IN (…)` 会让规划器
+        放弃主键、走词典覆盖索引全扫（搜韵 826 万行，实测 770ms；纯主键 IN 只要 1ms）。"""
         if entry.dictionary_id != dictionary_id:
             return False
-        word_lower = entry.word_lower or ""
-        return word_lower in variants_lower or any(
-            word_lower.startswith(variant) for variant in variants_lower
-        )
+        if (entry.word_lower or "") in variants_lower:
+            return True
+        return entry.id in search_prefix_ids()
 
     entries: list[DictEntry] = []
     if entry_ids:
-        # 纯主键取回（瞬时），归属与词典校验都在 Python 里做——不要把 dictionary_id
-        # 塞进这条查询（见 authorized 注释），也不要把十几个前缀 LIKE 塞进一条 OR
-        # 查询：都会让规划器放弃索引、退化成整部词典扫描。
+        # 纯主键取回（瞬时），归属与词典校验都在 Python 里做（见 authorized 注释）
         candidates = (
             current_generation_only(db.query(DictEntry))
             .filter(DictEntry.id.in_(entry_ids))
@@ -437,16 +453,9 @@ def get_entries_for_document(
         )
         entries = [entry for entry in candidates if authorized(entry)]
     if not entries:
-        # 没传 id（或全都不在授权范围内，如词典被重新解析后条目 id 整体换新）时退回按词取
-        statement = (
-            current_generation_only(db.query(DictEntry))
-            .filter(DictEntry.dictionary_id == dictionary_id)
-            .filter(DictEntry.word_lower.in_(variants))
-        )
-        entries = statement.order_by(DictEntry.id).all()
-        if not entries:
-            # 精确未命中退回前缀，与 search_word 的兜底同一查询、同一上限
-            entries = _prefix_fallback_entries(db, word_lower, dictionary_id)
+        # 没传 id（或全都不在授权范围内，如词典被重新解析后条目 id 整体换新）时退回按词取，
+        # 精确未命中再退回前缀，与 search_word 的兜底同一查询、同一上限
+        entries = exact_entries() or _prefix_fallback_entries(db, word_lower, dictionary_id)
     # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
     resolved: dict[int, DictEntry] = {}
     for entry in entries:
