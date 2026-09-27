@@ -103,7 +103,7 @@ def random_entry(
             if lo is None or hi is None:
                 continue
             _BOUNDS_CACHE[dictionary.id] = (lo, hi)
-        if hi <= lo:
+        if hi < lo:
             continue
         spans.append((dictionary, lo, hi))
     if not spans:

@@ -77,3 +77,22 @@ async def test_random_entry_counts_against_rate_limit(
         assert resp2.status_code == 429
     finally:
         set_setting(db_session, "anonymous_ip_rate_limit_per_min", "60")
+
+
+async def test_random_entry_picks_single_entry_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """只有一条词条的词典主键区间 lo == hi，也必须能被随机到。"""
+    set_setting(db_session, "open_access", "true")
+    d = await import_dictionary(
+        client,
+        admin_headers,
+        data={"name": "随机单条", "format": "ecdict", "lang_from": "en", "lang_to": "zh-Hans"},
+        files={"files": ("one.csv", _csv([{"word": "solo", "translation": "独"}]), "text/csv")},
+    )
+    enable = await client.put(f"/api/admin/dictionaries/{d['id']}/enable", headers=admin_headers)
+    assert enable.status_code == 200, enable.text
+
+    resp = await client.get("/api/dict/random", params={"dict_ids": str(d["id"])})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["word"] == "solo"
