@@ -28,7 +28,11 @@ from app.services.definition_repair import (
     expand_stored_styles,
     remove_missing_uss_speakers,
 )
-from app.services.entry_scope import current_generation_only, in_dictionary_for_id_window
+from app.services.entry_scope import (
+    current_generation_only,
+    in_dictionary_for_id_window,
+    word_lower_prefix,
+)
 from app.services.language_detect import detect_language
 from app.services.resource_service import SIBLING_RESOURCE_EXTENSIONS, copy_sibling_resources
 
@@ -1266,7 +1270,7 @@ def test_query(db: Session, dictionary_id: int, word: str, limit: int = 20) -> l
     return (
         current_generation_only(db.query(DictEntry))
         .filter(
-            DictEntry.dictionary_id == dictionary_id, DictEntry.word_lower.like(f"{word_lower}%")
+            DictEntry.dictionary_id == dictionary_id, word_lower_prefix(word_lower)
         )
         .order_by(DictEntry.word_lower)
         .limit(limit)

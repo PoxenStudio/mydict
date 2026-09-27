@@ -70,7 +70,10 @@ async def test_random_entry_counts_against_rate_limit(
     """随机浏览与查询共用按 IP 限额：限额耗尽后返回 429。"""
     set_setting(db_session, "open_access", "true")
     set_setting(db_session, "anonymous_ip_rate_limit_per_min", "1")
-    resp = await client.get("/api/dict/random")
-    assert resp.status_code in (200, 404)  # 词典池可能为空，但限额已计次
-    resp2 = await client.get("/api/dict/random")
-    assert resp2.status_code == 429
+    try:
+        resp = await client.get("/api/dict/random")
+        assert resp.status_code in (200, 404)  # 词典池可能为空，但限额已计次
+        resp2 = await client.get("/api/dict/random")
+        assert resp2.status_code == 429
+    finally:
+        set_setting(db_session, "anonymous_ip_rate_limit_per_min", "60")

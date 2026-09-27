@@ -36,7 +36,7 @@ async def _create_dictionary(
         files={
             "files": (
                 f"{name}.csv",
-                _csv_bytes([{"word": w, "translation": "释义"} for w in words]),
+                _csv_bytes([{"word": w, "translation": f"释义·{w}"} for w in words]),
                 "text/csv",
             )
         },
@@ -90,3 +90,41 @@ async def test_prefix_fallback_is_capped_per_dictionary(
     results = await _search(client, "zzprefix", dict_id)
     assert len(results) == 8
     assert results == sorted(results)
+
+
+async def test_prefix_wildcards_match_literally(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """用户输入的 % 与 _ 按字面匹配，不能当通配符放大成整部词典。"""
+    dict_id = await _create_dictionary(
+        client, admin_headers, "前缀-通配符", ["%off", "wild_card", "wildxcard", "plain"]
+    )
+    set_setting(db_session, "open_access", "true")
+
+    assert await _search(client, "%", dict_id) == ["%off"]
+    assert await _search(client, "wild_", dict_id) == ["wild_card"]
+    assert await _search(client, "_", dict_id) == []
+
+
+async def test_entry_document_prefix_fallback_is_bounded(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """词条文档的前缀兜底：空词拒绝、通配符按字面、条数与搜索同一上限。"""
+    words = [f"docprefix{i:02d}" for i in range(20)]
+    dict_id = await _create_dictionary(client, admin_headers, "前缀-文档", ["%off", *words])
+    set_setting(db_session, "open_access", "true")
+
+    async def document(word: str):
+        return await client.get(f"/api/dict/entry/{dict_id}", params={"word": word})
+
+    for word in ("%", "_", " "):
+        resp = await document(word)
+        if word == "%":
+            assert resp.status_code == 200
+            assert "释义·%off" in resp.text and "释义·docprefix" not in resp.text
+        else:
+            assert resp.status_code == 404, word
+
+    resp = await document("docprefix")
+    assert resp.status_code == 200
+    assert sum(f"释义·docprefix{i:02d}" in resp.text for i in range(20)) == 8

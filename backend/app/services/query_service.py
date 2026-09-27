@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core import query_cache
 from app.models.dictionary import DictEntry, Dictionary
-from app.services.entry_scope import current_generation_only
+from app.services.entry_scope import current_generation_only, word_lower_prefix
 from app.services.query_expand import EXPANSION_VERSION, expand_word
 
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}
@@ -256,10 +256,10 @@ def _prefix_fallback_entries(
     为什么需要：不少词典的 MDict 词头带注记后缀（Japanese Education Vocabulary 的
     「あ【亜】」「み【味】」、搜韵的「中国【ちゅうごく①】」），对它们做**精确**匹配永远
     打不中，而 MDict 客户端与 django-mdict 的搜索都是前缀式的，用户因此觉得「明明有这部
-    词典却查不到」。管理端测试查询本来就是前缀 LIKE（dictionary_service.test_query）。
+    词典却查不到」。管理端测试查询本来就是前缀匹配（dictionary_service.test_query）。
 
-    查询走 (dictionary_id, word_lower) 复合索引：未命中的词典一次索引范围读，只取前几条，
-    代价可忽略；有精确命中的词典根本不进这条路径。
+    查询走 (dictionary_id, word_lower) 复合索引（见 word_lower_prefix）：未命中的词典一次
+    索引范围读，只取前几条，代价可忽略；有精确命中的词典根本不进这条路径。
     """
     if not prefix_lower:
         return []
@@ -267,7 +267,7 @@ def _prefix_fallback_entries(
         current_generation_only(db.query(DictEntry))
         .filter(
             DictEntry.dictionary_id == dictionary_id,
-            DictEntry.word_lower.like(f"{prefix_lower}%"),
+            word_lower_prefix(prefix_lower),
         )
         .order_by(DictEntry.word_lower)
         .limit(_PREFIX_FALLBACK_LIMIT)
@@ -405,6 +405,9 @@ def get_entries_for_document(
 
     释义是 `@@@LINK=` 的逐条解引用。
     """
+    word_lower = word.strip().lower()
+    if not word_lower:
+        return []
     variants = expand_word(word)
     variants_lower = {variant.lower() for variant in variants}
 
@@ -442,13 +445,8 @@ def get_entries_for_document(
         )
         entries = statement.order_by(DictEntry.id).all()
         if not entries:
-            # 精确未命中退回前缀（case_sensitive_like=ON 时走索引区间，见 core/db.py）
-            statement = (
-                current_generation_only(db.query(DictEntry))
-                .filter(DictEntry.dictionary_id == dictionary_id)
-                .filter(DictEntry.word_lower.like(f"{word.strip().lower()}%"))
-            )
-            entries = statement.order_by(DictEntry.id).all()
+            # 精确未命中退回前缀，与 search_word 的兜底同一查询、同一上限
+            entries = _prefix_fallback_entries(db, word_lower, dictionary_id)
     # 几条跳到同一个目标的只留一份（与 search_word 的去重一致，条数才对得上「共 N 条」）
     resolved: dict[int, DictEntry] = {}
     for entry in entries:
@@ -472,7 +470,7 @@ def suggest_prefix(
         current_generation_only(db.query(DictEntry.word))
         .filter(
             DictEntry.dictionary_id.in_([d.id for d in dictionaries]),
-            DictEntry.word_lower.like(f"{prefix_lower}%"),
+            word_lower_prefix(prefix_lower),
         )
         .order_by(DictEntry.word_lower)
         .limit(limit * 3)
