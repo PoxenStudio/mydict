@@ -250,8 +250,6 @@ async def test_anonymous_ip_rate_limit(
     assert resp2.status_code == 429
     assert "Retry-After" in resp2.headers
 
-    set_setting(db_session, "anonymous_ip_rate_limit_per_min", "60")
-
 
 async def test_logged_in_user_ip_rate_limit(
     client: AsyncClient, admin_headers: dict[str, str], db_session
@@ -290,8 +288,6 @@ async def test_logged_in_user_ip_rate_limit(
     # 登录用户与匿名访客分开计数，同一 IP 下匿名调用不受登录用户配额影响。
     resp3 = await client.get("/api/dict/search", params={"word": "userlimited"})
     assert resp3.status_code == 200
-
-    set_setting(db_session, "user_ip_rate_limit_per_min", "120")
 
 
 async def test_token_vocab_lifecycle_and_snapshot_matches_query(

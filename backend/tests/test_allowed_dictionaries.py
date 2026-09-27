@@ -211,10 +211,7 @@ async def test_user_self_service_allowed_dictionaries(
 async def test_dictionary_list_requires_login(client: AsyncClient, db_session) -> None:
     # 即使开放使用，词典列表也只给登录用户：访客不显示检索范围面板，直接查全部已启用词典
     set_setting(db_session, "open_access", "true")
-    try:
-        resp = await client.get("/api/dict/dictionaries")
-        assert resp.status_code == 401
-        resp = await client.get("/api/dict/dictionaries", params={"scope": "all"})
-        assert resp.status_code == 401
-    finally:
-        set_setting(db_session, "open_access", "false")
+    resp = await client.get("/api/dict/dictionaries")
+    assert resp.status_code == 401
+    resp = await client.get("/api/dict/dictionaries", params={"scope": "all"})
+    assert resp.status_code == 401

@@ -5,10 +5,10 @@ import pytest
 
 from app.services.resource_service import (
     copy_sibling_resources,
-    same_name_assets,
     normalize_resource_path,
     resolve_resource_file,
     rewrite_resource_refs,
+    same_name_assets,
     strip_legacy_file_prefix,
     write_resource,
 )

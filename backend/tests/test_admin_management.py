@@ -2,12 +2,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from httpx import AsyncClient
 
+from app.core.timeutil import today_str
 from app.models.audit import AuditLog
-from app.models.token import ApiToken
 from app.models.query import QueryLog, QueryStatsDaily
+from app.models.token import ApiToken
 from app.services.settings_service import set_setting
 from app.tasks.stats_aggregation import aggregate_date
-from app.core.timeutil import today_str
 from tests.conftest import import_dictionary
 
 

@@ -1,4 +1,4 @@
-"""`` `编号` `` 样式标记展开的用例。
+r"""`` `编号` `` 样式标记展开的用例。
 
 替换规则的来源与论证见 `app/parsers/mdict_stylesheet.py` 的模块注释：核心是「遇到标记时先补
 上一个标记的结束标记，再输出当前的开始标签」，否则 `` `1` `` 的 `<center>` 只开不关会把整条
@@ -108,7 +108,7 @@ def test_non_compact_keeps_backticks_verbatim() -> None:
 
 
 def test_compact_without_stylesheet_strips_all_markers() -> None:
-    """超级新华字典：Compact=Yes 但 StyleSheet 为空——剔除全部标记，呈现紧凑排版
+    r"""超级新华字典：Compact=Yes 但 StyleSheet 为空——剔除全部标记，呈现紧凑排版
     （django-mdict 对空表就是 re.sub(r'`\d+`', '', txt)）。"""
     text = "`1`青色`2`qīngsè<br>[cyan] 一类带绿的蓝色"
     assert expand_style_markers(text, {}, compact=True) == "青色qīngsè<br>[cyan] 一类带绿的蓝色"
