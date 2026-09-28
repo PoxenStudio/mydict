@@ -53,6 +53,7 @@ const status = ref<'idle' | 'loading' | 'ok' | 'error'>('idle')
 const version = ref('')
 // 检索范围面板默认收起，只露出一行摘要
 const scopeOpen = ref(false)
+const searchInputRef = ref<HTMLInputElement | null>(null)
 
 // 展开状态只存一个 key（互斥展开）；liveKeys 是「已挂载过 iframe」的 LRU 列表
 const expandedKey = ref<string | null>(null)
@@ -113,6 +114,7 @@ const groups = computed<DictionaryGroup[]>(() => {
 })
 
 onMounted(async () => {
+  // 全局快捷键：←/→ 切换展开的词典；Esc 三段式收拢（见 collapseOnEscape）
   window.addEventListener('keydown', onKeydown)
   getSystemInfo()
     .then((info) => {
@@ -292,8 +294,51 @@ function moveExpanded(delta: number) {
   nextTick(() => scrollPanelToTop(key))
 }
 
+/**
+ * 有弹窗/抽屉开着吗？给 Esc 让路用。
+ *
+ * 不能只看 `.el-overlay` 是否存在——Element Plus 的 Dialog 一挂载就常驻一个遮罩壳子，
+ * 关着时是 `display:none`（实测搜索页上有 3 个），只看存在性会把每一次 Esc 都挡掉。
+ */
+function hasOpenOverlay(): boolean {
+  return Array.from(document.querySelectorAll<HTMLElement>('.el-overlay')).some(
+    (el) => getComputedStyle(el).display !== 'none',
+  )
+}
+
+/**
+ * Esc 的三段式收拢，一次一步：
+ *   ① 有展开的词条 → 折叠它
+ *   ② 否则检索范围卡片展开着 → 折叠它
+ *   ③ 都没有 → 聚焦搜索框并全选，为下一次搜索做准备（最终态；已有焦点时重复按保持不动）
+ *
+ * 返回 true 表示这一下被接管了（调用方 preventDefault，别让浏览器再去做它自己的 Esc 行为）。
+ */
+function collapseOnEscape(): boolean {
+  if (expandedKey.value) {
+    // 与点标题折叠同款：只收起，不滚动（收起不会把别的东西挤走）
+    expandedKey.value = null
+    return true
+  }
+  if (scopeOpen.value) {
+    scopeOpen.value = false
+    return true
+  }
+  const input = searchInputRef.value
+  if (!input || input.disabled) return false
+  input.focus()
+  input.select()
+  return true
+}
+
 function onKeydown(event: KeyboardEvent) {
   if (event.ctrlKey || event.altKey || event.metaKey) return
+  if (event.key === 'Escape') {
+    // 弹窗开着时 Esc 归它自己关，别顺手把页面的东西也折了
+    if (hasOpenOverlay()) return
+    if (collapseOnEscape()) event.preventDefault()
+    return
+  }
   // 输入框里的方向键是在移动光标，不能抢
   const target = event.target as HTMLElement | null
   if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
@@ -412,6 +457,7 @@ function onRescroll(key: string) {
         <h1 class="tagline">{{ settingsStore.siteName }} · 查询与生词本</h1>
         <form class="search-box" :class="{ disabled: showLoginGate }" @submit.prevent="runSearch()">
           <input
+            ref="searchInputRef"
             v-model="word"
             type="text"
             placeholder="输入要查询的单词或词语"
@@ -540,6 +586,7 @@ function onRescroll(key: string) {
               :favorite-loading="favoriteLoading"
               @toggle="toggleGroup(group.key)"
               @entry="searchFromEntry"
+              @escape="collapseOnEscape()"
               @toggle-favorite="toggleFavorite"
               @unsupported-audio="onUnsupportedAudio"
               @rescroll="onRescroll(group.key)"

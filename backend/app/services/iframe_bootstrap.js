@@ -13,6 +13,7 @@
  * 因为不透明源发出来的 origin 恒为 "null"）：
  *   子 -> 父  mydict:ready / mydict:height / mydict:entry / mydict:open
  *             mydict:audio-unsupported / mydict:audio-error / mydict:title
+ *             mydict:escape（焦点在词条里时按 Esc，交父页做收拢）
  *   父 -> 子  mydict:cmd {cmd: 'anchor'|'ping'|'theme'}
  */
 (function () {
@@ -828,7 +829,16 @@
   }
 
   function onLookupKeyDown(event) {
-    if (event.key === 'Escape') hideLookupMenu()
+    if (event.key !== 'Escape') return
+    // 选中文字菜单开着时，这一下先关它（与页面上的 Esc 一致：一次一步）
+    if (lookupMenu) {
+      hideLookupMenu()
+      return
+    }
+    // 菜单没开：把 Esc 交给父页，让它去跑它的收拢链（折叠词条 → 折叠检索范围 →
+    // 聚焦搜索框）。焦点在词条内容里时，父页收不到键盘事件，只能这样转一手。
+    // 不 preventDefault：词典自己的 Esc 行为（播放器暂停之类）不受影响。
+    send('escape', {})
   }
 
   function installLookupMenu() {
@@ -837,7 +847,6 @@
     // capture 阶段：要在选区被清掉之前知道「这一下点的是菜单还是别处」
     document.addEventListener('mousedown', onLookupMouseDown, true)
     document.addEventListener('selectionchange', onLookupSelectionChange)
-    document.addEventListener('keydown', onLookupKeyDown)
     // capture 的 scroll 能同时覆盖 window 滚动与 iframe 内部的滚动容器
     window.addEventListener('scroll', hideLookupMenu, true)
     window.addEventListener('resize', hideLookupMenu)
@@ -849,6 +858,8 @@
     // 首屏就是暗色时，正文已经解析完了，这时才做得了提亮
     boostDarkText()
     installLookupMenu()
+    // Esc 转发不受「选中文字查词」开关影响，单独挂（见 onLookupKeyDown）
+    document.addEventListener('keydown', onLookupKeyDown)
     observeHeight()
     report()
     send('ready', {})
