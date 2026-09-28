@@ -386,6 +386,21 @@
   // 数百万行）。修复命令跑完之前先在这里兼容，用户不必等迁移就能点。
   var LEGACY_RE = /^\/dict-res\/\d+\/res\/(entry|sound):\/(.*)$/i
 
+  // 有些词典把 entry:// 的目标写成百分号编码（Weblio 類語/対義語实测如此：链接是
+  // entry://%E9%95%B7%E6%89%80 而不是 entry://長所）。MDict 客户端会先解码再查；这里
+  // 不解码的话，父页会拿 %E9%95%B7... 当字面查询词，地址栏还会二次编码成 %25E9...，
+  // 结果是「点了链接跳转过去但没有任何内容」。
+  //
+  // 只在目标里出现 % 时才尝试解码，解不开（目标是 100% 这种含裸百分号的词）就按原样用。
+  function decodeEntryWord(raw) {
+    if (raw.indexOf('%') < 0) return raw
+    try {
+      return decodeURIComponent(raw) || raw
+    } catch (e) {
+      return raw
+    }
+  }
+
   function resourceUrl(raw) {
     var path = String(raw).replace(/^[\\/]+/, '')
     return RES_PREFIX + path
@@ -478,7 +493,7 @@
     var base = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw
 
     if (base.slice(0, 8).toLowerCase() === 'entry://') {
-      var word = base.slice(8)
+      var word = decodeEntryWord(base.slice(8))
       if (word) send('entry', { word: word, anchor: anchor })
       else scrollToAnchor(anchor) // entry://#anchor 是页内跳转
       return true
@@ -494,7 +509,7 @@
       var kind = legacy[1].toLowerCase()
       var rest = legacy[2]
       if (kind === 'entry') {
-        if (rest) send('entry', { word: rest, anchor: anchor })
+        if (rest) send('entry', { word: decodeEntryWord(rest), anchor: anchor })
         else scrollToAnchor(anchor)
       } else {
         playAudio(RES_PREFIX + rest)
