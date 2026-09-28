@@ -371,6 +371,7 @@ def search_word(
             "dictionary_name": by_id[e.dictionary_id].name,
             "word": e.word,
             "phonetic": resolved.phonetic,
+            "lang_from": by_id[e.dictionary_id].lang_from,
             "extra": json.loads(e.extra) if e.extra else None,
             "lang_match": e.dictionary_id in candidates.preferred_ids,
         }
