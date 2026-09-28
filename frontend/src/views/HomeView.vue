@@ -33,11 +33,12 @@ const {
   allIds,
   filterIds,
   isFiltering,
+  clearedView,
   loading: dictLoading,
   load: loadDictionaryFilter,
   toggle: toggleDictionary,
   setSelection,
-  selectAll,
+  selectAllOrClear,
 } = useDictionaryFilter()
 
 // 同时保留的 iframe 文档数上限：折叠时不立刻销毁（声音还在放、内部滚动位置也要留住），
@@ -67,6 +68,8 @@ const showScope = computed(() => authStore.isLoggedIn)
 const scopeSummary = computed(() => {
   if (onlineMode.value) return '在线词典'
   if (dictLoading.value) return '载入中…'
+  // 「不选」只是把勾清空方便重新挑，实际仍是查全部——不写清楚就会被当成「什么都不查」
+  if (clearedView.value) return `未勾选（仍查全部 ${allIds.value.length} 部）`
   if (!isFiltering.value) return `全部词典（${allIds.value.length}）`
   return `已选 ${checkedIds.value.size} / ${allIds.value.length} 部`
 })
@@ -204,7 +207,8 @@ function onToggleDict(id: number) {
 
 function onSelectAll() {
   onlineMode.value = false
-  selectAll()
+  // 已全部勾选时再点一下 = 把勾选清空（便于从零开始挑），语义仍是不限制
+  selectAllOrClear()
 }
 
 function touchLive(key: string) {
@@ -426,7 +430,7 @@ function onRescroll(key: string) {
             :class="{ active: activeTab === 'all' }"
             @click="onSelectAll"
           >
-            全部
+            {{ clearedView ? '不选' : '全部' }}
           </button>
           <button
             v-for="scope in languageScopes"
