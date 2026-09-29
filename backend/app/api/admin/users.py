@@ -7,6 +7,7 @@ from app.models.admin import Admin
 from app.schemas.admin_user import (
     AdminUserCreateRequest,
     AdminUserCreateResponse,
+    AdminUserDeleteResponse,
     AdminUserDetailResponse,
     AdminUserListResponse,
     AdminUserOut,
@@ -94,3 +95,11 @@ def delete_token(
     user_id: int, db: Session = Depends(get_db), admin: Admin = Depends(require_admin)
 ) -> AdminUserOut:
     return user_admin_service.delete_token(db, user_id, admin.id)
+
+
+@router.delete("/{user_id}", response_model=AdminUserDeleteResponse)
+def delete_user(
+    user_id: int, db: Session = Depends(get_db), admin: Admin = Depends(require_admin)
+) -> AdminUserDeleteResponse:
+    """删除用户，连同其 Token、生词本与查询记录（返回清理数量）。"""
+    return user_admin_service.delete_user(db, user_id, admin.id)
