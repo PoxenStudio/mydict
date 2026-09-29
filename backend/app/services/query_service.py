@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core import query_cache
 from app.models.dictionary import DictEntry, Dictionary
+from app.models.user import User
 from app.services.entry_scope import current_generation_only, word_lower_prefix
 from app.services.query_expand import EXPANSION_VERSION, expand_word
 
@@ -124,6 +125,21 @@ def filter_existing_dictionary_ids(db: Session, ids: list[int] | None) -> list[i
     existing = {row[0] for row in db.query(Dictionary.id).filter(Dictionary.id.in_(ids)).all()}
     filtered = [i for i in ids if i in existing]
     return filtered or None
+
+
+def user_allowed_dictionary_ids(user: User) -> list[int] | None:
+    """用户实际生效的「可用词典」：管理员上限与用户自选的交集，None 为不限制。
+
+    交集为空（管理员收窄上限后，用户原先的自选全落在外面）时退回管理员上限：空列表在这里
+    等价于不限制，直接返回会让用户越过上限。
+    """
+    limit, own = user.admin_allowed_dictionary_ids, user.allowed_dictionary_ids
+    if limit is None:
+        return own
+    if own is None:
+        return limit
+    allowed = set(limit)
+    return [i for i in own if i in allowed] or limit
 
 
 def _lang_from_values(lang_from: str) -> tuple[str, ...]:

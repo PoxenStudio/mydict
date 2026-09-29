@@ -61,6 +61,9 @@ def change_password(db: Session, user: User, old_password: str, new_password: st
 
 
 def set_allowed_dictionaries(db: Session, user: User, dictionary_ids: list[int] | None) -> User:
+    limit = user.admin_allowed_dictionary_ids
+    if dictionary_ids and limit is not None:
+        dictionary_ids = [i for i in dictionary_ids if i in set(limit)]
     user.allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
     db.commit()
     db.refresh(user)

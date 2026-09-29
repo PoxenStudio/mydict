@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.deps import WebCaller, get_web_caller
-from app.services import random_entry_service, web_rate_limit_service
+from app.services import query_service, random_entry_service, web_rate_limit_service
 
 router = APIRouter(prefix="/dict", tags=["web-dict"])
 
@@ -35,7 +35,7 @@ def random_entry(
     web_rate_limit_service.enforce_query_limit(db, caller, settings, "随机浏览")
 
     wanted = {int(x) for x in dict_ids.split(",") if x.strip().isdigit()} if dict_ids else None
-    allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
+    allowed_ids = query_service.user_allowed_dictionary_ids(caller.user) if caller.user else None
     dictionary, entry = random_entry_service.pick_random_entry(db, wanted, allowed_ids)
     return RandomEntryOut(
         dictionary_id=dictionary.id,
