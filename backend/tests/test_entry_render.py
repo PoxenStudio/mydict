@@ -410,6 +410,8 @@ async def test_dict_res_sets_cors_header(
     resp = await client.get(f"/dict-res/{dict_id}/res/font/a.woff")
     assert resp.status_code == 200
     assert resp.headers["access-control-allow-origin"] == "*"
+    # 页面开了 COEP: require-corp（如 MyReader）时，缺它会被浏览器拦下
+    assert resp.headers["cross-origin-resource-policy"] == "cross-origin"
     assert "max-age" in resp.headers.get("cache-control", "")
 
 

@@ -89,6 +89,8 @@ app.include_router(web_public_settings_router, prefix="/api")
 # 这个头对图片/CSS/字体等子资源没有作用，不影响词条渲染。
 _DICT_RES_HEADERS = {
     "Access-Control-Allow-Origin": "*",
+    # 嵌入方页面开了 COEP: require-corp 时（MyReader），跨域子资源必须显式放行
+    "Cross-Origin-Resource-Policy": "cross-origin",
     "Cache-Control": "public, max-age=86400",
     "Content-Security-Policy": "sandbox allow-scripts",
     "X-Content-Type-Options": "nosniff",
