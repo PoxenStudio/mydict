@@ -2119,3 +2119,31 @@ async def test_entry_document_has_its_own_rate_limit(
     # 取了 11 次词条文档，查询配额（1 次/分钟）仍然没被动过
     resp = await client.get("/api/dict/search", params={"word": "沁园春", "dict": str(dict_id)})
     assert resp.status_code == 200
+
+
+async def test_import_waits_for_running_bulk_write_instead_of_failing(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    import asyncio
+
+    from app.services import dictionary_service
+
+    # 持锁模拟删除词典后正在后台跑的 VACUUM
+    dictionary_service._bulk_write_lock.acquire()
+    try:
+        resp = await client.post(
+            "/api/admin/dictionaries",
+            headers=admin_headers,
+            data={"name": "Queued Import", "format": "ecdict", "lang_from": "en", "lang_to": "zh"},
+            files={"files": ("q.csv", _ecdict_csv_bytes(), "text/csv")},
+        )
+        assert resp.status_code == 200, resp.text
+        task_id = resp.json()["task_id"]
+        await asyncio.sleep(0.3)
+        resp = await client.get(f"/api/admin/tasks/{task_id}", headers=admin_headers)
+        assert resp.json()["status"] == "running"
+    finally:
+        dictionary_service._bulk_write_lock.release()
+
+    task = await wait_for_task(client, admin_headers, task_id)
+    assert task["status"] == "success", task

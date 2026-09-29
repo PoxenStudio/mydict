@@ -7,6 +7,7 @@ from app.services.resource_service import (
     copy_sibling_resources,
     normalize_resource_path,
     resolve_resource_file,
+    resource_media_type,
     rewrite_resource_refs,
     same_name_assets,
     strip_legacy_file_prefix,
@@ -86,6 +87,20 @@ def test_copy_sibling_resources_copies_web_resources(tmp_path: Path) -> None:
     assert (resource_dir / "font.otf").exists()
     assert (resource_dir / "cover.png").exists()
 
+
+
+def test_copy_sibling_resources_copies_script_config_ini(tmp_path: Path) -> None:
+    """The Little Dict 的词条以 <script src="config.ini"> 加载同级 JS 配置，缺了它板块全被隐藏。"""
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "config.ini").write_bytes(b"order = 1;")
+    mdx = source / "TLD.mdx"
+    mdx.write_bytes(b"mdx")
+
+    resource_dir = tmp_path / "res"
+    assert copy_sibling_resources(resource_dir, [mdx]) == 1
+    assert (resource_dir / "config.ini").read_bytes() == b"order = 1;"
+    assert resource_media_type(resource_dir / "config.ini") == "text/javascript"
 
 def test_copy_sibling_resources_skips_dictionary_files(tmp_path: Path) -> None:
     """词典本体不进 res/：词条已入库、.mdd 已解包，复制本体只会白占几十 MB。"""

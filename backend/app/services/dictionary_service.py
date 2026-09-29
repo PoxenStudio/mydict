@@ -1,3 +1,4 @@
+import functools
 import json
 import logging
 import re
@@ -49,6 +50,20 @@ _PURGE_BATCH_SIZE = 20_000
 # 正在重新解析的词典 id。同一部词典并发重解析会各自写一代、互相清掉对方的行
 _reparsing: set[int] = set()
 _reparsing_lock = threading.Lock()
+
+# SQLite 同一时刻只允许一个写者，busy_timeout 只等 5 秒；VACUUM、导入、重解析这类一跑几十秒的
+# 后台写库任务彼此并发时，后来者等不到锁就直接报 "database is locked"，这里让它们排队执行
+_bulk_write_lock = threading.Lock()
+_vacuum_pending = threading.Event()
+
+
+def _serialized(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _bulk_write_lock:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 # 语言识别采样条数。词头能做到跨整部词典均匀取样（MDict 的词头表在打开时就已全部读入
 # 内存，按下标取值是纯内存操作），所以多取一些几乎不花钱；释义只能顺序多读再过滤，
@@ -449,6 +464,7 @@ def start_dictionary_import(
     return task.id
 
 
+@_serialized
 def _run_import_in_background(
     task_id: int,
     name: str,
@@ -545,6 +561,7 @@ def start_reparse(db: Session, dictionary_ids: list[int] | None, settings: Setti
     return task.id
 
 
+@_serialized
 def _run_reparse_in_background(
     task_id: int, dictionary_ids: list[int], settings: Settings
 ) -> None:
@@ -727,6 +744,7 @@ def _source_style_context(sources: list[Path]) -> tuple[dict[str, tuple[str, str
     return {}, False
 
 
+@_serialized
 def _run_source_repair_in_background(
     task_id: int, dictionary_ids: list[int], settings: Settings
 ) -> None:
@@ -808,6 +826,7 @@ def start_uss_cleanup(db: Session, dictionary_id: int, settings: Settings) -> in
     return task.id
 
 
+@_serialized
 def _run_uss_cleanup_in_background(
     task_id: int, dictionary_id: int, storage_path: str
 ) -> None:
@@ -1244,14 +1263,19 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
     # 删除请求里会让前端 10 秒超时误以为删除没生效（其实后端还在继续跑、最终会删成功，
     # 只是响应没能在超时前返回）；丢到后台线程异步执行，删除接口本身只做行删除和文件
     # 清理，立刻返回。
-    threading.Thread(target=_vacuum, args=(db.get_bind(),), daemon=True).start()
+    # 已有一个还没开跑的 VACUUM 在排队时不必再加一个，它开跑时会一并回收这次删出来的空闲页
+    if not _vacuum_pending.is_set():
+        _vacuum_pending.set()
+        threading.Thread(target=_vacuum, args=(db.get_bind(),), daemon=True).start()
 
 
+@_serialized
 def _vacuum(engine) -> None:
     """回收删除词条后 SQLite 文件里的空闲页；VACUUM 不能在事务内跑，用独立的
     autocommit 连接执行。WAL 模式下 VACUUM 本身不会把文件截断到实际大小（新内容通过
     WAL 写入，磁盘上的文件长度要等 checkpoint 才会收缩），额外执行一次 TRUNCATE 模式
     的 checkpoint 才能让文件大小真正降下来。"""
+    _vacuum_pending.clear()
     try:
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text("VACUUM"))

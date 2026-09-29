@@ -49,6 +49,7 @@ SIBLING_RESOURCE_EXTENSIONS = frozenset(
         ".txt",
         ".json",
         ".xml",
+        ".ini",
     }
 )
 
@@ -92,6 +93,9 @@ _RESOURCE_MEDIA_TYPES = {
     ".txt": "text/plain",
     ".json": "application/json",
     ".xml": "text/xml",
+    # 词典里的 .ini 是以 <script src="config.ini"> 加载的 JS 配置（如 The Little Dict 的发音、
+    # 板块开关），带 nosniff 时不是 JS 类型浏览器会拒绝执行，词条各板块就全被脚本隐藏了
+    ".ini": "text/javascript",
 }
 
 
