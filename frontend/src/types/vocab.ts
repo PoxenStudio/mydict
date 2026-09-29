@@ -5,6 +5,8 @@ export interface VocabItem {
   definition: string | null
   note: string | null
   dictionary_id: number | null
+  /** 来源词典名快照（词典被删后仍有值） */
+  dictionary_name: string | null
   created_at: string
 }
 

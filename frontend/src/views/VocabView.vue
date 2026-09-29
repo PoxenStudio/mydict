@@ -131,6 +131,8 @@ async function remove(item: VocabItem) {
             <div class="word-row">
               <span class="word">{{ item.word }}</span>
               <span v-if="item.phonetic" class="phonetic">[{{ item.phonetic }}]</span>
+              <!-- 词条级生词本：同一个词可能来自不同词典，标出来源 -->
+              <span v-if="item.dictionary_name" class="dict-name">{{ item.dictionary_name }}</span>
             </div>
             <!--
               释义用隔离 iframe 渲染：词典自带的 <style>/内联事件在应用源下会污染整个
@@ -245,6 +247,15 @@ async function remove(item: VocabItem) {
   font-size: var(--text-lg);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+}
+
+.dict-name {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 6px;
 }
 
 .phonetic {

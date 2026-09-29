@@ -65,13 +65,17 @@ def add_vocab_item(
     model_cls = _MODEL_BY_KIND[owner_kind]
     owner_field = _OWNER_FIELD_BY_KIND[owner_kind]
 
-    existing = (
-        db.query(model_cls)
-        .filter(getattr(model_cls, owner_field) == owner_id, model_cls.word == entry.word)
-        .first()
+    # 词条级去重：同一部词典同一个词只留一条，别的词典不受影响。
+    # dictionary_id 为 NULL 时部分唯一索引管不到（SQLite 视 NULL 互不相等），这里兜住。
+    duplicate = db.query(model_cls).filter(
+        getattr(model_cls, owner_field) == owner_id,
+        model_cls.word == entry.word,
+        model_cls.dictionary_id.is_(None)
+        if resolved_dict_id is None
+        else model_cls.dictionary_id == resolved_dict_id,
     )
-    if existing is not None:
-        raise ConflictError("已收藏该单词")
+    if duplicate.first() is not None:
+        raise ConflictError("该词典下已收藏该单词")
 
     max_items = _max_items_per_owner(db)
     if max_items is not None:
@@ -81,10 +85,17 @@ def add_vocab_item(
         if current_count >= max_items:
             raise ConflictError(f"生词本已达上限（{max_items} 条）")
 
+    # 词典名快照：词典日后被删（dictionary_id 置 NULL）列表仍要显示来源
+    dictionary_name = None
+    if resolved_dict_id is not None:
+        dictionary = db.get(Dictionary, resolved_dict_id)
+        dictionary_name = dictionary.name if dictionary else None
+
     item = model_cls(
         **{owner_field: owner_id},
         word=entry.word,
         dictionary_id=resolved_dict_id,
+        dictionary_name=dictionary_name,
         phonetic=content.phonetic or entry.phonetic,
         definition=content.definition,
         note=note,

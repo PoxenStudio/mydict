@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import EntryFrame from './EntryFrame.vue'
 import FavoriteButton from './FavoriteButton.vue'
+import { favoriteKey } from '../composables/useFavorites'
 import { getEntryHtml, prefetchEntryHtml, randomEntry } from '../api/dict'
 import type { RandomEntry } from '../types/query'
 
@@ -108,8 +109,8 @@ const poolLabel = computed(() =>
         </div>
         <div class="random-actions">
           <FavoriteButton
-            :favorited="favoritedWords.has(current.word.toLowerCase())"
-            :loading="favoriteLoading.has(current.word.toLowerCase())"
+            :favorited="favoritedWords.has(favoriteKey(current.word, current.dictionary_id))"
+            :loading="favoriteLoading.has(favoriteKey(current.word, current.dictionary_id))"
             @toggle="emit('toggleFavorite', current.word, current.dictionary_id)"
           />
           <button type="button" class="next-btn" @click="next">换一个 →</button>
