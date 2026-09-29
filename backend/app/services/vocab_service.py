@@ -6,7 +6,7 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.models.dictionary import DictEntry, Dictionary
 from app.models.vocab import TokenVocabItem, VocabItem
 from app.services.entry_scope import current_generation_only
-from app.services.query_service import resolve_dictionaries
+from app.services.query_service import resolve_dictionaries, resolve_entry_link
 from app.services.settings_service import get_setting
 
 OwnerKind = Literal["token", "user"]
@@ -57,6 +57,10 @@ def add_vocab_item(
     note: str | None,
 ):
     entry, resolved_dict_id = _find_entry(db, word, dictionary_id)
+    # 词条可能是 `@@@LINK=目标词头` 重定向（同义词/大小写/简繁变体，用户库里占四成
+    # 词条）：快照要存真正承载内容的那份，否则生词本里显示的就是那行标记本身。
+    # 词头仍沿用用户查到的那个，与查询结果的展示口径一致。
+    content = resolve_entry_link(db, entry)
 
     model_cls = _MODEL_BY_KIND[owner_kind]
     owner_field = _OWNER_FIELD_BY_KIND[owner_kind]
@@ -81,8 +85,8 @@ def add_vocab_item(
         **{owner_field: owner_id},
         word=entry.word,
         dictionary_id=resolved_dict_id,
-        phonetic=entry.phonetic,
-        definition=entry.definition,
+        phonetic=content.phonetic or entry.phonetic,
+        definition=content.definition,
         note=note,
     )
     db.add(item)
