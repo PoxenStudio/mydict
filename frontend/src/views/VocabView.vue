@@ -292,8 +292,8 @@ async function remove(item: VocabItem) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
-  /* 行间距比原来减少 40%：12px → 7px（--space-3 是 12px） */
-  row-gap: 7px;
+  /* 行间距 × 0.6：12px → 7.2px（--space-3 是 12px） */
+  row-gap: calc(var(--space-3) * 0.6);
   column-gap: var(--space-3);
 }
 
@@ -305,9 +305,9 @@ async function remove(item: VocabItem) {
   background: var(--color-bg-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
-  /* 竖向内边距比原来减少 40%：16px → 10px（--space-4 是 16px），与 row-gap 一起
-     把相邻两条标题行之间的距离压到原来的 60% */
-  padding: 10px var(--space-4);
+  /* 竖向内边距 × 0.6：16px → 9.6px（--space-4 是 16px）。
+     和行高、行间距一样统一按 0.6 缩放，相邻两条标题行之间的距离才是干净的 -40% */
+  padding: calc(var(--space-4) * 0.6) var(--space-4);
 }
 
 /*
@@ -418,6 +418,10 @@ async function remove(item: VocabItem) {
   color: var(--color-danger);
   cursor: pointer;
   font-size: var(--text-sm);
+  /* 折叠态卡片的实际高度曾被这个按钮决定（13px × 全局 1.6 = 20.8px，比标题行的
+     17.52px 还高），于是标题行压了 40% 卡片却压不动。压到 1 之后卡片高度回到标题行
+     说了算，相邻两行标题之间的距离才真正接近 -40% */
+  line-height: 1;
 }
 
 .pagination {
