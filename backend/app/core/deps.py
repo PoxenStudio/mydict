@@ -14,6 +14,7 @@ from app.core.security import AUD_ADMIN, AUD_USER, decode_token, hash_api_token
 from app.models.admin import Admin
 from app.models.token import ApiToken
 from app.models.user import User
+from app.services.query_service import user_allowed_dictionary_ids
 from app.services.settings_service import get_bool_setting
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -88,7 +89,7 @@ class ApiCaller:
     def allowed_dictionary_ids(self) -> list[int] | None:
         """用户 Token 跟随用户的「可用词典」，普通 Token 用自己的。"""
         if self.user is not None:
-            return self.user.allowed_dictionary_ids
+            return user_allowed_dictionary_ids(self.user)
         return self.token.allowed_dictionary_ids if self.token else None
 
 

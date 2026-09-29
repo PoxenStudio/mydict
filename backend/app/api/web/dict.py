@@ -29,10 +29,12 @@ def list_dictionaries(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> list[PublicDictionaryOut]:
-    """`usable`（默认）：当前用户能用的词典，即已启用词典与其「可用词典」设置的交集，供首页
-    「检索范围」面板。`all`：全部已启用词典，供「词典选择」弹窗——那是用来配置限制的，
-    被限制过滤了就没法再选回来。"""
-    allowed_ids = user.allowed_dictionary_ids if scope == "usable" else None
+    """`usable`（默认）：当前用户实际能用的词典，供首页「检索范围」面板。`all`：管理员上限内
+    的全部已启用词典，供「词典选择」弹窗——那是用来配置自选的，按自选过滤了就没法再选回来。"""
+    if scope == "usable":
+        allowed_ids = query_service.user_allowed_dictionary_ids(user)
+    else:
+        allowed_ids = user.admin_allowed_dictionary_ids
     return query_service.list_public_dictionaries(db, allowed_ids)
 
 
@@ -48,7 +50,7 @@ def search(
 ) -> WebQueryResponse:
     web_rate_limit_service.enforce_query_limit(db, caller, settings, word)
 
-    allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
+    allowed_ids = query_service.user_allowed_dictionary_ids(caller.user) if caller.user else None
     started = time.perf_counter()
     results = query_service.search_word(
         db,
@@ -119,7 +121,7 @@ def entry_document(
     web_rate_limit_service.enforce_entry_limit(db, caller, settings)
 
     dictionary = db.get(Dictionary, dictionary_id)
-    allowed_ids = caller.user.allowed_dictionary_ids if caller.user else None
+    allowed_ids = query_service.user_allowed_dictionary_ids(caller.user) if caller.user else None
     if (
         dictionary is None
         or dictionary.status != "enabled"

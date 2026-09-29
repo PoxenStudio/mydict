@@ -67,9 +67,7 @@ async def test_admin_sets_user_allowed_dictionaries(
     assert {r["dictionary_id"] for r in resp.json()["results"]} >= {dict_a, dict_b}
 
 
-async def test_user_token_acts_as_user(
-    client: AsyncClient, admin_headers: dict[str, str]
-) -> None:
+async def test_user_token_acts_as_user(client: AsyncClient, admin_headers: dict[str, str]) -> None:
     """用户 Token：可用词典跟随用户、查询进用户历史、生词本是用户自己的。"""
     word = f"ut{uuid.uuid4().hex[:6]}"
     dict_a = await _create_enabled_dictionary(
@@ -195,3 +193,75 @@ async def test_user_self_service_api_token(
     assert second != first
     assert (await client.get("/api/v1/dictionaries", headers=_bearer(first))).status_code == 401
     assert (await client.get("/api/v1/dictionaries", headers=_bearer(second))).status_code == 200
+
+
+async def test_user_self_selection_stays_within_admin_limit(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """管理员划定上限后，用户在前台「词典选择」里只能在上限内挑，改回「全部」也越不过上限。"""
+    word = f"ul{uuid.uuid4().hex[:6]}"
+    dicts = [
+        await _create_enabled_dictionary(
+            client, admin_headers, f"上限{tag}-{word}", "en", "zh-Hans", [{"word": word}]
+        )
+        for tag in "ABC"
+    ]
+    dict_a, dict_b, dict_c = dicts
+    user = await _create_user(client, admin_headers)
+    headers = user["headers"]
+
+    async def searched() -> set[int]:
+        resp = await client.get("/api/dict/search", params={"word": word}, headers=headers)
+        return {r["dictionary_id"] for r in resp.json()["results"]} & set(dicts)
+
+    async def listed(scope: str) -> set[int]:
+        resp = await client.get("/api/dict/dictionaries", params={"scope": scope}, headers=headers)
+        return {d["id"] for d in resp.json()} & set(dicts)
+
+    await client.put(
+        f"/api/admin/users/{user['id']}/allowed-dictionaries",
+        json={"dictionary_ids": [dict_a, dict_b]},
+        headers=admin_headers,
+    )
+    # 用户菜单的弹窗只列上限内的；管理端看到的是上限本身
+    assert await listed("all") == {dict_a, dict_b}
+    assert await searched() == {dict_a, dict_b}
+
+    resp = await client.put(
+        "/api/auth/allowed-dictionaries",
+        json={"dictionary_ids": [dict_a, dict_c]},
+        headers=headers,
+    )
+    assert resp.json()["allowed_dictionary_ids"] == [dict_a]  # 上限外的 C 被丢掉
+    assert await searched() == {dict_a}
+    assert await listed("usable") == {dict_a}
+    assert (await _admin_user_row(client, admin_headers, user))["allowed_dictionary_ids"] == [
+        dict_a,
+        dict_b,
+    ]
+
+    await client.put(
+        "/api/auth/allowed-dictionaries", json={"dictionary_ids": None}, headers=headers
+    )
+    assert await searched() == {dict_a, dict_b}
+
+    # 管理员收窄上限后，用户原先的自选落在上限外时退回上限，而不是变成不限制
+    await client.put(
+        "/api/auth/allowed-dictionaries", json={"dictionary_ids": [dict_a]}, headers=headers
+    )
+    await client.put(
+        f"/api/admin/users/{user['id']}/allowed-dictionaries",
+        json={"dictionary_ids": [dict_b]},
+        headers=admin_headers,
+    )
+    assert await searched() == {dict_b}
+    resp = await client.get(
+        "/api/v1/query",
+        params={"word": word},
+        headers=_bearer(
+            (
+                await client.post(f"/api/admin/users/{user['id']}/token", headers=admin_headers)
+            ).json()["api_token"]
+        ),
+    )
+    assert {r["dictionary_id"] for r in resp.json()["results"]} & set(dicts) == {dict_b}

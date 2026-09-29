@@ -86,7 +86,7 @@ async function saveAllowedDictionaries(ids: number[] | null) {
               <el-dropdown-item command="dictionaries">词典选择</el-dropdown-item>
               <el-dropdown-item command="api-token">Token 管理</el-dropdown-item>
               <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
-              <el-dropdown-item command="admin">后台</el-dropdown-item>
+              <el-dropdown-item command="admin">管理后台</el-dropdown-item>
               <el-dropdown-item command="logout" divided>退出</el-dropdown-item>
             </el-dropdown-menu>
           </template>

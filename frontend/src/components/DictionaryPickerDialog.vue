@@ -28,7 +28,7 @@ function submit() {
 <template>
   <el-dialog v-model="visible" title="选择可用词典" width="420px">
     <el-radio-group v-model="useAll" class="mode-group">
-      <el-radio :value="true">使用全部已启用词典</el-radio>
+      <el-radio :value="true">使用全部可用词典</el-radio>
       <el-radio :value="false">自定义选择</el-radio>
     </el-radio-group>
     <el-checkbox-group v-if="!useAll" v-model="selected" class="dict-options">
@@ -36,7 +36,7 @@ function submit() {
         {{ d.name }}
       </el-checkbox>
     </el-checkbox-group>
-    <p v-if="!useAll && dictionaries.length === 0" class="hint">暂无已启用的词典。</p>
+    <p v-if="!useAll && dictionaries.length === 0" class="hint">暂无可选的词典。</p>
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
       <el-button type="primary" @click="submit">保存</el-button>
@@ -48,9 +48,14 @@ function submit() {
 .mode-group {
   display: flex;
   flex-direction: row;
-  justify-content: space-between;
+  justify-content: center;
+  gap: var(--space-6);
   width: 100%;
   margin-bottom: var(--space-3);
+}
+
+.mode-group :deep(.el-radio) {
+  margin-right: 0;
 }
 
 .dict-options {

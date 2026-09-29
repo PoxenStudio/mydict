@@ -50,7 +50,7 @@ def _to_out(user: User, vocab_count: int, query_count: int, api_token: str | Non
         "last_login_at": user.last_login_at,
         "vocab_count": vocab_count,
         "query_count": query_count,
-        "allowed_dictionary_ids": user.allowed_dictionary_ids,
+        "allowed_dictionary_ids": user.admin_allowed_dictionary_ids,
         "api_token": api_token,
     }
 
@@ -155,9 +155,9 @@ def get_user_detail(db: Session, user_id: int, recent_limit: int = 20) -> dict:
 def set_allowed_dictionaries(
     db: Session, user_id: int, dictionary_ids: list[int] | None, admin_id: int
 ) -> dict:
-    """管理员配置用户的「可用词典」（None 为不限制），与用户在前台自助设置的是同一个字段。"""
+    """管理员配置用户「可用词典」的上限（None 为不限制）；用户在前台只能在上限内自选。"""
     user = _get_or_404(db, user_id)
-    user.allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
+    user.admin_allowed_dictionary_ids = filter_existing_dictionary_ids(db, dictionary_ids)
     db.commit()
     log_action(
         db,
@@ -165,7 +165,7 @@ def set_allowed_dictionaries(
         actor_id=admin_id,
         action="user.set_allowed_dictionaries",
         target=str(user_id),
-        detail={"dictionary_ids": user.allowed_dictionary_ids},
+        detail={"dictionary_ids": user.admin_allowed_dictionary_ids},
     )
     return _out(db, user)
 
