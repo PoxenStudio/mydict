@@ -30,6 +30,7 @@ from app.core.exceptions import AppError, RateLimitedError
 from app.core.logging import configure_logging
 from app.core.maintenance import MaintenanceGate
 from app.core.version import get_app_version
+from app.services import spx_transcode
 from app.services.resource_service import (
     normalize_resource_path,
     resolve_resource_file,
@@ -115,6 +116,10 @@ def dict_resource(dictionary_id: int, resource_path: str) -> FileResponse:
     normalized = strip_legacy_file_prefix(normalized)
     res_dir = Path(settings.dictionary_storage_path) / str(dictionary_id) / "res"
     target = resolve_resource_file(res_dir, normalized)
+    if target is None and normalized.lower().endswith(".mp3"):
+        source = resolve_resource_file(res_dir, normalized[:-4] + ".spx")
+        if source is not None:
+            target = spx_transcode.transcode_to_mp3(source)
     if target is None:
         raise HTTPException(status_code=404)
     return FileResponse(
