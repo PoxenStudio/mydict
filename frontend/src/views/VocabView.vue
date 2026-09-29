@@ -233,7 +233,8 @@ async function remove(item: VocabItem) {
 }
 
 .vocab-page {
-  max-width: 720px;
+  /* 720px 是单列正文的宽度，放不下三列词条卡片；改用大内容宽度 token（1220px） */
+  max-width: var(--size-content-lg);
   margin: 0 auto;
   padding: var(--space-6) var(--space-4);
 }
@@ -280,10 +281,20 @@ async function remove(item: VocabItem) {
   margin: 0;
 }
 
+/*
+ * PC 上同行三列；平板断点（1023px）以下两列、手机（640px）一列，见文件末尾的媒体查询。
+ *
+ * align-items:start 而不是默认的 stretch：卡片高度由自身内容决定。生词本里展开一条
+ * 词条可能是几千像素高（千篇那条实体词条 4986px），stretch 会把同一排另外两张卡也拉成
+ * 同样高，整屏只剩空白。
+ */
 .vocab-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  /* 行间距比原来减少 40%：12px → 7px（--space-3 是 12px） */
+  row-gap: 7px;
+  column-gap: var(--space-3);
 }
 
 .vocab-item {
@@ -294,7 +305,9 @@ async function remove(item: VocabItem) {
   background: var(--color-bg-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
-  padding: var(--space-4);
+  /* 竖向内边距比原来减少 40%：16px → 10px（--space-4 是 16px），与 row-gap 一起
+     把相邻两条标题行之间的距离压到原来的 60% */
+  padding: 10px var(--space-4);
 }
 
 /*
@@ -309,9 +322,21 @@ async function remove(item: VocabItem) {
 }
 
 .word-row {
+  /*
+   * 标题行行高减少 40%：全局 --leading-body 是 1.6，1.6 × 0.6 = 0.96。
+   * 用无单位数值让子元素各自按自己的字号算行盒，所以字号（--text-lg 18px）没变，
+   * 只有行盒被压扁（18 × 0.96 = 17.28px）。
+   *
+   * 做成自定义属性是为了让箭头也吃到同一个比例——写 line-height:inherit 只会继承
+   * 父级的**计算值**（14 × 0.96 = 13.44px），箭头按自己的 18px 字号就少了一截。
+   */
+  --vocab-title-leading: 0.96;
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  line-height: var(--vocab-title-leading);
+  /* 三列布局下标题行要能被压缩，否则内容的最小尺寸会顶破卡片 */
+  min-width: 0;
 }
 
 .word-row.clickable {
@@ -323,7 +348,8 @@ async function remove(item: VocabItem) {
   flex-shrink: 0;
   color: var(--color-text-tertiary);
   font-size: var(--text-lg);
-  line-height: 1;
+  /* 跟随标题行的比例，否则这个 18px 的字形会把行盒顶回 18px，40% 的压缩只兑现一半 */
+  line-height: var(--vocab-title-leading);
   transition: transform 0.15s ease;
 }
 
@@ -335,9 +361,21 @@ async function remove(item: VocabItem) {
   font-size: var(--text-lg);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+  /* 三列之后单卡变窄，长词头宁可省略号也不要顶破卡片（字号不变） */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dict-name {
+  /* 词典名可能很长（「牛津高阶英汉双解词典第10版」）：封顶 45% 并打省略号，
+     免得它把左边的词头挤没（同查询页 EntryPanel 的处理） */
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   border: 1px solid var(--el-border-color);
@@ -385,5 +423,23 @@ async function remove(item: VocabItem) {
 .pagination {
   margin-top: var(--space-5);
   justify-content: center;
+}
+
+/* 列数随视口退让；断点沿用全站既有写法（平板 1023px / 手机 640px）。
+   两列、一列时行间距同样保持减少后的 7px，只有列间距跟着列数走。 */
+@media (max-width: 1023px) {
+  .vocab-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .vocab-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vocab-page {
+    padding: var(--space-4);
+  }
 }
 </style>
