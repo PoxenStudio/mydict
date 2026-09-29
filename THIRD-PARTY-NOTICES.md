@@ -54,6 +54,8 @@
 | 包 | 用途 | 许可证 |
 |---|---|---|
 | `liblzo2-2`（[LZO](https://www.oberhumer.com/opensource/lzo/)） | 解压 LZO 压缩的 MDict 词典（引擎版本 <2.0 的老词典）。应用代码不链接、不包含它的源码，由 `backend/app/parsers/lzo_compat.py` 在运行时通过 ctypes 动态加载 | **GPL-2.0-or-later** |
+| `speex`（[Speex](https://www.speex.org/) 的 `speexdec`） | 把 `.spx` 发音解成 WAV，由 `backend/app/services/spx_transcode.py` 以子进程调用 | BSD-3-Clause |
+| `lame`（[LAME](https://lame.sourceforge.io/)） | 把 WAV 编码为 mp3，同上以子进程调用 | **LGPL-2.0-or-later** |
 
 > 本项目代码以 MIT 授权；`liblzo2` 作为独立的系统库随镜像分发，其源码可从 Debian 的 `lzo2` 源码包或上游获取。不需要 LZO 支持的部署方可以从 `Dockerfile` 中去掉这一行 apt 安装，届时 LZO 词典导入会得到明确的「当前构建未启用 LZO 支持」提示，其它功能不受影响。
 
@@ -68,18 +70,6 @@
 | vue-router | 4.6.4 | MIT |
 
 前端 `devDependencies`（Vite、TypeScript、ESLint、Prettier 等构建期工具）不随构建产物分发，未在此列出。
-
-## 随前端静态资源分发的第三方文件（`frontend/public/speex/`）
-
-浏览器内解码 MDict 词典的 Speex（`.spx`）发音用，由词条 iframe 按需加载。
-
-| 文件 | 来源 | 许可证 |
-|---|---|---|
-| `speex.min.js` | [jpemartins/speex.js](https://github.com/jpemartins/speex.js)（libspeex 1.2.0RC 的 emscripten 构建） | **上游未声明**；其中编译进来的 [libspeex](https://www.speex.org/) 为 BSD-3-Clause |
-| `bitstring.min.js` | 同上仓库 | **上游未声明** |
-| `pcmdata.min.js` | [jussi-kalliokoski/pcmdata.js](https://github.com/jussi-kalliokoski/pcmdata.js) | **上游未声明** |
-
-> ⚠️ 截至 2026-09-25 核实：以上两个上游仓库都没有 LICENSE 文件、README 也无许可声明，三个 min 文件自身不带许可头。未声明许可在法律上等同于保留所有权利，与本项目以 MIT 分发存在冲突，**需向上游确认授权或替换为有明确许可的解码器**后再对外发布镜像。
 
 ## 词典数据（不随代码仓库分发）
 

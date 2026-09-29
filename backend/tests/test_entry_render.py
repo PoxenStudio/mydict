@@ -632,22 +632,12 @@ def test_multi_entry_document_falls_back_to_first_on_full_document() -> None:
     assert "mydict-entry" not in html
 
 
-def test_bootstrap_decodes_speex_in_the_browser() -> None:
-    """`.spx` 的播改走前端 JS 解码（libspeex 编译产物）。
-
-    浏览器原生解码器都不支持 Speex，但 django-mdict 项目用 libspeex 的 JS 移植在浏览器里
-    直接解，实测可行——不需要服务端转码、不需要 ffmpeg。引导脚本在候选（mp3/opus）都落空
-    后走到原 .spx 时，fetch 字节交给解码器解成 WAV 再播。
-    """
+def test_bootstrap_requests_mp3_for_speex() -> None:
+    """`.spx` 由服务端按需转成同名 mp3，前端只请求 mp3/opus，不再加载 JS 解码器。"""
     html = render_entry_document("<p>x</p>", dictionary_id=1)
-    # 解码器脚本从父页静态资源动态加载（srcdoc iframe 的相对 URL 以父页地址为 base）
-    assert "/speex/speex.min.js" in html
-    assert "/speex/bitstring.min.js" in html and "/speex/pcmdata.min.js" in html
-    # 双声道采样率减半的经验修正（NHK 的 32kHz 双声道 spx 不减半会播放过快）
-    assert "header.rate = header.rate / 2" in html
-    # 解码出的 WAV 用 blob URL 播放，换源时要释放上一份，否则每播一次泄漏一块内存
-    assert "URL.revokeObjectURL(el.__mydictBlobUrl)" in html
-    # 内联脚本不能出现 </script
+    assert "url.replace(SPX_EXT_RE, '.mp3'), url.replace(SPX_EXT_RE, '.opus')]" in html
+    assert "/speex/" not in html
+    assert "playSpeexDecoded" not in html
     start = html.index(BOOT_MARK)
     block = html[html.rindex("<script>", 0, start) : html.index("</script>", start)]
     assert "</script" not in block
@@ -708,7 +698,7 @@ def test_bootstrap_intercepts_rewritten_spx_anchors() -> None:
     """导入时 sound://…spx 已被改写成 /dict-res/…/x.spx，音频扩展名正则必须含 spx。
 
     拦不住的话点击会让 iframe 直接导航到 spx 文件——浏览器弹出解不了的内置播放器，
-    词条整个被换掉（实测 NHK 发音词典）。.spx 走 JS 解码播放。
+    词条整个被换掉（实测 NHK 发音词典）。.spx 改为请求服务端转好的同名 mp3。
     """
     html = render_entry_document("<p>x</p>", dictionary_id=28)
     assert "wma|spx" in html
