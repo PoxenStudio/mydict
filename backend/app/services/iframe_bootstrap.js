@@ -438,7 +438,12 @@
       el.src = current
       var played = el.play()
       if (played && played.catch) {
-        played.catch(advance)
+        played.catch(function (err) {
+          // 没有用户手势的播放（词典脚本加载即自动发音、悬停触发的合成点击）会被自动播放策略
+          // 拒绝，这不是格式放不了；若照样换下一个候选，会中断 mp3 去请求不存在的 opus
+          if (err && err.name === 'NotAllowedError') return
+          advance()
+        })
       }
     }
     attempt()

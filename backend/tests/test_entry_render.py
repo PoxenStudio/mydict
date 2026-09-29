@@ -115,6 +115,13 @@ def test_bootstrap_reports_clicked_images_to_the_parent() -> None:
     assert "</script" not in block
 
 
+
+def test_bootstrap_does_not_fall_back_when_autoplay_is_blocked() -> None:
+    """自动发音/悬停触发的播放被自动播放策略拒绝时不能换下一个候选：那会中断 mp3、
+    转去请求不存在的 .opus，并弹出「发音不存在」（实测 The Little Dict）。"""
+    html = render_entry_document("<p>x</p>", dictionary_id=1)
+    assert "'NotAllowedError'" in html
+
 def test_dark_theme_style_is_injected() -> None:
     """词典原文常把颜色写死（白底黑字），暗色下要靠这段样式翻掉。"""
     html = render_entry_document("<p>x</p>", dictionary_id=1)
