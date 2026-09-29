@@ -66,6 +66,38 @@ watch(search, () => {
 
 watch(page, load)
 
+// 词条默认折叠：一页 20 条各带一个沙箱 iframe，全部展开一次就要取 20 份词条文档。
+// 所以展开过才挂载（mountedIds），首次点击前连请求都不发——和查询页 EntryPanel 同一套做法。
+const expandedIds = ref<Set<number>>(new Set())
+const mountedIds = ref<Set<number>>(new Set())
+
+function isExpanded(id: number) {
+  return expandedIds.value.has(id)
+}
+
+function isMounted(id: number) {
+  return mountedIds.value.has(id)
+}
+
+/** 没有释义也没有备注就没有可展开的内容，不显示箭头、点击也不响应 */
+function hasBody(item: VocabItem) {
+  return Boolean(item.definition || item.note)
+}
+
+function toggle(item: VocabItem) {
+  if (!hasBody(item)) return
+  const expanded = new Set(expandedIds.value)
+  const mounted = new Set(mountedIds.value)
+  if (expanded.has(item.id)) {
+    expanded.delete(item.id)
+  } else {
+    expanded.add(item.id)
+    mounted.add(item.id)
+  }
+  expandedIds.value = expanded
+  mountedIds.value = mounted
+}
+
 async function remove(item: VocabItem) {
   try {
     await ElMessageBox.confirm(`确认从生词本移除「${item.word}」？`, '删除确认', {
@@ -128,25 +160,53 @@ async function remove(item: VocabItem) {
       <div v-else class="vocab-list">
         <div v-for="item in items" :key="item.id" class="vocab-item">
           <div class="vocab-main">
-            <div class="word-row">
+            <div
+              class="word-row"
+              :class="{ clickable: hasBody(item) }"
+              role="button"
+              :tabindex="hasBody(item) ? 0 : -1"
+              :aria-expanded="hasBody(item) ? isExpanded(item.id) : undefined"
+              @click="toggle(item)"
+              @keydown.enter.prevent="toggle(item)"
+              @keydown.space.prevent="toggle(item)"
+            >
+              <span
+                v-if="hasBody(item)"
+                class="chevron"
+                :class="{ open: isExpanded(item.id) }"
+                aria-hidden="true"
+                >›</span
+              >
               <span class="word">{{ item.word }}</span>
               <span v-if="item.phonetic" class="phonetic">[{{ item.phonetic }}]</span>
               <!-- 词条级生词本：同一个词可能来自不同词典，标出来源 -->
               <span v-if="item.dictionary_name" class="dict-name">{{ item.dictionary_name }}</span>
             </div>
             <!--
-              释义用隔离 iframe 渲染：词典自带的 <style>/内联事件在应用源下会污染整个
-              界面、并让第三方词典脚本够到 localStorage 里的 token。
-              这里取的是**收藏当时的释义快照**（/vocab/{id}/entry），不是按词典实时取，
-              所以词典后来被删或改都不影响生词本。
+              折叠不用 display:none：隐藏的 iframe 会按 0 宽度排版、上报一个极大的高度，把
+              EntryFrame 的增长守卫误触发成「冻结可滚动」。收成高度 0 后 iframe 仍按真实宽度
+              排版，inert 挡住键盘焦点落进看不见的内容。默认折叠，展开过才挂载。
             -->
-            <EntryFrame
-              v-if="item.definition"
-              :key="item.id"
-              class="definition"
-              :loader="() => getVocabEntryHtml(item.id)"
-            />
-            <p v-if="item.note" class="note">备注：{{ item.note }}</p>
+            <div
+              v-if="hasBody(item) && (isExpanded(item.id) || isMounted(item.id))"
+              class="vocab-body"
+              :class="{ collapsed: !isExpanded(item.id) }"
+              :inert="!isExpanded(item.id)"
+            >
+              <!--
+                释义用隔离 iframe 渲染：词典自带的 <style>/内联事件在应用源下会污染整个
+                界面、并让第三方词典脚本够到 localStorage 里的 token。
+                这里取的是**收藏当时的释义快照**（/vocab/{id}/entry），不是按词典实时取，
+                所以词典后来被删或改都不影响生词本。
+              -->
+              <EntryFrame
+                v-if="item.definition"
+                :key="item.id"
+                class="definition"
+                :loader="() => getVocabEntryHtml(item.id)"
+              />
+              <p v-if="item.note" class="note">备注：{{ item.note }}</p>
+            </div>
           </div>
           <button type="button" class="remove-btn" aria-label="删除生词" @click="remove(item)">
             删除
@@ -237,10 +297,38 @@ async function remove(item: VocabItem) {
   padding: var(--space-4);
 }
 
+/*
+ * flex: 1 是「释义只占一半宽度」的修复点：.vocab-item 是 flex 行，.vocab-main 默认
+ * flex-grow:0，宽度按内容撑——而里面两个孩子都是 width:100%（百分比在固有尺寸里退化成
+ * auto），iframe 就按替换元素默认的 300px 参与计算，于是只剩固定的一小条，右边留给
+ * 「删除」一大片空白。min-width:0 允许它被压到 0，否则内容的最小尺寸会顶住不让收缩。
+ */
+.vocab-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .word-row {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+}
+
+.word-row.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-lg);
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.chevron.open {
+  transform: rotate(90deg);
 }
 
 .word {
@@ -263,9 +351,20 @@ async function remove(item: VocabItem) {
   color: var(--color-text-secondary);
 }
 
+.vocab-body {
+  margin-top: var(--space-2);
+}
+
+/* 与查询页 EntryPanel 的折叠一致：收高度而不是 display:none，保住 iframe 的真实宽度 */
+.vocab-body.collapsed {
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
 .definition {
   display: block;
-  margin-top: var(--space-2);
 }
 
 .note {
