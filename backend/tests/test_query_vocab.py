@@ -527,3 +527,36 @@ async def test_vocab_languages_and_lang_from_filter(
 
     resp = await client.get("/api/vocab", headers=user_headers)
     assert resp.json()["total"] == 2
+
+
+async def test_delete_dictionary_referenced_by_vocab_and_query_log(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    dict_id = await _create_enabled_dictionary(
+        client, admin_headers, "DEL-REF", "en", "zh-Hans", [{"word": "refword", "translation": "r"}]
+    )
+
+    await client.post("/api/auth/register", json={"username": "deluser", "password": "delpass123"})
+    login_resp = await client.post(
+        "/api/auth/login", json={"username": "deluser", "password": "delpass123"}
+    )
+    user_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+    resp = await client.post(
+        "/api/vocab", json={"word": "refword", "dictionary_id": dict_id}, headers=user_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    raw, _ = _make_api_token(db_session)
+    token_headers = {"Authorization": f"Bearer {raw}"}
+    resp = await client.post("/api/v1/vocab", json={"word": "refword"}, headers=token_headers)
+    assert resp.status_code == 200, resp.text
+    await client.get("/api/v1/query", params={"word": "refword"}, headers=token_headers)
+
+    resp = await client.delete(f"/api/admin/dictionaries/{dict_id}", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get("/api/vocab", headers=user_headers)
+    items = resp.json()["items"]
+    assert [i["word"] for i in items] == ["refword"]
+    assert items[0]["dictionary_id"] is None

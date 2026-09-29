@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -16,6 +16,8 @@ from app.core.exceptions import AppError, ConflictError, NotFoundError, Validati
 from app.core.query_cache import invalidate as invalidate_query_cache
 from app.models.audit import AuditLog
 from app.models.dictionary import DictEntry, Dictionary
+from app.models.query import QueryLog
+from app.models.vocab import TokenVocabItem, VocabItem
 from app.parsers.base import DictionaryParser
 from app.parsers.ecdict import EcdictParser
 from app.parsers.mdict import MDictParser, read_style_context
@@ -1207,6 +1209,11 @@ def delete_dictionary(db: Session, dictionary_id: int, admin_id: int, settings: 
     if dictionary is None:
         raise NotFoundError("词典不存在")
     import_method = dictionary.import_method
+    # 生词本/查询日志只把词典当来源参考（生词本自带释义快照），外键没有级联，得先解除引用
+    for model in (VocabItem, TokenVocabItem, QueryLog):
+        db.execute(
+            update(model).where(model.dictionary_id == dictionary_id).values(dictionary_id=None)
+        )
     db.delete(dictionary)  # dict_entries 由外键 ON DELETE CASCADE 一并删除，见 db.py 的 FK pragma
     db.commit()
     log_action(
