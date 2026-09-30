@@ -323,6 +323,12 @@
     pending = true
     if (window.requestAnimationFrame) window.requestAnimationFrame(flush)
     else setTimeout(flush, 16)
+    // 定时器兜底：子框架里 rAF 不一定执行（桌面端 WebKitGTK 的沙箱 srcdoc 子页实测被吞掉，
+    // 而 pending 是「一次只排一帧」的锁——首帧丢了就再也不解锁，高度永远不上报，父页只能
+    // 停在默认高度把词条裁掉）。这里补一拍：rAF 没来就由它收尾。flush 幂等，重复跑无害。
+    setTimeout(function () {
+      if (pending) flush()
+    }, 250)
   }
 
   function observeHeight() {
