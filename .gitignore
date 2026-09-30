@@ -1,18 +1,63 @@
-doc
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+docker/.env
 
-# 运行时数据卷（本地开发映射到容器 /data）
-data/
+# HarmonyOS research: local clones of upstream feat/open-harmony branches,
+# not submodules of record yet (see ops/harmony/README.md)
+/ops/harmony/vendor/
 
-# 依赖与构建产物
-node_modules/
-frontend/dist/
-backend/app/static/
-backend/.venv/
-backend/.localdata/
-backend/.pytest_cache/
-backend/.ruff_cache/
-__pycache__/
-*.pyc
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
 
-# 环境变量
-.env
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+/certs
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Rust build
+target
+
+fastlane/report.xml
+fastlane/metadata/android/en-US/changelogs
+
+*.koplugin.zip
+
+# nix
+result*
+
+.playwright-mcp/
+.gstack
+.pnpm-store/
+
+.claude/worktrees
+.claude/settings.json
+.claude/settings.local.json
+
+.gradle

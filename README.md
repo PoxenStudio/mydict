@@ -25,6 +25,10 @@
   <img src="document/admin_ui.png" alt="Admin UI" />
 </p>
 
+## API请求
+用户可以使用管理后台生成的Token，或者使用用户登录到MyDict自行分配的Token，通过[Web API](./document/WebAPI.md) 进行查询和生词管理操作。
+推荐使用用户自定义的Token请求，这样可以MyDict查询到个人的查询历史和生词本。
+
 ## 功能特性
 
 - **词典导入**：支持 MDict（`.mdx`+`.mdd`）、StarDict（`.ifo/.idx/.dict`）、ECDICT（CSV）三种格式；网页上传或服务器目录导入两种方式，后者适合 GB 级大文件。
