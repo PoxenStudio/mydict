@@ -279,6 +279,25 @@ async def test_web_search_accepts_dictionary_scope(
     assert hit == {first}
 
 
+async def test_web_search_returns_hit_language(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """每条命中要带词典的源语言：桌面快捷搜索窗靠它做「语言标签 → 词典组」的切换。"""
+    zh_word, ja_word = _zh_word(), "テスト"
+    zh_dict = await _make_dict(client, admin_headers, "语言标签甲", "zh-Hans", [zh_word])
+    ja_dict = await _make_dict(client, admin_headers, "语言标签乙", "ja", [ja_word])
+    set_setting(db_session, "open_access", "true")
+
+    # 语言路由下一次查询只会在一个语言组里命中，所以分两次查、各验各的标签
+    zh_hits = await client.get("/api/dict/search", params={"word": zh_word})
+    langs = {i["dictionary_id"]: i.get("lang_from") for i in zh_hits.json()["results"]}
+    assert langs[zh_dict] == "zh-Hans"
+
+    ja_hits = await client.get("/api/dict/search", params={"word": ja_word})
+    langs = {i["dictionary_id"]: i.get("lang_from") for i in ja_hits.json()["results"]}
+    assert langs[ja_dict] == "ja"
+
+
 async def test_web_search_scope_cannot_bypass_user_limits(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:

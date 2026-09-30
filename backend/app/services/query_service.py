@@ -241,6 +241,7 @@ def resolve_candidates(
     lang_from: str | None = None,
     lang_to: str | None = None,
     allowed_ids: list[int] | None = None,
+    all_langs: bool = False,
 ) -> CandidateSet:
     """解析出候选词典，并标出其中「语言方向与输入一致」的那批。
 
@@ -268,6 +269,12 @@ def resolve_candidates(
     # 自动识别：一次查出全部候选，再在 Python 里分成优先/其余——比两条 SQL 少一次扫描，
     # 词典数量级（几十部）下这点开销可以忽略。
     rows = query.order_by(Dictionary.sort_order, Dictionary.id).all()
+    # all_langs：多语言查询模式（嵌入阅读器的「全部语言」标签用）。中日共用汉字表意
+    # 文字，detect_lang 分不出 zh/ja——按单一优先语言切分会把另一侧的词典整组挡在
+    # 门外（查「政府」时日文的大辞泉/広辞苑永远不参与）。此模式下全部候选一视同仁，
+    # 逐部查询并靠 lang_match 标记语言，由调用方决定怎么分组呈现。
+    if all_langs:
+        return CandidateSet(rows, frozenset(d.id for d in rows))
     wanted = _lang_from_values(detect_lang(word))
     preferred_ids = frozenset(d.id for d in rows if d.lang_from in wanted)
     preferred = [d for d in rows if d.id in preferred_ids]
@@ -337,9 +344,13 @@ def search_word(
     allowed_ids: list[int] | None = None,
     *,
     include_definitions: bool = True,
+    all_langs: bool = False,
 ) -> list[dict]:
-    """查词。include_definitions=False 时结果里不带释义（前台用：释义另走 /dict/entry）。"""
-    candidates = resolve_candidates(db, word, dict_ids, lang_from, lang_to, allowed_ids)
+    """查词。include_definitions=False 时结果里不带释义（前台用：释义另走 /dict/entry）。
+
+    all_langs=True 时不做「优先语言命中即停」的语言路由，全部启用词典一视同仁地
+    参与查询（嵌入阅读器的多语言标签用）。"""
+    candidates = resolve_candidates(db, word, dict_ids, lang_from, lang_to, allowed_ids, all_langs=all_langs)
     if not candidates.dictionaries:
         return []
 
@@ -352,7 +363,7 @@ def search_word(
     cache_key = query_cache.make_key(
         word_lower,
         tuple(d.id for d in candidates.dictionaries),
-        f"x{EXPANSION_VERSION}|d{int(include_definitions)}",
+        f"x{EXPANSION_VERSION}|d{int(include_definitions)}|a{int(all_langs)}",
     )
     cached = query_cache.get(cache_key)
     if cached is not None:
@@ -408,6 +419,7 @@ def search_word(
             "dictionary_name": by_id[e.dictionary_id].name,
             "word": e.word,
             "phonetic": resolved.phonetic,
+            "lang_from": by_id[e.dictionary_id].lang_from,
             "extra": json.loads(e.extra) if e.extra else None,
             "lang_match": e.dictionary_id in candidates.preferred_ids,
         }

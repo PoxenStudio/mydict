@@ -21,6 +21,8 @@ const emit = defineEmits<{
   entry: [word: string]
   /** 发音的全部候选（mp3 → opus → JS 解码 spx）都放不了 */
   unsupportedAudio: []
+  /** 词条正文里按了 Esc（选中文字菜单未开），父级据此折叠/聚焦 */
+  escape: []
 }>()
 
 const { resolvedTheme } = useTheme()
@@ -170,6 +172,10 @@ function onMessage(event: MessageEvent) {
       break
     case 'mydict:entry':
       if (typeof data.word === 'string' && data.word.trim()) emit('entry', data.word)
+      break
+    case 'mydict:escape':
+      // 焦点在词条里时父页收不到键盘事件，由引导脚本转成消息上来
+      emit('escape')
       break
     case 'mydict:open':
       openExternal(String(data.url ?? ''))

@@ -28,6 +28,8 @@ const emit = defineEmits<{
   unsupportedAudio: []
   /** 分批切换后请求把面板滚回视口顶部（HomeView 复用展开时的滚动逻辑） */
   rescroll: []
+  /** 词条正文里按了 Esc，转给 HomeView 跑它的收拢链 */
+  escape: []
 }>()
 
 const KNOWN_ARRAY_LABELS: Record<string, string> = {
@@ -196,6 +198,7 @@ function isLoading(word: string, dictionaryId: number) {
         :loader="() => getEntryHtml(primary.dictionary_id, queryWord, currentBatchIds)"
         @entry="emit('entry', $event)"
         @unsupported-audio="emit('unsupportedAudio')"
+        @escape="emit('escape')"
       />
 
       <!-- 分批导航：只在多词条且超过一批时出现 -->
@@ -231,6 +234,7 @@ function isLoading(word: string, dictionaryId: number) {
           :loader="() => getEntryHtml(primary.dictionary_id, queryWord, [primary.id])"
           @entry="emit('entry', $event)"
           @unsupported-audio="emit('unsupportedAudio')"
+          @escape="emit('escape')"
         />
 
         <ul v-if="arrayFields(primary).length" class="extra-list">
