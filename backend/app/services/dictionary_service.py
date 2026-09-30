@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal
 from app.core.exceptions import AppError, ConflictError, NotFoundError, ValidationAppError
 from app.core.query_cache import invalidate as invalidate_query_cache
@@ -55,6 +55,10 @@ _reparsing_lock = threading.Lock()
 # 后台写库任务彼此并发时，后来者等不到锁就直接报 "database is locked"，这里让它们排队执行
 _bulk_write_lock = threading.Lock()
 _vacuum_pending = threading.Event()
+
+# 启动时的附属资源补齐只跑一次，重复调用（如测试里反复 bootstrap）不叠加
+_resource_sync_lock = threading.Lock()
+_resource_sync_running = False
 
 
 def _serialized(fn):
@@ -719,6 +723,70 @@ def _source_files(dictionary: Dictionary) -> list[Path]:
     return [
         Path(raw.strip()) for raw in (dictionary.file_path or "").split(";") if raw.strip()
     ]
+
+
+@_serialized
+def sync_sibling_resources(db: Session, settings: Settings) -> tuple[int, int]:
+    """补齐所有 MDict 词典缺的 `.mdx` 同级附属资源，返回（补上的词典数，复制的文件数）。
+
+    与「从源文件修复」的第一件事相同，但可以**每次启动自动跑**：只读源目录 + 补缺文件，
+    不碰数据库、不重写词条，几十部词典也就是几十次目录列举。
+
+    与修复任务共用同一把写锁：`copy_sibling_resources` 的临时文件名带进程号，两边同时
+    复制同一个文件会撞临时文件、写出半截内容。
+    """
+    dictionaries: list[Dictionary] = db.query(Dictionary).filter(Dictionary.format == "mdict").all()
+    fixed = 0
+    copied = 0
+    for dictionary in dictionaries:
+        try:
+            count = copy_sibling_resources(
+                Path(settings.dictionary_storage_path) / str(dictionary.id) / "res",
+                _source_files(dictionary),
+            )
+        except Exception:
+            # 单部词典失败（源目录被删、权限不足、磁盘满…）不能影响其余词典，也不能影响启动
+            logger.warning("补齐词典 %s 的附属资源失败", dictionary.id, exc_info=True)
+            continue
+        if count:
+            fixed += 1
+            copied += count
+            logger.info("补齐词典 %s（%s）的附属资源 %d 个", dictionary.id, dictionary.name, count)
+    return fixed, copied
+
+
+def sync_sibling_resources_in_background() -> bool:
+    """启动后在后台补一次存量词典的附属资源；已在补齐中返回 False（不排队、不叠加）。
+
+    为什么需要它：附属资源的白名单会随上游修复增补（最近一次是 `.ini`——词典用
+    `<script src="config.ini">` 加载 JS 配置，缺了它整页板块会被词典自带脚本隐藏）。
+    新导入的词典当然走新白名单，但**存量词典的 res/ 不会自己更新**：升级完镜像问题照旧，
+    用户得知道去后台点一次「从源文件修复」。这一步把那个窗口自动关掉。
+    """
+    global _resource_sync_running
+    with _resource_sync_lock:
+        if _resource_sync_running:
+            return False
+        _resource_sync_running = True
+
+    def run() -> None:
+        global _resource_sync_running
+        db = SessionLocal()
+        try:
+            fixed, copied = sync_sibling_resources(db, get_settings())
+            if copied:
+                logger.info("附属资源自动补齐完成：%d 部词典共 %d 个文件", fixed, copied)
+            else:
+                logger.info("附属资源自动补齐检查完成：没有缺失")
+        except Exception:
+            logger.warning("附属资源自动补齐失败，可在后台「从源文件修复」重试", exc_info=True)
+        finally:
+            db.close()
+            with _resource_sync_lock:
+                _resource_sync_running = False
+
+    threading.Thread(target=run, name="mydict-resource-sync", daemon=True).start()
+    return True
 
 
 def _source_style_context(sources: list[Path]) -> tuple[dict[str, tuple[str, str]], bool]:
