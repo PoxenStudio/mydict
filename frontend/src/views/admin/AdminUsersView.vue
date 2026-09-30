@@ -122,6 +122,26 @@ async function deleteToken(user: AdminUserItem) {
   ElMessage.success('Token 已删除')
 }
 
+// --- 删除用户（连同 Token / 生词本 / 查询记录）---
+async function deleteUser(user: AdminUserItem) {
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除「${user.username}」，以及他的 Token、生词本（${user.vocab_count} 条）与查询记录（${user.query_count} 条）。此操作不可恢复。`,
+      '删除用户',
+      { type: 'warning', confirmButtonText: '删除' },
+    )
+  } catch {
+    return
+  }
+  const result = await userApi.deleteUser(user.id)
+  ElMessage.success(
+    `已删除「${result.username}」：Token ${result.tokens} 个、生词 ${result.vocab} 条、查询记录 ${result.queries} 条`,
+  )
+  // 删掉最后一条且不在第一页时回退一页，否则重载当前页
+  if (users.value.length === 1 && page.value > 1) page.value -= 1
+  else await load()
+}
+
 // --- 可用词典 ---
 const dictPickerVisible = ref(false)
 const dictPickerTarget = ref<AdminUserItem | null>(null)
@@ -263,6 +283,7 @@ function formatDate(value: string | null) {
           >
             {{ user.status === 'active' ? '禁用' : '启用' }}
           </el-button>
+          <el-button text type="danger" @click="deleteUser(user)">删除</el-button>
         </span>
       </div>
       <div v-if="!loading && users.length === 0" class="empty">没有符合条件的用户。</div>

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.security import generate_temp_password, hash_password
-from app.models.query import QueryLog
+from app.models.query import QueryLog, QueryStatsDaily
 from app.models.token import ApiToken
 from app.models.user import User
 from app.models.vocab import VocabItem
@@ -184,3 +184,43 @@ def delete_token(db: Session, user_id: int, admin_id: int) -> dict:
         raise NotFoundError("该用户没有 Token")
     token_service.delete_token(db, token.id, admin_id)
     return _out(db, user)
+
+
+def delete_user(db: Session, user_id: int, admin_id: int) -> dict:
+    """删除用户，连同他的 Token、生词本与查询记录。
+
+    引用 `users.id` 的四个外键里只有 `vocab_items` 带 `ondelete="CASCADE"`，
+    而连接开着 `PRAGMA foreign_keys=ON`，所以另外三张表（`api_tokens`、
+    `query_logs`、`query_stats_daily`）必须先显式清掉，否则 `db.delete(user)`
+    会以 IntegrityError 失败——这也是"删不掉用户"的根因。
+
+    返回清理数量，前端据此提示、审计留痕。
+    """
+    user = _get_or_404(db, user_id)
+    username = user.username
+
+    counts = {
+        "vocab": db.query(VocabItem)
+        .filter(VocabItem.user_id == user_id)
+        .delete(synchronize_session=False),
+        "queries": db.query(QueryLog)
+        .filter(QueryLog.user_id == user_id)
+        .delete(synchronize_session=False),
+        "stats": db.query(QueryStatsDaily)
+        .filter(QueryStatsDaily.user_id == user_id)
+        .delete(synchronize_session=False),
+        "tokens": db.query(ApiToken)
+        .filter(ApiToken.user_id == user_id)
+        .delete(synchronize_session=False),
+    }
+    db.delete(user)
+    db.flush()
+    log_action(
+        db,
+        actor_type="admin",
+        actor_id=admin_id,
+        action="user.delete",
+        target=str(user_id),
+        detail={"username": username, **counts},
+    )
+    return {"username": username, **counts}

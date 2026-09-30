@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import EntryFrame from './EntryFrame.vue'
 import FavoriteButton from './FavoriteButton.vue'
+import { favoriteKey } from '../composables/useFavorites'
 import { getEntryHtml, prefetchEntryHtml } from '../api/dict'
 import type { QueryResultItem } from '../types/query'
 
@@ -138,12 +139,12 @@ function textFields(item: QueryResultItem) {
     .map(([key, value]) => ({ label: KNOWN_TEXT_LABELS[key], value: String(value) }))
 }
 
-function isFavorited(word: string) {
-  return props.favoritedWords.has(word.toLowerCase())
+function isFavorited(word: string, dictionaryId: number) {
+  return props.favoritedWords.has(favoriteKey(word, dictionaryId))
 }
 
-function isLoading(word: string) {
-  return props.favoriteLoading.has(word.toLowerCase())
+function isLoading(word: string, dictionaryId: number) {
+  return props.favoriteLoading.has(favoriteKey(word, dictionaryId))
 }
 </script>
 
@@ -169,8 +170,8 @@ function isLoading(word: string) {
       <span v-if="hasMultiple" class="hint">共 {{ entries.length }} 条</span>
       <FavoriteButton
         class="head-favorite"
-        :favorited="isFavorited(primary.word)"
-        :loading="isLoading(primary.word)"
+        :favorited="isFavorited(primary.word, primary.dictionary_id)"
+        :loading="isLoading(primary.word, primary.dictionary_id)"
         @toggle="emit('toggleFavorite', primary.word, primary.dictionary_id)"
       />
     </header>

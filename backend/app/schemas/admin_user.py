@@ -37,6 +37,16 @@ class AdminUserListResponse(BaseModel):
     page_size: int
 
 
+class AdminUserDeleteResponse(BaseModel):
+    """删除用户的结果：用户名 + 一并清理掉的数据量（前端提示 / 审计核对用）。"""
+
+    username: str
+    tokens: int
+    vocab: int
+    queries: int
+    stats: int
+
+
 class ResetPasswordResponse(BaseModel):
     temporary_password: str
 

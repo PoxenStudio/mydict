@@ -13,6 +13,7 @@ from app.models.user import User
 from app.schemas.vocab import VocabCreateRequest, VocabItemOut, VocabListResponse
 from app.services import resource_service, vocab_service
 from app.services.entry_render_service import render_entry_document
+from app.services.query_service import resolve_link_definition
 
 router = APIRouter(prefix="/vocab", tags=["web-vocab"])
 
@@ -63,6 +64,9 @@ def vocab_entry_document(
     就已改写成 /dict-res/{id}/res/ 绝对地址，所以只要词典还在，图片发音照常能显示。
     """
     item = vocab_service.get_vocab_item(db, "user", user.id, item_id)
+    # 老快照可能存着重定向标记（`@@@LINK=…`）而不是释义，渲染时兜底解引用；
+    # 新快照在收藏时就已解析（见 vocab_service.add_vocab_item）。
+    definition = resolve_link_definition(db, item.dictionary_id, item.definition)
     # 快照里的 <link> 等资源引用是收藏时就固化的，但 mdx 同名的 .css/.js 词条里从来不
     # 引用（靠客户端自动加载），词典还在就补注入，评注块/诗词块的配色才不会丢
     dictionary = (
@@ -81,7 +85,7 @@ def vocab_entry_document(
     )
     return HTMLResponse(
         render_entry_document(
-            item.definition or "",
+            definition or "",
             dictionary_id=item.dictionary_id or 0,
             theme=theme,
             extra_head_assets=extra_head_assets,

@@ -96,6 +96,43 @@ def _resolve_link(db: Session, entry: DictEntry) -> DictEntry:
     return current
 
 
+def resolve_entry_link(db: Session, entry: DictEntry) -> DictEntry:
+    """公开版 `_resolve_link`：给生词本等落库路径复用同一套解引用口径。"""
+    return _resolve_link(db, entry)
+
+
+def resolve_link_definition(
+    db: Session, dictionary_id: int | None, definition: str | None
+) -> str | None:
+    """把可能是 `@@@LINK=` 的释义解引用成真正承载内容的释义。
+
+    与 `_resolve_link` 同一套规则（只在同词典内、最多 `_MAX_LINK_DEPTH` 层、带环
+    保护），但入口是「一份释义」而不是「一条词条」——生词本快照渲染时用它兜底：
+    老快照里可能存着重定向标记本身（那行不是释义）。
+    """
+    if dictionary_id is None:
+        return definition
+    current = definition
+    seen: set[str] = set()
+    for _ in range(_MAX_LINK_DEPTH):
+        target = _link_target(current)
+        if target is None:
+            return current
+        key = target.lower()
+        if key in seen:
+            return current
+        seen.add(key)
+        following = (
+            current_generation_only(db.query(DictEntry))
+            .filter(DictEntry.dictionary_id == dictionary_id, DictEntry.word_lower == key)
+            .first()
+        )
+        if following is None:
+            return current
+        current = following.definition
+    return current
+
+
 def detect_lang(word: str) -> str:
     return "zh" if _CJK_RE.search(word) else "en"
 
