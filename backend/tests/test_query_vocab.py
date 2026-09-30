@@ -656,3 +656,39 @@ async def test_query_all_langs_queries_both_languages(client, db_session) -> Non
     assert [r["dictionary_name"] for r in results] == ["中文词典", "大辞泉"]
     assert all(r["lang_from"] for r in results)
     assert {r["lang_from"] for r in results} == {"zh-Hans", "ja"}
+
+
+async def test_user_vocab_sort_by_word_and_date(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    set_setting(db_session, "open_access", "true")
+    words = ["banana", "apple", "cherry"]
+    dict_id = await _create_enabled_dictionary(
+        client, admin_headers, "VOCAB-SORT", "en", "zh-Hans",
+        [{"word": w, "translation": w} for w in words],
+    )
+    await client.post(
+        "/api/auth/register", json={"username": "sortuser", "password": "sortpass123"}
+    )
+    login_resp = await client.post(
+        "/api/auth/login", json={"username": "sortuser", "password": "sortpass123"}
+    )
+    user_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+    for w in words:
+        resp = await client.post(
+            "/api/vocab", json={"word": w, "dictionary_id": dict_id}, headers=user_headers
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def order_of(**params: str) -> list[str]:
+        resp = await client.get("/api/vocab", params=params, headers=user_headers)
+        assert resp.status_code == 200, resp.text
+        return [item["word"] for item in resp.json()["items"]]
+
+    assert await order_of() == ["cherry", "apple", "banana"]
+    assert await order_of(sort="date", order="asc") == ["banana", "apple", "cherry"]
+    assert await order_of(sort="word", order="asc") == ["apple", "banana", "cherry"]
+    assert await order_of(sort="word", order="desc") == ["cherry", "banana", "apple"]
+
+    resp = await client.get("/api/vocab", params={"sort": "bogus"}, headers=user_headers)
+    assert resp.status_code == 422

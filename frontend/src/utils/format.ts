@@ -13,3 +13,12 @@ export function formatDuration(totalSeconds: number) {
   if (minutes > 0) return `${minutes} 分 ${seconds % 60} 秒`
   return `${seconds} 秒`
 }
+
+/** 距今天数（当天算 1 天），满一周起按周显示：1天 / 6天 / 1周 / 5周 */
+export function formatAge(iso: string, now: Date = new Date()) {
+  const start = new Date(iso)
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const days = Math.max(1, Math.round((today - startDay) / 86_400_000) + 1)
+  return days < 7 ? `${days}天` : `${Math.floor(days / 7)}周`
+}

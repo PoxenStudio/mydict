@@ -24,11 +24,13 @@ def list_vocab(
     page: int = 1,
     page_size: int = 20,
     lang_from: str | None = None,
+    sort: vocab_service.VocabSort = "date",
+    order: vocab_service.SortOrder = "desc",
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> VocabListResponse:
     items, total = vocab_service.list_vocab_items(
-        db, "user", user.id, search, page, min(page_size, 100), lang_from
+        db, "user", user.id, search, page, min(page_size, 100), lang_from, sort, order
     )
     return VocabListResponse(items=items, total=total, page=page, page_size=page_size)
 

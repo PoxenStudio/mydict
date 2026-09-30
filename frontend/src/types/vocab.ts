@@ -16,3 +16,6 @@ export interface VocabListResponse {
   page: number
   page_size: number
 }
+
+export type VocabSort = 'word' | 'date'
+export type SortOrder = 'asc' | 'desc'

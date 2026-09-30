@@ -106,6 +106,10 @@ def add_vocab_item(
     return item
 
 
+VocabSort = Literal["word", "date"]
+SortOrder = Literal["asc", "desc"]
+
+
 def list_vocab_items(
     db: Session,
     owner_kind: OwnerKind,
@@ -114,6 +118,8 @@ def list_vocab_items(
     page: int,
     page_size: int,
     lang_from: str | None = None,
+    sort: VocabSort = "date",
+    order: SortOrder = "desc",
 ) -> tuple[list, int]:
     model_cls = _MODEL_BY_KIND[owner_kind]
     owner_field = _OWNER_FIELD_BY_KIND[owner_kind]
@@ -126,8 +132,13 @@ def list_vocab_items(
             Dictionary.lang_from == lang_from
         )
     total = query.count()
+    sort_col = model_cls.word if sort == "word" else model_cls.created_at
+    if order == "asc":
+        ordering = (sort_col.asc(), model_cls.id.asc())
+    else:
+        ordering = (sort_col.desc(), model_cls.id.desc())
     items = (
-        query.order_by(model_cls.created_at.desc())
+        query.order_by(*ordering)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
