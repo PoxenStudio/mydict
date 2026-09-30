@@ -1,6 +1,7 @@
 import request from '../request'
 import type {
   AdminUserCreateResponse,
+  AdminUserDeleteResult,
   AdminUserDetail,
   AdminUserItem,
   AdminUserListResponse,
@@ -54,4 +55,9 @@ export function generateUserToken(id: number) {
 
 export function deleteUserToken(id: number) {
   return request.delete<never, AdminUserItem>(`/admin/users/${id}/token`)
+}
+
+/** 删除用户，连同他的 Token、生词本与查询记录 */
+export function deleteUser(id: number) {
+  return request.delete<never, AdminUserDeleteResult>(`/admin/users/${id}`)
 }

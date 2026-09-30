@@ -16,6 +16,8 @@ class VocabItemOut(BaseModel):
     definition: str | None
     note: str | None
     dictionary_id: int | None
+    # 来源词典名快照（词典被删后仍显示）
+    dictionary_name: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

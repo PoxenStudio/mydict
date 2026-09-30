@@ -340,6 +340,45 @@ async def test_token_vocab_lifecycle_and_snapshot_matches_query(
     assert resp.json()["total"] == 0
 
 
+async def test_vocab_is_entry_scoped_per_dictionary(
+    client: AsyncClient, admin_headers: dict[str, str], db_session
+) -> None:
+    """生词本是词条级：同一个词在两部词典里可各存一条，同词典重复才 409。"""
+    set_setting(db_session, "open_access", "true")
+    dict_a = await _create_enabled_dictionary(
+        client, admin_headers, "ENTRY-A", "en", "zh", [{"word": "shared", "translation": "甲部"}]
+    )
+    dict_b = await _create_enabled_dictionary(
+        client, admin_headers, "ENTRY-B", "en", "zh", [{"word": "shared", "translation": "乙部"}]
+    )
+    raw, _ = _make_api_token(db_session)
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    first = await client.post(
+        "/api/v1/vocab", json={"word": "shared", "dictionary_id": dict_a}, headers=headers
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["dictionary_name"] == "ENTRY-A"
+
+    # 另一部词典的同名词条可以再存一条（旧模型这里会 409）
+    second = await client.post(
+        "/api/v1/vocab", json={"word": "shared", "dictionary_id": dict_b}, headers=headers
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["dictionary_name"] == "ENTRY-B"
+
+    # 同一部词典再存同一个词才是重复
+    again = await client.post(
+        "/api/v1/vocab", json={"word": "shared", "dictionary_id": dict_a}, headers=headers
+    )
+    assert again.status_code == 409
+    assert "该词典下已收藏" in again.json()["message"]
+
+    listed = await client.get("/api/v1/vocab", headers=headers)
+    assert listed.json()["total"] == 2
+    assert {i["dictionary_name"] for i in listed.json()["items"]} == {"ENTRY-A", "ENTRY-B"}
+
+
 async def test_web_dict_search_and_user_vocab(
     client: AsyncClient, admin_headers: dict[str, str], db_session
 ) -> None:
@@ -560,3 +599,60 @@ async def test_delete_dictionary_referenced_by_vocab_and_query_log(
     items = resp.json()["items"]
     assert [i["word"] for i in items] == ["refword"]
     assert items[0]["dictionary_id"] is None
+
+
+async def test_query_all_langs_queries_both_languages(client, db_session) -> None:
+    """中日共用汉字表意文字，detect_lang 分不出 zh/ja：默认「优先语言命中即停」
+    会把另一侧的词典整组挡掉（读日文书查「政府」看不到中文、查「武藤」看不到
+    日文）。all_langs=true 时全部启用词典一视同仁，结果带各自的 lang_from。"""
+    set_setting(db_session, "open_access", "true")
+    zh = Dictionary(
+        name="中文词典",
+        format="mdict",
+        lang_from="zh-Hans",
+        lang_to="zh-Hans",
+        file_path="unused",
+        status="enabled",
+    )
+    ja = Dictionary(
+        name="大辞泉",
+        format="mdict",
+        lang_from="ja",
+        lang_to="ja",
+        file_path="unused",
+        status="enabled",
+    )
+    db_session.add_all([zh, ja])
+    db_session.commit()
+    db_session.refresh(zh)
+    db_session.refresh(ja)
+    db_session.add_all(
+        [
+            DictEntry(
+                dictionary_id=zh.id,
+                word="政府",
+                word_lower="政府",
+                definition="<p>zh</p>",
+            ),
+            DictEntry(
+                dictionary_id=ja.id,
+                word="政府",
+                word_lower="政府",
+                definition="<p>ja</p>",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    # 默认：zh 命中即停，ja 词典不参与
+    resp = await client.get("/api/v1/query", params={"word": "政府"})
+    assert [r["dictionary_name"] for r in resp.json()["results"]] == ["中文词典"]
+
+    # all_langs：两边都查，结果带各自的 lang_from
+    resp = await client.get(
+        "/api/v1/query", params={"word": "政府", "all_langs": "true"}
+    )
+    results = resp.json()["results"]
+    assert [r["dictionary_name"] for r in results] == ["中文词典", "大辞泉"]
+    assert all(r["lang_from"] for r in results)
+    assert {r["lang_from"] for r in results} == {"zh-Hans", "ja"}

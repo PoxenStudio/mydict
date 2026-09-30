@@ -40,3 +40,11 @@ export interface AdminUserDetail {
   vocab_items: VocabItem[]
   recent_queries: QueryLogEntry[]
 }
+
+export interface AdminUserDeleteResult {
+  username: string
+  tokens: number
+  vocab: number
+  queries: number
+  stats: number
+}

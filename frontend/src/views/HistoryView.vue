@@ -6,7 +6,7 @@ import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
 import FavoriteButton from '../components/FavoriteButton.vue'
 import { getQueryHistory } from '../api/dict'
-import { useFavorites } from '../composables/useFavorites'
+import { favoriteKey, useFavorites } from '../composables/useFavorites'
 import type { QueryHistoryEntry } from '../types/query'
 
 const router = useRouter()
@@ -54,8 +54,8 @@ function formatDate(value: string) {
             <span class="time">{{ formatDate(item.created_at) }}</span>
           </div>
           <FavoriteButton
-            :favorited="isFavorited(item.word)"
-            :loading="favoriteLoading.has(item.word.toLowerCase())"
+            :favorited="isFavorited(item.word, item.dictionary_id)"
+            :loading="favoriteLoading.has(favoriteKey(item.word, item.dictionary_id))"
             @toggle="toggleFavorite(item.word, item.dictionary_id)"
           />
         </div>

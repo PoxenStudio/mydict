@@ -1,12 +1,25 @@
 """随机浏览端点的用例：开关门控、范围过滤、加权选择可用性、区间缓存预热与失效。"""
 
 import csv
+
+import pytest
 import io
 
 from httpx import AsyncClient
 
 from app.services.settings_service import set_setting
 from tests.conftest import import_dictionary
+
+
+@pytest.fixture(autouse=True)
+def _clear_bounds_cache():
+    """区间缓存在进程级存活（TTL 1 小时），而各用例的独立数据库会复用词典 id——
+    上一个用例预热的区间会污染下一个用例（偶发：随机落点越界）。每个用例前清空。"""
+    from app.services import random_entry_service
+
+    random_entry_service.invalidate_bounds()
+    yield
+    random_entry_service.invalidate_bounds()
 
 
 def _csv(rows: list[dict[str, str]]) -> bytes:

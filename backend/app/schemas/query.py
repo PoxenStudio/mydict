@@ -14,6 +14,9 @@ class WebQueryResultItem(BaseModel):
     word: str
     phonetic: str | None
     extra: dict | None
+    # 命中词典的源语言（zh-Hans/ja/…）。桌面端的快捷搜索窗用它做语言标签分组，
+    # 老版本客户端不认识这个字段也无妨（忽略即可）。
+    lang_from: str | None = None
     # 该词典的语言方向是否与输入一致。false 表示这是「优先语言都没命中、于是退到其余
     # 语言词典」的结果——语言方向是导入时自动识别的，可能判错，界面上要标出来。
     lang_match: bool = True
@@ -27,6 +30,9 @@ class QueryResultItem(WebQueryResultItem):
     """对外 API（/api/v1/query）的查询结果：第三方拿不到 iframe，释义必须随结果返回。"""
 
     definition: str
+    # 命中词典的源语言（zh-Hans/ja/…）。供多语言客户端做语言分组/标签，
+    # 老版本服务端不返回时客户端按 None 处理。
+    lang_from: str | None = None
 
 
 class QueryResponse(BaseModel):

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import EntryFrame from './EntryFrame.vue'
 import FavoriteButton from './FavoriteButton.vue'
+import { favoriteKey } from '../composables/useFavorites'
 import { getEntryHtml, prefetchEntryHtml } from '../api/dict'
 import type { QueryResultItem } from '../types/query'
 
@@ -27,6 +28,8 @@ const emit = defineEmits<{
   unsupportedAudio: []
   /** 分批切换后请求把面板滚回视口顶部（HomeView 复用展开时的滚动逻辑） */
   rescroll: []
+  /** 词条正文里按了 Esc，转给 HomeView 跑它的收拢链 */
+  escape: []
 }>()
 
 const KNOWN_ARRAY_LABELS: Record<string, string> = {
@@ -136,12 +139,12 @@ function textFields(item: QueryResultItem) {
     .map(([key, value]) => ({ label: KNOWN_TEXT_LABELS[key], value: String(value) }))
 }
 
-function isFavorited(word: string) {
-  return props.favoritedWords.has(word.toLowerCase())
+function isFavorited(word: string, dictionaryId: number) {
+  return props.favoritedWords.has(favoriteKey(word, dictionaryId))
 }
 
-function isLoading(word: string) {
-  return props.favoriteLoading.has(word.toLowerCase())
+function isLoading(word: string, dictionaryId: number) {
+  return props.favoriteLoading.has(favoriteKey(word, dictionaryId))
 }
 </script>
 
@@ -167,8 +170,8 @@ function isLoading(word: string) {
       <span v-if="hasMultiple" class="hint">共 {{ entries.length }} 条</span>
       <FavoriteButton
         class="head-favorite"
-        :favorited="isFavorited(primary.word)"
-        :loading="isLoading(primary.word)"
+        :favorited="isFavorited(primary.word, primary.dictionary_id)"
+        :loading="isLoading(primary.word, primary.dictionary_id)"
         @toggle="emit('toggleFavorite', primary.word, primary.dictionary_id)"
       />
     </header>
@@ -195,6 +198,7 @@ function isLoading(word: string) {
         :loader="() => getEntryHtml(primary.dictionary_id, queryWord, currentBatchIds)"
         @entry="emit('entry', $event)"
         @unsupported-audio="emit('unsupportedAudio')"
+        @escape="emit('escape')"
       />
 
       <!-- 分批导航：只在多词条且超过一批时出现 -->
@@ -230,6 +234,7 @@ function isLoading(word: string) {
           :loader="() => getEntryHtml(primary.dictionary_id, queryWord, [primary.id])"
           @entry="emit('entry', $event)"
           @unsupported-audio="emit('unsupportedAudio')"
+          @escape="emit('escape')"
         />
 
         <ul v-if="arrayFields(primary).length" class="extra-list">
