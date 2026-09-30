@@ -14,6 +14,9 @@ class WebQueryResultItem(BaseModel):
     word: str
     phonetic: str | None
     extra: dict | None
+    # 命中词典的源语言（zh-Hans/ja/…）。桌面端的快捷搜索窗用它做语言标签分组，
+    # 老版本客户端不认识这个字段也无妨（忽略即可）。
+    lang_from: str | None = None
     # 该词典的语言方向是否与输入一致。false 表示这是「优先语言都没命中、于是退到其余
     # 语言词典」的结果——语言方向是导入时自动识别的，可能判错，界面上要标出来。
     lang_match: bool = True
