@@ -12,7 +12,7 @@ from enum import StrEnum
 from app.core import migrate
 from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.services import random_entry_service, settings_service
+from app.services import dictionary_service, random_entry_service, settings_service
 from app.services.background_task_service import background_tasks
 from app.tasks.scheduler import start_scheduler
 
@@ -69,7 +69,18 @@ def run() -> None:
     if get_settings().enable_scheduler:
         start_scheduler()
     _warm_random_bounds()
+    _sync_dictionary_resources()
     _set(Phase.READY, None)
+
+
+def _sync_dictionary_resources() -> None:
+    """补存量词典缺的附属资源（.mdx 同级的样式表/脚本/字体/配置）。
+
+    上游会给附属资源的白名单增补扩展名（如 `.ini`），但那只对**新导入**的词典生效，
+    已导入词典的 res/ 不会自己更新——升级完镜像问题照旧。这里每次启动补一次缺，
+    代价是几十部词典各一次目录列举，跑在独立线程里，不阻塞就绪。
+    """
+    dictionary_service.sync_sibling_resources_in_background()
 
 
 def _warm_random_bounds() -> None:
