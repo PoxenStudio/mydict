@@ -4,12 +4,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import ValidationAppError
-from app.services import settings_service
+from app.services import random_entry_service, settings_service
 from app.services.admin_auth_service import is_initialized
 from app.services.audit_service import log_action
 from app.services.online_dict_service import SOURCE_IDS
 
-_BOOL_KEYS = {"open_access", "allow_registration", "online_dict_enabled"}
+_BOOL_KEYS = {
+    "open_access",
+    "allow_registration",
+    "online_dict_enabled",
+    "random_browse_enabled",
+}
 _INT_KEYS = {
     "token_default_daily_limit",
     "anonymous_ip_rate_limit_per_min",
@@ -64,6 +69,10 @@ def get_all_settings(db: Session, defaults: Settings) -> dict:
         "online_dict_enabled": settings_service.get_bool_setting(
             db, "online_dict_enabled", False
         ),
+        # 随机浏览开关：默认禁用。开启后会预热词典主键区间缓存，当前台【随机】标签的门控
+        "random_browse_enabled": settings_service.get_bool_setting(
+            db, "random_browse_enabled", False
+        ),
         "token_default_daily_limit": settings_service.get_int_setting(
             db, "token_default_daily_limit", defaults.token_default_daily_limit
         ),
@@ -99,6 +108,9 @@ def get_public_settings(db: Session, defaults: Settings) -> dict:
         "online_dict_enabled": settings_service.get_bool_setting(
             db, "online_dict_enabled", False
         ),
+        "random_browse_enabled": settings_service.get_bool_setting(
+            db, "random_browse_enabled", False
+        ),
         "site_name": settings_service.get_setting(db, "site_name", "MyDict"),
         "initialized": is_initialized(db),
         "search_hint_text": settings_service.get_setting(
@@ -124,6 +136,10 @@ def update_settings(
     if "online_dict_proxy" in fields_set:
         # 逐项写库、各自 commit，先校验，免得非法代理报错时前面的字段已经存进去
         _normalize_proxy(updates.get("online_dict_proxy"))
+    # 随机浏览从关到开的那一刻就开始预热区间缓存：管理员不必等到重启才享受预热
+    warm_random = False
+    if "random_browse_enabled" in fields_set and updates.get("random_browse_enabled"):
+        warm_random = not settings_service.get_bool_setting(db, "random_browse_enabled", False)
     changed = {}
     for key in fields_set:
         if key == "online_dict_proxy":
@@ -148,4 +164,6 @@ def update_settings(
         log_action(
             db, actor_type="admin", actor_id=admin_id, action="settings.update", detail=changed
         )
+    if warm_random:
+        random_entry_service.warm_bounds_in_background()
     return get_all_settings(db, defaults)

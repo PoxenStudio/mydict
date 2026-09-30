@@ -5,6 +5,7 @@ class SystemSettingsOut(BaseModel):
     open_access: bool
     allow_registration: bool
     online_dict_enabled: bool
+    random_browse_enabled: bool
     token_default_daily_limit: int
     anonymous_ip_rate_limit_per_min: int
     user_ip_rate_limit_per_min: int
@@ -21,6 +22,7 @@ class PublicSettingsOut(BaseModel):
     open_access: bool
     allow_registration: bool
     online_dict_enabled: bool
+    random_browse_enabled: bool
     site_name: str
     initialized: bool
     search_hint_text: str
@@ -30,6 +32,7 @@ class SystemSettingsUpdateRequest(BaseModel):
     open_access: bool | None = None
     allow_registration: bool | None = None
     online_dict_enabled: bool | None = None
+    random_browse_enabled: bool | None = None
     token_default_daily_limit: int | None = None
     anonymous_ip_rate_limit_per_min: int | None = None
     user_ip_rate_limit_per_min: int | None = None

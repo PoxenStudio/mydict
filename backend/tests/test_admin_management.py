@@ -203,6 +203,15 @@ async def test_settings_get_and_partial_update(
     )
     assert resp.json()["online_dict_enabled"] is True
 
+    # 随机浏览开关：同样默认禁用
+    assert resp.json()["random_browse_enabled"] is False
+    resp = await client.put(
+        "/api/admin/settings", json={"random_browse_enabled": True}, headers=admin_headers
+    )
+    assert resp.json()["random_browse_enabled"] is True
+    # 前台从公开设置里读同一个值（据此决定是否渲染【随机】标签）
+    assert (await client.get("/api/public/settings")).json()["random_browse_enabled"] is True
+
     resp = await client.put(
         "/api/admin/settings", json={"site_name": "MyDict"}, headers=admin_headers
     )

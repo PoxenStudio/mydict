@@ -11,6 +11,8 @@ from enum import StrEnum
 
 from app.core import migrate
 from app.core.config import get_settings
+from app.core.db import SessionLocal
+from app.services import random_entry_service, settings_service
 from app.services.background_task_service import background_tasks
 from app.tasks.scheduler import start_scheduler
 
@@ -66,7 +68,25 @@ def run() -> None:
         return
     if get_settings().enable_scheduler:
         start_scheduler()
+    _warm_random_bounds()
     _set(Phase.READY, None)
+
+
+def _warm_random_bounds() -> None:
+    """随机浏览开着时，启动后在后台把词典主键区间算好（不阻塞就绪）。
+
+    首个点击【随机】的人因此不必替所有人等那次 2 秒级扫描；关着时一个查询都不发。
+    """
+    db = SessionLocal()
+    try:
+        enabled = settings_service.get_bool_setting(db, "random_browse_enabled", False)
+    except Exception:
+        logger.warning("读取随机浏览开关失败，跳过区间缓存预热", exc_info=True)
+        return
+    finally:
+        db.close()
+    if enabled:
+        random_entry_service.warm_bounds_in_background()
 
 
 def _migrate(pending: list[migrate.PendingMigration]) -> None:

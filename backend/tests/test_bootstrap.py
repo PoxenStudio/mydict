@@ -64,6 +64,44 @@ def test_run_migrates_then_ready(scratch_db: Path, isolated_phase) -> None:
     assert migrate.pending_migrations() == []
 
 
+def test_run_warms_random_bounds_when_switch_on(
+    scratch_db: Path, isolated_phase, db_session, monkeypatch
+) -> None:
+    """随机浏览开着：启动后在后台预热区间缓存（不阻塞就绪）。"""
+    from app.services import random_entry_service
+    from app.services.settings_service import set_setting
+
+    warmed: list[bool] = []
+    monkeypatch.setattr(
+        random_entry_service, "warm_bounds_in_background", lambda: warmed.append(True) or True
+    )
+    set_setting(db_session, "random_browse_enabled", "true")
+
+    bootstrap.run()
+
+    assert warmed == [True]
+    assert bootstrap.is_ready()
+
+
+def test_run_skips_warm_when_switch_off(
+    scratch_db: Path, isolated_phase, db_session, monkeypatch
+) -> None:
+    """默认禁用：启动时一个查询都不发。"""
+    from app.services import random_entry_service
+    from app.services.settings_service import set_setting
+
+    warmed: list[bool] = []
+    monkeypatch.setattr(
+        random_entry_service, "warm_bounds_in_background", lambda: warmed.append(True) or True
+    )
+    set_setting(db_session, "random_browse_enabled", "false")
+
+    bootstrap.run()
+
+    assert warmed == []
+    assert bootstrap.is_ready()
+
+
 def test_run_reports_public_migration_progress(scratch_db: Path, isolated_phase, monkeypatch):
     seen: list[dict] = []
 

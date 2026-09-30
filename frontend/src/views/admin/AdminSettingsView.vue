@@ -19,6 +19,7 @@ const form = reactive({
   online_dict_proxy: '',
   online_dict_sources: '',
   online_dict_enabled: false,
+  random_browse_enabled: false,
 })
 
 // 在线词典源开关。后端存 CSV（空 = 全部启用，向后兼容），界面用 checkbox 数组。
@@ -203,6 +204,26 @@ async function save() {
         </el-form-item>
         <p class="hint">
           不勾的源不参与在线查询（外链按钮也会隐藏）。全部勾选时保存为「默认」，之后新增的源自动启用。
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>随机浏览</h2>
+        <el-form-item>
+          <div class="switch-row">
+            <el-switch v-model="form.random_browse_enabled" />
+            <span>
+              {{
+                form.random_browse_enabled
+                  ? '已开启：检索范围出现【随机】标签，可随机浏览所选词典范围内的词条'
+                  : '已禁用：前台不显示【随机】标签，随机接口一并拒绝'
+              }}
+            </span>
+          </div>
+        </el-form-item>
+        <p class="hint">
+          开启后会在后台预热词典的主键区间缓存（启动时、以及每次从关闭改为开启的那一刻），
+          这样第一次点【随机】也是毫秒级响应；关闭时不做任何预热。保存后立即生效，无需重启。
         </p>
       </section>
 
