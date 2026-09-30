@@ -76,9 +76,12 @@ const batchLabel = computed(() => {
 })
 
 // 换查询词/换结果集时归零，避免停在已不存在的批上
-watch(() => [props.queryWord, props.entries.length], () => {
-  batchIndex.value = 0
-})
+watch(
+  () => [props.queryWord, props.entries.length],
+  () => {
+    batchIndex.value = 0
+  },
+)
 
 function gotoBatch(delta: number) {
   const next = batchIndex.value + delta
@@ -168,12 +171,14 @@ function isLoading(word: string, dictionaryId: number) {
       <!-- 语言路由兜底时的标记：这条命中的词典其 lang_from 与输入语言不一致 -->
       <span v-if="primary.lang_match === false" class="badge badge-warn">其他语言词典</span>
       <span v-if="hasMultiple" class="hint">共 {{ entries.length }} 条</span>
-      <FavoriteButton
-        class="head-favorite"
-        :favorited="isFavorited(primary.word, primary.dictionary_id)"
-        :loading="isLoading(primary.word, primary.dictionary_id)"
-        @toggle="emit('toggleFavorite', primary.word, primary.dictionary_id)"
-      />
+      <!-- 拦在外层而不是按钮上：禁用态按钮的点击在部分浏览器里仍会冒泡到标题栏 -->
+      <span class="head-favorite" @click.stop @keydown.enter.stop @keydown.space.stop>
+        <FavoriteButton
+          :favorited="isFavorited(primary.word, primary.dictionary_id)"
+          :loading="isLoading(primary.word, primary.dictionary_id)"
+          @toggle="emit('toggleFavorite', primary.word, primary.dictionary_id)"
+        />
+      </span>
     </header>
 
     <!--
@@ -203,15 +208,9 @@ function isLoading(word: string, dictionaryId: number) {
 
       <!-- 分批导航：只在多词条且超过一批时出现 -->
       <nav v-if="hasMultiple && batchCount > 1" class="batch-nav">
-        <button type="button" :disabled="batchIndex === 0" @click="gotoBatch(-1)">
-          上一批
-        </button>
+        <button type="button" :disabled="batchIndex === 0" @click="gotoBatch(-1)">上一批</button>
         <span class="batch-label">{{ batchLabel }}</span>
-        <button
-          type="button"
-          :disabled="batchIndex >= batchCount - 1"
-          @click="gotoBatch(1)"
-        >
+        <button type="button" :disabled="batchIndex >= batchCount - 1" @click="gotoBatch(1)">
           下一批
         </button>
       </nav>
@@ -221,7 +220,10 @@ function isLoading(word: string, dictionaryId: number) {
         词典才有，它们不会同名多义，保持原来的渲染即可。
       -->
       <article v-if="!hasMultiple" :key="`${primary.dictionary_id}-${primary.word}`" class="entry">
-        <div v-if="isOxford3000(primary) || collinsStars(primary) || tagBadges(primary).length" class="badges">
+        <div
+          v-if="isOxford3000(primary) || collinsStars(primary) || tagBadges(primary).length"
+          class="badges"
+        >
           <span v-if="isOxford3000(primary)" class="badge badge-brand">牛津3000</span>
           <span v-if="collinsStars(primary)" class="badge badge-brand">
             柯林斯 {{ collinsStars(primary) }} 星
@@ -314,6 +316,7 @@ function isLoading(word: string, dictionaryId: number) {
 }
 
 .head-favorite {
+  display: inline-flex;
   margin-left: auto;
 }
 

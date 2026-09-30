@@ -30,8 +30,11 @@ const languages = ref<string[]>([])
 // 空字符串代表「全部」
 const activeLang = ref('')
 
+// 只有首屏（还没有数据）才显示骨架屏；排序/翻页/筛选时保留旧列表直到新数据到达，避免闪烁
+let loadSeq = 0
+
 async function load() {
-  loading.value = true
+  const seq = ++loadSeq
   try {
     const resp = await listVocab(
       search.value,
@@ -41,10 +44,12 @@ async function load() {
       sort.value,
       order.value,
     )
+    // 连续点击时只采用最后一次请求的结果
+    if (seq !== loadSeq) return
     items.value = resp.items
     total.value = resp.total
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

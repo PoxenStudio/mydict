@@ -46,6 +46,7 @@ const emit = defineEmits<{ toggle: [] }>()
   justify-content: center;
   cursor: pointer;
   transition: transform 100ms ease;
+  margin: 3px
 }
 
 .favorite-btn:hover {

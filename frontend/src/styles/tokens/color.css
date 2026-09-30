@@ -35,6 +35,18 @@
   --color-scrollbar-thumb-hover: #8b9a94;
   --color-scrollbar-track: transparent;
 
+  /* 词典识别色：生词本卡片左侧色条，按 dictionary_id 取模固定分配 */
+  --color-dict-marine: #1b6e8c;
+  --color-dict-velvet: #7d3c5e;
+  --color-dict-night-blue: #1a2456;
+  --color-dict-green: #2e7d32;
+  --color-dict-yellow: #f9a825;
+  --color-dict-red: #c62828;
+  --color-dict-purple: #6a1b9a;
+  --color-dict-orange: #ef6c00;
+  --color-dict-olive: #827717;
+  --color-dict-brown: #6d4c41;
+
   /* 全屏遮罩（大图查看器）。刻意不随主题切换：看图时背景要压到接近全黑图片才看得清 */
   --color-overlay-scrim: rgba(0, 0, 0, 0.86);
   --color-overlay-control: rgba(0, 0, 0, 0.5);
@@ -61,6 +73,17 @@
 
   --color-scrollbar-thumb: #3c4850;
   --color-scrollbar-thumb-hover: #71827c;
+
+  --color-dict-marine: #4fa8c7;
+  --color-dict-velvet: #b0577f;
+  --color-dict-night-blue: #4a5a9e;
+  --color-dict-green: #66bb6a;
+  --color-dict-yellow: #fdd835;
+  --color-dict-red: #ef5350;
+  --color-dict-purple: #ab47bc;
+  --color-dict-orange: #ffa726;
+  --color-dict-olive: #c0ca33;
+  --color-dict-brown: #a1887f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -83,5 +106,16 @@
 
     --color-scrollbar-thumb: #3c4850;
     --color-scrollbar-thumb-hover: #71827c;
+
+    --color-dict-marine: #4fa8c7;
+    --color-dict-velvet: #b0577f;
+    --color-dict-night-blue: #4a5a9e;
+    --color-dict-green: #66bb6a;
+    --color-dict-yellow: #fdd835;
+    --color-dict-red: #ef5350;
+    --color-dict-purple: #ab47bc;
+    --color-dict-orange: #ffa726;
+    --color-dict-olive: #c0ca33;
+    --color-dict-brown: #a1887f;
   }
 }

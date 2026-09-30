@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import EntryFrame from './EntryFrame.vue'
 import { getVocabEntryHtml } from '../api/dict'
+import { dictAccentColor } from '../utils/dictAccent'
 import { formatAge } from '../utils/format'
 import type { VocabItem } from '../types/vocab'
 
@@ -13,6 +14,7 @@ const expanded = ref(false)
 const mounted = ref(false)
 
 const age = computed(() => formatAge(props.item.created_at))
+const accent = computed(() => dictAccentColor(props.item.dictionary_id))
 
 function toggle() {
   expanded.value = !expanded.value
@@ -21,8 +23,8 @@ function toggle() {
 </script>
 
 <template>
-  <div class="vocab-card">
-    <div class="card-header">
+  <div class="vocab-card" :class="{ accented: accent }" :style="{ '--vocab-card-accent': accent }">
+    <div class="card-header" @click="toggle">
       <div class="title">
         <span class="word" :title="item.word">{{ item.word }}</span>
         <span v-if="item.dictionary_name" class="dict-name" :title="item.dictionary_name">
@@ -36,21 +38,23 @@ function toggle() {
         :class="{ open: expanded }"
         :aria-expanded="expanded"
         :aria-label="expanded ? '收起词条' : '展开词条'"
-        @click="toggle"
+        @click.stop="toggle"
       >
         ›
       </button>
     </div>
     <!-- 折叠收高度而非 display:none：隐藏的 iframe 会按 0 宽度排版并上报异常高度 -->
     <div v-if="mounted" class="card-body" :class="{ collapsed: !expanded }" :inert="!expanded">
-      <p v-if="item.phonetic" class="phonetic">[{{ item.phonetic }}]</p>
-      <EntryFrame
-        v-if="item.definition"
-        :key="item.id"
-        class="definition"
-        :loader="() => getVocabEntryHtml(item.id)"
-      />
-      <p v-if="item.note" class="note">备注：{{ item.note }}</p>
+      <div class="body-scroll app-scrollbar">
+        <p v-if="item.phonetic" class="phonetic">[{{ item.phonetic }}]</p>
+        <EntryFrame
+          v-if="item.definition"
+          :key="item.id"
+          class="definition"
+          :loader="() => getVocabEntryHtml(item.id)"
+        />
+        <p v-if="item.note" class="note">备注：{{ item.note }}</p>
+      </div>
       <div class="actions">
         <button type="button" class="remove-btn" @click="emit('remove', item)">删除</button>
       </div>
@@ -67,6 +71,13 @@ function toggle() {
   min-width: 0;
 }
 
+/* 左侧 3px 词典色条（一次性值）；用内阴影而不是 border-left，才能贴合圆角且不挤占内容宽度 */
+.vocab-card.accented {
+  box-shadow:
+    inset 3px 0 0 var(--vocab-card-accent),
+    var(--shadow-elevation-1);
+}
+
 .card-header {
   /* 字号阶梯外的一次性值：单词/展开按钮 28px 要比页面标题更醒目，词典名 10px 只作弱提示 */
   --vocab-card-title-size: 28px;
@@ -75,6 +86,8 @@ function toggle() {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  cursor: pointer;
+  user-select: none;
 }
 
 .title {
@@ -141,6 +154,11 @@ function toggle() {
 
 .card-body {
   margin-top: var(--space-2);
+}
+
+.body-scroll {
+  max-height: var(--size-scroll-md);
+  overflow-y: auto;
 }
 
 .card-body.collapsed {
