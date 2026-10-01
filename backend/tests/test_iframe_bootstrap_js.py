@@ -69,3 +69,16 @@ def test_handle_link_decodes_both_entry_forms() -> None:
     source = BOOTSTRAP.read_text(encoding="utf-8")
     assert "decodeEntryWord(base.slice(8))" in source
     assert "decodeEntryWord(rest)" in source
+
+
+def test_report_has_timer_fallback_for_swallowed_raf() -> None:
+    """高度上报不能只靠 requestAnimationFrame。
+
+    `report()` 里 `pending` 是「一次只排一帧」的锁：先置 true，等 rAF 回调 `flush()` 收尾。
+    实测桌面端（Tauri + WebKitGTK）的沙箱 srcdoc 子页里 rAF 不执行——首帧丢了以后 pending
+    永远为 true，后续所有 report() 都在第一行 return，`mydict:height` 一条都发不出去，父页
+    只能停在默认高度把词条裁掉（表现为「词条高度超低、看不到内容」）。所以必须同时挂定时器。
+    """
+    body = _function_source("report")
+    assert "requestAnimationFrame" in body
+    assert "setTimeout" in body and "if (pending) flush()" in body
