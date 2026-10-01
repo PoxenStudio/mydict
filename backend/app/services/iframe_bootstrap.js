@@ -436,6 +436,35 @@
     function fail() {
       send(candidates.length > 1 ? 'audio-unsupported' : 'audio-error', { url: url })
     }
+    // 直接播放被**混合内容**挡掉时的兜底：取回字节、用 blob: 交给同一个 <audio>。
+    //
+    // 嵌入方页面常是安全上下文（Tauri 的 tauri://localhost / 开发时的 http://localhost，
+    // 两者都算 secure），而词典音频在 http:// 上——媒体元素属于「blockable mixed content」，
+    // WebKit 会在策略层**直接拒绝，连请求都不发**（实测：服务端请求数零增长，`error.code=4`
+    // NETWORK_NO_SOURCE）。fetch 不受这条限制，服务端 /dict-res 又带
+    // `Access-Control-Allow-Origin: *`，所以取回字节再播就通了（同一文件用 data:/blob: 能播，
+    // 证明解码与输出都没问题——不是格式不支持，别再往编解码上找）。
+    function playBlob(current, next) {
+      if (!window.fetch || !window.Blob || !window.URL || !window.URL.createObjectURL) {
+        next()
+        return
+      }
+      fetch(current)
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status)
+          return response.blob()
+        })
+        .then(function (blob) {
+          if (!blob || !blob.size) throw new Error('空响应')
+          var el = ensureAudioEl()
+          el.src = window.URL.createObjectURL(blob)
+          var played = el.play()
+          if (played && played.catch) played.catch(function () { next() })
+        })
+        .catch(function () {
+          next()
+        })
+    }
     function attempt() {
       if (index >= candidates.length) {
         fail()
@@ -454,7 +483,8 @@
       function advance() {
         if (advanced) return
         advanced = true
-        attempt()
+        // 先用同一候选走 blob 兜底（混合内容场景），它也不成再换下一个候选
+        playBlob(current, attempt)
       }
       el.onerror = advance
       el.src = current
