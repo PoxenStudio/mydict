@@ -639,24 +639,40 @@
   //           <div class="big_pic"  onclick="expand_thumb(this)"><img …></div>
   // 点小图应让词典 JS 原地展开（这是查词条时有用的上下文）；但点**已展开的大图**时
   // 词典 JS 只会把它缩回去——用户要的是继续放大看，这时拦下词典 JS、改弹查看器。
-  function hasDictClickHandler(el) {
-    for (var p = el.parentElement; p && p !== document; p = p.parentElement) {
-      if (p.getAttribute && p.getAttribute('onclick')) return true
+  //
+  // 注意**不能依赖 event.target 是 <img>**：牛津的样式在图片上叠了悬停浮层（放大镜
+  // 角标等），真实鼠标点击时命中的是浮层/<a>/伪元素宿主，target 会是容器一类的元素
+  // （合成 click 没有悬停态，target 恰好是 img——用合成事件测试会全绿、真机必挂）。
+  // 所以这里向上找带 onclick 的词典容器，再在容器里找「当前显示着的那张图」来判断状态。
+  function dictClickContainer(el) {
+    for (var p = el; p && p !== document; p = p.parentElement) {
+      if (p.getAttribute && p.getAttribute('onclick')) return p
     }
-    return false
+    return null
   }
 
-  function isEnlargedTopicImage(img) {
-    var cls = ' ' + (img.className || '') + ' '
-    // 第10版：fullsize 眼下正显示着（展开态）
-    if (cls.indexOf(' fullsize ') >= 0 && img.style.display !== 'none') return true
-    // 第9版：图在 big_pic 容器里
-    for (var p = img.parentElement; p && p !== document; p = p.parentElement) {
-      if (p.tagName === 'DIV' && (' ' + (p.className || '') + ' ').indexOf(' big_pic ') >= 0) {
-        return true
-      }
+  // 容器里当前显示（有布局盒）的 img；全隐藏时返回 null
+  function visibleImageIn(container) {
+    var imgs
+    try {
+      imgs = container.querySelectorAll('img')
+    } catch (e) {
+      return null
     }
-    return false
+    for (var i = 0; i < imgs.length; i++) {
+      if (imgs[i].getBoundingClientRect().width > 0) return imgs[i]
+    }
+    return null
+  }
+
+  function isEnlargedTopicImage(container, visibleImg) {
+    if (!visibleImg) return false
+    // 第9版：容器本身是 big_pic
+    var ccls = ' ' + (container.className || '') + ' '
+    if (ccls.indexOf(' big_pic ') >= 0) return true
+    // 第10版：显示着的那张是 fullsize
+    var icls = ' ' + (visibleImg.className || '') + ' '
+    return icls.indexOf(' fullsize ') >= 0
   }
 
   /* ------------------------------------- 评注面板点击展开/折叠 */
@@ -719,22 +735,33 @@
   document.addEventListener(
     'click',
     function (event) {
+      var node = event.target
       var anchorEl = findAnchor(event)
       var href = anchorEl ? anchorEl.getAttribute('href') : null
-      // 包在 <a href> 里的图仍走链接逻辑（有些词典把图做成链接）
-      if (!href && event.target && event.target.tagName === 'IMG') {
-        var clicked = event.target
-        // 词典自带 JS 要接管的点击（祖先带 onclick）：小图放行让它原地展开；
-        // 已展开的大图词典只会缩回去，拦下来改弹查看器
-        if (hasDictClickHandler(clicked)) {
-          if (isEnlargedTopicImage(clicked)) {
+
+      // 词典自管图片的展开/收起（牛津系）：点击可能落在容器/悬停浮层上而不是 <img>，
+      // 所以先按「带 onclick 的词典容器」识别，target 是不是 img 不作前提。
+      if (node && node.closest && !href) {
+        var ctl = dictClickContainer(node)
+        var visibleImg = ctl ? visibleImageIn(ctl) : null
+        if (visibleImg) {
+          if (isEnlargedTopicImage(ctl, visibleImg)) {
+            // 已展开的大图：词典 JS 只会缩回去，拦下来改弹查看器
             event.preventDefault()
             // capture 阶段拦掉，词典容器上的 onclick（冒泡）不再执行
             event.stopPropagation()
-            openImageInViewer(clicked)
+            openImageInViewer(visibleImg)
+            return
           }
+          // 小图/收起态：放行给词典 JS 原地展开
           return
         }
+        // 容器里没有显示着的图（不是图片开关）：落回下方通用逻辑
+      }
+
+      // 包在 <a href> 里的图仍走链接逻辑（有些词典把图做成链接）
+      if (!href && node && node.tagName === 'IMG') {
+        var clicked = node
         var box = clicked.getBoundingClientRect()
         if (box.width >= IMAGE_MIN_SIZE || box.height >= IMAGE_MIN_SIZE) {
           event.preventDefault()
