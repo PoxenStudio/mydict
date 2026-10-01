@@ -310,6 +310,11 @@
 
   function flush() {
     pending = false
+    // 文档不在渲染树里时不测量：宿主把 iframe 重新挂载（手风琴重建 innerHTML 再 append）
+    // 的那一瞬间，body 没有布局盒，测出来是个远小于真实内容的数（实测 1797 → 248），
+    // 父页照单全收就把词条压成一条——表现成「点开词条看不到内容」。等重新挂载完，
+    // ResizeObserver/MutationObserver 会再报一次，那次才是真值。
+    if (!document.body || document.body.getClientRects().length === 0) return
     var height = measure()
     if (height <= 0) return
     // 2px 迟滞：避免亚像素抖动导致父页反复重排、进而又触发这里，形成增长死循环
@@ -605,6 +610,55 @@
     return urls
   }
 
+  // 把点中的图连同同词条里的其它大图一起交给父页弹查看器
+  function openImageInViewer(clicked) {
+    var current = clicked.currentSrc || clicked.src
+    var urls = collectLargeImages()
+    var index = urls.indexOf(current)
+    // 理论上点中的这张一定在表里（它刚被判为「够大」）；万一因为还没布局出来而漏了，
+    // 退化成单张，总比翻到一张空白好
+    if (index < 0) {
+      urls = [current]
+      index = 0
+    }
+    send('image', {
+      src: current,
+      alt: clicked.alt || '',
+      urls: urls,
+      index: index
+    })
+  }
+
+  /* ------------------------------------- 词典自管图片的展开/收起 */
+
+  // 一批词典（牛津高阶第9/10版实测）给图片容器挂了 onclick，由词典自带 JS 做
+  // 「缩略图 ⇄ 原图」的原地切换：
+  //   第10版  <div onclick="toggle_enlarger(this)"><a><img class="fullsize" hidden>
+  //           <img class="thumb"><span>enlarge image</span></a></div>
+  //   第9版   <div class="pic_thumb" onclick="expand_big(this)"><img …></div>
+  //           <div class="big_pic"  onclick="expand_thumb(this)"><img …></div>
+  // 点小图应让词典 JS 原地展开（这是查词条时有用的上下文）；但点**已展开的大图**时
+  // 词典 JS 只会把它缩回去——用户要的是继续放大看，这时拦下词典 JS、改弹查看器。
+  function hasDictClickHandler(el) {
+    for (var p = el.parentElement; p && p !== document; p = p.parentElement) {
+      if (p.getAttribute && p.getAttribute('onclick')) return true
+    }
+    return false
+  }
+
+  function isEnlargedTopicImage(img) {
+    var cls = ' ' + (img.className || '') + ' '
+    // 第10版：fullsize 眼下正显示着（展开态）
+    if (cls.indexOf(' fullsize ') >= 0 && img.style.display !== 'none') return true
+    // 第9版：图在 big_pic 容器里
+    for (var p = img.parentElement; p && p !== document; p = p.parentElement) {
+      if (p.tagName === 'DIV' && (' ' + (p.className || '') + ' ').indexOf(' big_pic ') >= 0) {
+        return true
+      }
+    }
+    return false
+  }
+
   /* ------------------------------------- 评注面板点击展开/折叠 */
 
   // 搜韵诗词全文检索版的词条里，「评注（点击查看或隐藏评注）」是 div.commentPanel，
@@ -670,24 +724,21 @@
       // 包在 <a href> 里的图仍走链接逻辑（有些词典把图做成链接）
       if (!href && event.target && event.target.tagName === 'IMG') {
         var clicked = event.target
+        // 词典自带 JS 要接管的点击（祖先带 onclick）：小图放行让它原地展开；
+        // 已展开的大图词典只会缩回去，拦下来改弹查看器
+        if (hasDictClickHandler(clicked)) {
+          if (isEnlargedTopicImage(clicked)) {
+            event.preventDefault()
+            // capture 阶段拦掉，词典容器上的 onclick（冒泡）不再执行
+            event.stopPropagation()
+            openImageInViewer(clicked)
+          }
+          return
+        }
         var box = clicked.getBoundingClientRect()
         if (box.width >= IMAGE_MIN_SIZE || box.height >= IMAGE_MIN_SIZE) {
           event.preventDefault()
-          var current = clicked.currentSrc || clicked.src
-          var urls = collectLargeImages()
-          var index = urls.indexOf(current)
-          // 理论上点中的这张一定在表里（它刚被判为「够大」）；万一因为还没布局出来而漏了，
-          // 退化成单张，总比翻到一张空白好
-          if (index < 0) {
-            urls = [current]
-            index = 0
-          }
-          send('image', {
-            src: current,
-            alt: clicked.alt || '',
-            urls: urls,
-            index: index
-          })
+          openImageInViewer(clicked)
           return
         }
       }
