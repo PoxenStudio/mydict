@@ -310,6 +310,11 @@
 
   function flush() {
     pending = false
+    // 文档不在渲染树里时不测量：宿主把 iframe 重新挂载（手风琴重建 innerHTML 再 append）
+    // 的那一瞬间，body 没有布局盒，测出来是个远小于真实内容的数（实测 1797 → 248），
+    // 父页照单全收就把词条压成一条——表现成「点开词条看不到内容」。等重新挂载完，
+    // ResizeObserver/MutationObserver 会再报一次，那次才是真值。
+    if (!document.body || document.body.getClientRects().length === 0) return
     var height = measure()
     if (height <= 0) return
     // 2px 迟滞：避免亚像素抖动导致父页反复重排、进而又触发这里，形成增长死循环
@@ -323,6 +328,12 @@
     pending = true
     if (window.requestAnimationFrame) window.requestAnimationFrame(flush)
     else setTimeout(flush, 16)
+    // 定时器兜底：子框架里 rAF 不一定执行（桌面端 WebKitGTK 的沙箱 srcdoc 子页实测被吞掉，
+    // 而 pending 是「一次只排一帧」的锁——首帧丢了就再也不解锁，高度永远不上报，父页只能
+    // 停在默认高度把词条裁掉）。这里补一拍：rAF 没来就由它收尾。flush 幂等，重复跑无害。
+    setTimeout(function () {
+      if (pending) flush()
+    }, 250)
   }
 
   function observeHeight() {
@@ -430,6 +441,35 @@
     function fail() {
       send(candidates.length > 1 ? 'audio-unsupported' : 'audio-error', { url: url })
     }
+    // 直接播放被**混合内容**挡掉时的兜底：取回字节、用 blob: 交给同一个 <audio>。
+    //
+    // 嵌入方页面常是安全上下文（Tauri 的 tauri://localhost / 开发时的 http://localhost，
+    // 两者都算 secure），而词典音频在 http:// 上——媒体元素属于「blockable mixed content」，
+    // WebKit 会在策略层**直接拒绝，连请求都不发**（实测：服务端请求数零增长，`error.code=4`
+    // NETWORK_NO_SOURCE）。fetch 不受这条限制，服务端 /dict-res 又带
+    // `Access-Control-Allow-Origin: *`，所以取回字节再播就通了（同一文件用 data:/blob: 能播，
+    // 证明解码与输出都没问题——不是格式不支持，别再往编解码上找）。
+    function playBlob(current, next) {
+      if (!window.fetch || !window.Blob || !window.URL || !window.URL.createObjectURL) {
+        next()
+        return
+      }
+      fetch(current)
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status)
+          return response.blob()
+        })
+        .then(function (blob) {
+          if (!blob || !blob.size) throw new Error('空响应')
+          var el = ensureAudioEl()
+          el.src = window.URL.createObjectURL(blob)
+          var played = el.play()
+          if (played && played.catch) played.catch(function () { next() })
+        })
+        .catch(function () {
+          next()
+        })
+    }
     function attempt() {
       if (index >= candidates.length) {
         fail()
@@ -448,7 +488,8 @@
       function advance() {
         if (advanced) return
         advanced = true
-        attempt()
+        // 先用同一候选走 blob 兜底（混合内容场景），它也不成再换下一个候选
+        playBlob(current, attempt)
       }
       el.onerror = advance
       el.src = current
@@ -569,6 +610,71 @@
     return urls
   }
 
+  // 把点中的图连同同词条里的其它大图一起交给父页弹查看器
+  function openImageInViewer(clicked) {
+    var current = clicked.currentSrc || clicked.src
+    var urls = collectLargeImages()
+    var index = urls.indexOf(current)
+    // 理论上点中的这张一定在表里（它刚被判为「够大」）；万一因为还没布局出来而漏了，
+    // 退化成单张，总比翻到一张空白好
+    if (index < 0) {
+      urls = [current]
+      index = 0
+    }
+    send('image', {
+      src: current,
+      alt: clicked.alt || '',
+      urls: urls,
+      index: index
+    })
+  }
+
+  /* ------------------------------------- 词典自管图片的展开/收起 */
+
+  // 一批词典（牛津高阶第9/10版实测）给图片容器挂了 onclick，由词典自带 JS 做
+  // 「缩略图 ⇄ 原图」的原地切换：
+  //   第10版  <div onclick="toggle_enlarger(this)"><a><img class="fullsize" hidden>
+  //           <img class="thumb"><span>enlarge image</span></a></div>
+  //   第9版   <div class="pic_thumb" onclick="expand_big(this)"><img …></div>
+  //           <div class="big_pic"  onclick="expand_thumb(this)"><img …></div>
+  // 点小图应让词典 JS 原地展开（这是查词条时有用的上下文）；但点**已展开的大图**时
+  // 词典 JS 只会把它缩回去——用户要的是继续放大看，这时拦下词典 JS、改弹查看器。
+  //
+  // 注意**不能依赖 event.target 是 <img>**：牛津的样式在图片上叠了悬停浮层（放大镜
+  // 角标等），真实鼠标点击时命中的是浮层/<a>/伪元素宿主，target 会是容器一类的元素
+  // （合成 click 没有悬停态，target 恰好是 img——用合成事件测试会全绿、真机必挂）。
+  // 所以这里向上找带 onclick 的词典容器，再在容器里找「当前显示着的那张图」来判断状态。
+  function dictClickContainer(el) {
+    for (var p = el; p && p !== document; p = p.parentElement) {
+      if (p.getAttribute && p.getAttribute('onclick')) return p
+    }
+    return null
+  }
+
+  // 容器里当前显示（有布局盒）的 img；全隐藏时返回 null
+  function visibleImageIn(container) {
+    var imgs
+    try {
+      imgs = container.querySelectorAll('img')
+    } catch (e) {
+      return null
+    }
+    for (var i = 0; i < imgs.length; i++) {
+      if (imgs[i].getBoundingClientRect().width > 0) return imgs[i]
+    }
+    return null
+  }
+
+  function isEnlargedTopicImage(container, visibleImg) {
+    if (!visibleImg) return false
+    // 第9版：容器本身是 big_pic
+    var ccls = ' ' + (container.className || '') + ' '
+    if (ccls.indexOf(' big_pic ') >= 0) return true
+    // 第10版：显示着的那张是 fullsize
+    var icls = ' ' + (visibleImg.className || '') + ' '
+    return icls.indexOf(' fullsize ') >= 0
+  }
+
   /* ------------------------------------- 评注面板点击展开/折叠 */
 
   // 搜韵诗词全文检索版的词条里，「评注（点击查看或隐藏评注）」是 div.commentPanel，
@@ -629,29 +735,37 @@
   document.addEventListener(
     'click',
     function (event) {
+      var node = event.target
       var anchorEl = findAnchor(event)
       var href = anchorEl ? anchorEl.getAttribute('href') : null
+
+      // 词典自管图片的展开/收起（牛津系）：点击可能落在容器/悬停浮层上而不是 <img>，
+      // 所以先按「带 onclick 的词典容器」识别，target 是不是 img 不作前提。
+      if (node && node.closest && !href) {
+        var ctl = dictClickContainer(node)
+        var visibleImg = ctl ? visibleImageIn(ctl) : null
+        if (visibleImg) {
+          if (isEnlargedTopicImage(ctl, visibleImg)) {
+            // 已展开的大图：词典 JS 只会缩回去，拦下来改弹查看器
+            event.preventDefault()
+            // capture 阶段拦掉，词典容器上的 onclick（冒泡）不再执行
+            event.stopPropagation()
+            openImageInViewer(visibleImg)
+            return
+          }
+          // 小图/收起态：放行给词典 JS 原地展开
+          return
+        }
+        // 容器里没有显示着的图（不是图片开关）：落回下方通用逻辑
+      }
+
       // 包在 <a href> 里的图仍走链接逻辑（有些词典把图做成链接）
-      if (!href && event.target && event.target.tagName === 'IMG') {
-        var clicked = event.target
+      if (!href && node && node.tagName === 'IMG') {
+        var clicked = node
         var box = clicked.getBoundingClientRect()
         if (box.width >= IMAGE_MIN_SIZE || box.height >= IMAGE_MIN_SIZE) {
           event.preventDefault()
-          var current = clicked.currentSrc || clicked.src
-          var urls = collectLargeImages()
-          var index = urls.indexOf(current)
-          // 理论上点中的这张一定在表里（它刚被判为「够大」）；万一因为还没布局出来而漏了，
-          // 退化成单张，总比翻到一张空白好
-          if (index < 0) {
-            urls = [current]
-            index = 0
-          }
-          send('image', {
-            src: current,
-            alt: clicked.alt || '',
-            urls: urls,
-            index: index
-          })
+          openImageInViewer(clicked)
           return
         }
       }
