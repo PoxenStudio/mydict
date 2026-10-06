@@ -435,6 +435,13 @@
   }
 
   var audioEl = null
+  var audioBlobUrl = null
+  function releaseAudioBlob() {
+    if (audioBlobUrl) {
+      window.URL.revokeObjectURL(audioBlobUrl)
+      audioBlobUrl = null
+    }
+  }
   function playAudio(url) {
     var candidates = audioCandidates(url)
     var index = 0
@@ -462,9 +469,20 @@
         .then(function (blob) {
           if (!blob || !blob.size) throw new Error('空响应')
           var el = ensureAudioEl()
-          el.src = window.URL.createObjectURL(blob)
+          releaseAudioBlob()
+          audioBlobUrl = window.URL.createObjectURL(blob)
+          // 外层 advance 已用掉，blob 阶段的解码失败要自己接着换候选，否则界面卡死
+          el.onerror = function () {
+            next()
+          }
+          el.src = audioBlobUrl
           var played = el.play()
-          if (played && played.catch) played.catch(function () { next() })
+          if (played && played.catch) {
+            played.catch(function (err) {
+              if (err && err.name === 'NotAllowedError') return
+              next()
+            })
+          }
         })
         .catch(function () {
           next()
@@ -475,6 +493,7 @@
         fail()
         return
       }
+      releaseAudioBlob()
       var current = candidates[index++]
       var el = ensureAudioEl()
       el.onended = function () {

@@ -725,33 +725,34 @@ def _source_files(dictionary: Dictionary) -> list[Path]:
     ]
 
 
-@_serialized
 def sync_sibling_resources(db: Session, settings: Settings) -> tuple[int, int]:
     """补齐所有 MDict 词典缺的 `.mdx` 同级附属资源，返回（补上的词典数，复制的文件数）。
 
-    与「从源文件修复」的第一件事相同，但可以**每次启动自动跑**：只读源目录 + 补缺文件，
-    不碰数据库、不重写词条，几十部词典也就是几十次目录列举。
-
-    与修复任务共用同一把写锁：`copy_sibling_resources` 的临时文件名带进程号，两边同时
-    复制同一个文件会撞临时文件、写出半截内容。
+    只读源目录 + 补缺文件，不碰数据库、不重写词条，可每次启动自动跑。
+    写锁按单部词典持有：源目录在网络盘上卡住时，不会把导入/修复任务整段堵住；
+    与修复任务共用写锁，是因为 `copy_sibling_resources` 的临时文件名只带进程号。
     """
-    dictionaries: list[Dictionary] = db.query(Dictionary).filter(Dictionary.format == "mdict").all()
+    ids = [row[0] for row in db.query(Dictionary.id).filter(Dictionary.format == "mdict").all()]
     fixed = 0
     copied = 0
-    for dictionary in dictionaries:
-        try:
-            count = copy_sibling_resources(
-                Path(settings.dictionary_storage_path) / str(dictionary.id) / "res",
-                _source_files(dictionary),
-            )
-        except Exception:
-            # 单部词典失败（源目录被删、权限不足、磁盘满…）不能影响其余词典，也不能影响启动
-            logger.warning("补齐词典 %s 的附属资源失败", dictionary.id, exc_info=True)
-            continue
-        if count:
-            fixed += 1
-            copied += count
-            logger.info("补齐词典 %s（%s）的附属资源 %d 个", dictionary.id, dictionary.name, count)
+    for dictionary_id in ids:
+        with _bulk_write_lock:
+            dictionary = db.query(Dictionary).filter(Dictionary.id == dictionary_id).first()
+            if dictionary is None:  # 补齐期间被删掉了
+                continue
+            try:
+                count = copy_sibling_resources(
+                    Path(settings.dictionary_storage_path) / str(dictionary_id) / "res",
+                    _source_files(dictionary),
+                )
+            except Exception:
+                # 单部词典失败（源目录被删、权限不足、磁盘满…）不能影响其余词典，也不能影响启动
+                logger.warning("补齐词典 %s 的附属资源失败", dictionary_id, exc_info=True)
+                continue
+            if count:
+                fixed += 1
+                copied += count
+                logger.info("补齐词典 %s（%s）的附属资源 %d 个", dictionary_id, dictionary.name, count)
     return fixed, copied
 
 
