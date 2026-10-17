@@ -13,6 +13,8 @@
   局域网 http 访问无条件加会导致浏览器不存 cookie，反而立刻掉登录）
 """
 
+import ipaddress
+
 from fastapi import Request, Response
 
 from app.core.security import SESSION_COOKIE_TTL
@@ -21,13 +23,31 @@ USER_SESSION_COOKIE = "mydict_session"
 ADMIN_SESSION_COOKIE = "mydict_admin_session"
 
 
+def _is_trusted_proxy_peer(request: Request) -> bool:
+    """直连对端是不是可信代理（本机/内网）。
+
+    X-Forwarded-Proto 是客户端可伪造的头；只有当直连对端本身是反代（回环或私网地址）
+    时才采信它，否则一律以 uvicorn 实际看到的 scheme 为准。
+    """
+    host = request.client.host if request.client else ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
 def is_https_request(request: Request) -> bool:
     """判断外部访问是否是 HTTPS（反代终止 TLS 时 request.url.scheme 会是 http）。"""
+    if request.url.scheme == "https":
+        return True
+    if not _is_trusted_proxy_peer(request):
+        return False
     forwarded = request.headers.get("x-forwarded-proto") or request.headers.get("x-real-proto")
     if forwarded:
         # 多级代理时形如 "https, http"，以第一段为准
         return forwarded.split(",")[0].strip().lower() == "https"
-    return request.url.scheme == "https"
+    return False
 
 
 def set_session_cookie(response: Response, name: str, token: str, request: Request) -> None:

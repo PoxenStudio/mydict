@@ -50,7 +50,10 @@ def login(
 @router.post("/refresh", response_model=TokenPairResponse)
 def refresh(body: RefreshRequest, request: Request, response: Response) -> TokenPairResponse:
     # 网页端请求体为空 → 用 cookie；桌面端/扩展显式传 refresh_token。
-    token = body.refresh_token or request.cookies.get(USER_SESSION_COOKIE)
+    # cookie 优先：请求体里的 token 只服务桌面端/扩展这类显式携带的客户端。
+    # 反过来（body 优先）会让跨站请求用一个 attack token 覆盖掉浏览器现有 cookie（会话固定）。
+    cookie_token = request.cookies.get(USER_SESSION_COOKIE)
+    token = cookie_token or body.refresh_token
     if not token:
         raise UnauthorizedError("缺少刷新凭证")
     try:
@@ -62,7 +65,10 @@ def refresh(body: RefreshRequest, request: Request, response: Response) -> Token
         raise UnauthorizedError("凭证类型不正确")
     user_id = int(payload["sub"])
     # 滑动续期：每次刷新都把 cookie 的 7 天重新计时
-    set_session_cookie(response, USER_SESSION_COOKIE, token, request)
+    # 只续期「本来就是 cookie 会话」的请求；显式传 body token 的客户端不落 cookie，
+    # 避免跨站请求凭空种下一个攻击者可控的会话 cookie。
+    if cookie_token:
+        set_session_cookie(response, USER_SESSION_COOKIE, token, request)
     return TokenPairResponse(
         access_token=create_access_token(user_id, AUD_USER),
         refresh_token=token,

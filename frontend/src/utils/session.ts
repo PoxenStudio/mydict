@@ -13,6 +13,9 @@ const REFRESH_PATH: Record<AuthRole, string> = {
   admin: '/api/admin/refresh',
 }
 
+// 刷新请求必须自带超时：路由守卫会 await 它，后端不可达时不能让导航一直挂着
+const REFRESH_TIMEOUT_MS = 8000
+
 // 并发请求同时 401 时只发一次刷新请求，其余等同一个 Promise
 const inflight: Record<AuthRole, Promise<boolean> | null> = { user: null, admin: null }
 
@@ -21,7 +24,9 @@ export async function refreshSession(role: AuthRole): Promise<boolean> {
 
   const task = (async () => {
     try {
-      const { data } = await axios.post<{ access_token: string }>(REFRESH_PATH[role], {})
+      const { data } = await axios.post<{ access_token: string }>(REFRESH_PATH[role], {}, {
+        timeout: REFRESH_TIMEOUT_MS,
+      })
       if (!data?.access_token) return false
       setAccessToken(role, data.access_token)
       return true
