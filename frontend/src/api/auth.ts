@@ -9,6 +9,10 @@ export function login(username: string, password: string) {
   return request.post<never, TokenPairResponse>('/auth/login', { username, password })
 }
 
+export function logout() {
+  return request.post<never, { ok: boolean }>('/auth/logout')
+}
+
 export function changePassword(oldPassword: string, newPassword: string) {
   return request.post<never, { ok: boolean }>('/auth/change-password', {
     old_password: oldPassword,

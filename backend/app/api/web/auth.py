@@ -1,11 +1,12 @@
 import jwt
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.deps import require_user
 from app.core.exceptions import UnauthorizedError
 from app.core.security import AUD_USER, create_access_token, decode_token
+from app.core.session_cookie import USER_SESSION_COOKIE, clear_session_cookie, set_session_cookie
 from app.models.user import User
 from app.schemas.auth import RefreshRequest, TokenPairResponse
 from app.schemas.dictionary import AllowedDictionaryIdsRequest
@@ -33,23 +34,45 @@ def register(body: UserRegisterRequest, db: Session = Depends(get_db)) -> User:
 
 
 @router.post("/login", response_model=TokenPairResponse)
-def login(body: UserLoginRequest, db: Session = Depends(get_db)) -> TokenPairResponse:
-    return authenticate_user(db, body.username, body.password)
+def login(
+    body: UserLoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> TokenPairResponse:
+    tokens = authenticate_user(db, body.username, body.password)
+    # 网页端登录态载体：refresh token 存 HttpOnly cookie（7 天，刷新时滑动续期）。
+    # 响应体仍然返回 token 对，桌面端/扩展继续按 Bearer 使用，互不影响。
+    set_session_cookie(response, USER_SESSION_COOKIE, tokens.refresh_token, request)
+    return tokens
 
 
 @router.post("/refresh", response_model=TokenPairResponse)
-def refresh(body: RefreshRequest) -> TokenPairResponse:
+def refresh(body: RefreshRequest, request: Request, response: Response) -> TokenPairResponse:
+    # 网页端请求体为空 → 用 cookie；桌面端/扩展显式传 refresh_token。
+    token = body.refresh_token or request.cookies.get(USER_SESSION_COOKIE)
+    if not token:
+        raise UnauthorizedError("缺少刷新凭证")
     try:
-        payload = decode_token(body.refresh_token, aud=AUD_USER)
+        payload = decode_token(token, aud=AUD_USER)
     except jwt.PyJWTError as exc:
+        clear_session_cookie(response, USER_SESSION_COOKIE, request)
         raise UnauthorizedError("刷新凭证无效或已过期") from exc
     if payload.get("scope") != "refresh":
         raise UnauthorizedError("凭证类型不正确")
     user_id = int(payload["sub"])
+    # 滑动续期：每次刷新都把 cookie 的 7 天重新计时
+    set_session_cookie(response, USER_SESSION_COOKIE, token, request)
     return TokenPairResponse(
         access_token=create_access_token(user_id, AUD_USER),
-        refresh_token=body.refresh_token,
+        refresh_token=token,
     )
+
+
+@router.post("/logout")
+def logout(request: Request, response: Response) -> dict[str, bool]:
+    clear_session_cookie(response, USER_SESSION_COOKIE, request)
+    return {"ok": True}
 
 
 @router.post("/change-password")

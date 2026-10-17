@@ -10,6 +10,9 @@ from app.core.config import get_settings
 
 ACCESS_TOKEN_TTL = timedelta(hours=2)
 REFRESH_TOKEN_TTL = timedelta(days=30)
+# 网页端会话 cookie 的有效期（参考 cal 的 7 天策略）。refresh token 本身是 30 天，
+# 这里取 7 天并由「每次刷新都重发 cookie」实现滑动续期：天天用就一直是 7 天。
+SESSION_COOKIE_TTL = timedelta(days=7)
 
 AUD_ADMIN = "admin"
 AUD_USER = "user"

@@ -13,6 +13,10 @@ export function login(username: string, password: string) {
   return request.post<never, TokenPairResponse>('/admin/login', { username, password })
 }
 
+export function logout() {
+  return request.post<never, { ok: boolean }>('/admin/logout')
+}
+
 export function fetchMe() {
   return request.get<never, AdminPublic>('/admin/me')
 }
