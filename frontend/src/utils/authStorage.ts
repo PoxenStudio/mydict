@@ -10,6 +10,10 @@ const KEYS = {
 // 旧版本把 refresh token 也存在 localStorage，升级后残留的键一并清掉
 const LEGACY_REFRESH_KEYS = ['mydict-admin-refresh', 'mydict-user-refresh']
 
+// 模块加载（应用启动）时就清一次：不能等用户登出或刷新失败才清，
+// 否则一直保持登录的老用户会让明文 refresh token 继续躺在 localStorage 里。
+for (const key of LEGACY_REFRESH_KEYS) localStorage.removeItem(key)
+
 export type AuthRole = keyof typeof KEYS
 
 // localStorage 本身不是 Vue 响应式来源，直接在 Pinia getter 里读它不会在登录/登出时

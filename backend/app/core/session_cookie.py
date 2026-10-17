@@ -70,3 +70,16 @@ def clear_session_cookie(response: Response, name: str, request: Request) -> Non
         samesite="lax",
         secure=is_https_request(request),
     )
+
+
+def session_cookie_delete_header(request: Request, name: str) -> dict[str, str]:
+    """把「清 cookie」变成一个可挂在异常上的响应头。
+
+    FastAPI 里注入的 Response 只在正常 return 时才会并入最终响应；一旦抛异常，
+    由 exception_handler 新建 JSONResponse，之前 set/delete 的 cookie 全部丢弃。
+    所以需要清 cookie 的错误路径要把头放在异常上（AppError.headers）。
+    """
+    probe = Response()
+    clear_session_cookie(probe, name, request)
+    value = probe.headers.get("set-cookie")
+    return {"Set-Cookie": value} if value else {}

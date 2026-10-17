@@ -56,11 +56,13 @@ app.add_middleware(MaintenanceGate)
 
 @app.exception_handler(AppError)
 def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-    headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, RateLimitedError) else None
+    headers: dict[str, str] = dict(exc.headers or {})
+    if isinstance(exc, RateLimitedError):
+        headers["Retry-After"] = str(exc.retry_after)
     return JSONResponse(
         status_code=exc.status_code,
         content={"code": exc.code, "message": exc.message, "detail": exc.detail},
-        headers=headers,
+        headers=headers or None,
     )
 
 

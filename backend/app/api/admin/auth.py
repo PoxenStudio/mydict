@@ -6,7 +6,12 @@ from app.core.db import get_db
 from app.core.deps import require_admin
 from app.core.exceptions import UnauthorizedError
 from app.core.security import AUD_ADMIN, create_access_token, decode_token
-from app.core.session_cookie import ADMIN_SESSION_COOKIE, clear_session_cookie, set_session_cookie
+from app.core.session_cookie import (
+    ADMIN_SESSION_COOKIE,
+    clear_session_cookie,
+    session_cookie_delete_header,
+    set_session_cookie,
+)
 from app.models.admin import Admin
 from app.schemas.admin import AdminLoginRequest, AdminSetupRequest, BootstrapStatusResponse
 from app.schemas.auth import RefreshRequest, TokenPairResponse
@@ -51,8 +56,11 @@ def refresh(body: RefreshRequest, request: Request, response: Response) -> Token
     try:
         payload = decode_token(token, aud=AUD_ADMIN)
     except jwt.PyJWTError as exc:
-        clear_session_cookie(response, ADMIN_SESSION_COOKIE, request)
-        raise UnauthorizedError("刷新凭证无效或已过期") from exc
+        # 清 cookie 的头必须挂在异常上：抛异常时注入的 Response 会被丢弃
+        raise UnauthorizedError(
+            "刷新凭证无效或已过期",
+            headers=session_cookie_delete_header(request, ADMIN_SESSION_COOKIE),
+        ) from exc
     if payload.get("scope") != "refresh":
         raise UnauthorizedError("凭证类型不正确")
     admin_id = int(payload["sub"])

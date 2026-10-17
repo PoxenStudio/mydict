@@ -6,7 +6,12 @@ from app.core.db import get_db
 from app.core.deps import require_user
 from app.core.exceptions import UnauthorizedError
 from app.core.security import AUD_USER, create_access_token, decode_token
-from app.core.session_cookie import USER_SESSION_COOKIE, clear_session_cookie, set_session_cookie
+from app.core.session_cookie import (
+    USER_SESSION_COOKIE,
+    clear_session_cookie,
+    session_cookie_delete_header,
+    set_session_cookie,
+)
 from app.models.user import User
 from app.schemas.auth import RefreshRequest, TokenPairResponse
 from app.schemas.dictionary import AllowedDictionaryIdsRequest
@@ -59,8 +64,11 @@ def refresh(body: RefreshRequest, request: Request, response: Response) -> Token
     try:
         payload = decode_token(token, aud=AUD_USER)
     except jwt.PyJWTError as exc:
-        clear_session_cookie(response, USER_SESSION_COOKIE, request)
-        raise UnauthorizedError("刷新凭证无效或已过期") from exc
+        # 清 cookie 的头必须挂在异常上：抛异常时注入的 Response 会被丢弃
+        raise UnauthorizedError(
+            "刷新凭证无效或已过期",
+            headers=session_cookie_delete_header(request, USER_SESSION_COOKIE),
+        ) from exc
     if payload.get("scope") != "refresh":
         raise UnauthorizedError("凭证类型不正确")
     user_id = int(payload["sub"])

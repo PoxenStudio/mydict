@@ -4,9 +4,17 @@ class AppError(Exception):
     status_code: int = 400
     code: str = "app_error"
 
-    def __init__(self, message: str, detail: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        detail: str | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         self.message = message
         self.detail = detail
+        # 需要随错误响应一起下发的头（例如清会话 cookie 的 Set-Cookie）。
+        # FastAPI 注入的 Response 在抛异常时会被丢弃，所以这类头必须挂在异常上。
+        self.headers = headers
         super().__init__(message)
 
 
