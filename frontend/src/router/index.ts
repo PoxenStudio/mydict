@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../utils/authStorage'
+import { refreshSession } from '../utils/session'
 import HomeView from '../views/HomeView.vue'
 
 const router = createRouter({
@@ -70,12 +71,14 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
+  // 本地没有 access token 不代表没登录：HttpOnly cookie 里的 refresh token 可能还有效
+  // （7 天滑动），先静默换一张再决定要不要跳登录页。
   if (to.meta.requiresAdmin && !getAccessToken('admin')) {
-    return { path: '/admin/login' }
+    if (!(await refreshSession('admin'))) return { path: '/admin/login' }
   }
   if (to.meta.requiresUser && !getAccessToken('user')) {
-    return { path: '/login' }
+    if (!(await refreshSession('user'))) return { path: '/login' }
   }
   return true
 })
