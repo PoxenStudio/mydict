@@ -62,7 +62,8 @@ def refresh(body: RefreshRequest, request: Request, response: Response) -> Token
         set_session_cookie(response, ADMIN_SESSION_COOKIE, token, request)
     return TokenPairResponse(
         access_token=create_access_token(admin_id, AUD_ADMIN),
-        refresh_token=token,
+        # cookie 分支不回显 refresh token：它只该待在 HttpOnly cookie 里
+        refresh_token=None if cookie_token else token,
     )
 
 

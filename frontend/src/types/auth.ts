@@ -1,6 +1,7 @@
 export interface TokenPairResponse {
   access_token: string
-  refresh_token: string
+  // 网页端刷新时服务端不回显（凭证只存 HttpOnly cookie），这里允许为 null
+  refresh_token: string | null
   token_type: string
 }
 
