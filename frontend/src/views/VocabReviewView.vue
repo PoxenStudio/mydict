@@ -41,14 +41,13 @@ const cloze = computed(() => {
   const forms = [item.context_match, word, `${word}s`, `${word}es`, `${word}ed`, `${word}d`, `${word}ing`]
     .filter((x): x is string => Boolean(x && x.trim()))
     .sort((a, b) => b.length - a.length)
-  const lower = sentence.toLowerCase()
   for (const form of forms) {
-    const at = findWordAt(sentence, lower, form)
-    if (at >= 0) {
+    const hit = findWordAt(sentence, form)
+    if (hit) {
       return {
-        before: sentence.slice(0, at),
-        match: sentence.slice(at, at + form.length),
-        after: sentence.slice(at + form.length),
+        before: sentence.slice(0, hit.at),
+        match: hit.text,
+        after: sentence.slice(hit.at + hit.text.length),
       }
     }
   }
@@ -62,23 +61,29 @@ const CJK_CHAR = /[\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/
 /**
  * 在句子里找 form 的位置，且要求两侧不粘连其它字母数字。
  * 直接 indexOf 会把 `bank` 匹配进 `banker`，挖出来变成 `____er`——正是要避免的。
+ *
+ * 不用 `sentence.toLowerCase()` 再找：某些字符（土耳其语 `İ`）小写后码元长度会变，
+ * 下标就对不上原句了。改用带 `i` 标志的正则，返回的 index 始终是原串偏移。
  */
-function findWordAt(sentence: string, lower: string, form: string): number {
-  const needle = form.toLowerCase()
-  const cjk = CJK_CHAR.test(form)
-  let from = 0
-  while (from <= lower.length) {
-    const at = lower.indexOf(needle, from)
-    if (at < 0) return -1
-    if (cjk) return at
+function findWordAt(sentence: string, form: string): { at: number; text: string } | null {
+  if (CJK_CHAR.test(form)) {
+    // CJK 没有词边界概念，直接按原文找
+    const at = sentence.indexOf(form)
+    return at < 0 ? null : { at, text: form }
+  }
+  const escaped = form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(escaped, 'gi')
+  for (let match = pattern.exec(sentence); match; match = pattern.exec(sentence)) {
+    const at = match.index
     const before = sentence[at - 1]
-    const after = sentence[at + form.length]
+    const after = sentence[at + match[0].length]
     const leftOk = !before || !WORD_CHAR.test(before)
     const rightOk = !after || !WORD_CHAR.test(after)
-    if (leftOk && rightOk) return at
-    from = at + 1
+    if (leftOk && rightOk) return { at, text: match[0] }
+    // 空匹配或边界不符时保证前进，避免死循环
+    if (pattern.lastIndex === at) pattern.lastIndex += 1
   }
-  return -1
+  return null
 }
 
 /** 背面直接渲染收藏时的词条快照，保留词典自带排版（数字序号、词性、例句缩进等） */

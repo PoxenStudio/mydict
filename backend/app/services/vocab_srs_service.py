@@ -16,6 +16,7 @@ from fsrs import Card, Rating, Scheduler, State
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ConflictError
 from app.core.timeutil import day_bounds_utc, today
 from app.models.vocab import VocabReview
 from app.services import vocab_service
@@ -63,6 +64,24 @@ def _find_duplicate(
         )
         .first()
     )
+
+
+def _duplicate_or_conflict(
+    db: Session,
+    owner_kind: vocab_service.OwnerKind,
+    owner_id: int,
+    client_review_id: str,
+    item_id: int,
+) -> VocabReview | None:
+    """同一个 client_review_id 只允许对应同一条生词。
+
+    幂等键的意图是「重发同一次复习」，若它被拿去标记另一条生词，说明客户端把 id 复用错了。
+    这种情况不能静默当作已处理（那次的评分会凭空消失），要明确报冲突让客户端修。
+    """
+    duplicate = _find_duplicate(db, owner_kind, owner_id, client_review_id)
+    if duplicate is not None and duplicate.vocab_item_id != item_id:
+        raise ConflictError("client_review_id 已被另一条生词使用，请为每次复习生成新的 id")
+    return duplicate
 
 
 def _scoped(db: Session, owner_kind: vocab_service.OwnerKind, owner_id: int):
@@ -125,7 +144,9 @@ def review(
     item = vocab_service.get_vocab_item(db, owner_kind, owner_id, item_id)
 
     # 幂等：离线队列重发同一个 client_review_id 时不再重复计入
-    if client_review_id and _find_duplicate(db, owner_kind, owner_id, client_review_id):
+    if client_review_id and _duplicate_or_conflict(
+        db, owner_kind, owner_id, client_review_id, item.id
+    ):
         # 先查命中时，手里这份 item 可能是在别的请求提交之前读出来的，刷新一下再返回，
         # 免得响应里的 reps/due 与刚统计的 counts 对不上
         db.refresh(item)
@@ -171,7 +192,9 @@ def review(
         # 并发重放：两次请求都通过了上面的「先查」，插入时撞唯一索引。
         # 回滚后重新确认确实是同一条 client_review_id，按已处理返回，别让客户端收到 500。
         db.rollback()
-        if client_review_id and _find_duplicate(db, owner_kind, owner_id, client_review_id):
+        if client_review_id and _duplicate_or_conflict(
+            db, owner_kind, owner_id, client_review_id, item.id
+        ):
             db.refresh(item)
             return item, counts(db, owner_kind, owner_id)
         raise
