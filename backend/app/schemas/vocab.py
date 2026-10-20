@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.urls import safe_http_url
 
 
 class VocabCreateRequest(BaseModel):
@@ -12,6 +14,16 @@ class VocabCreateRequest(BaseModel):
     context_match: str | None = Field(default=None, max_length=64)
     context_source: str | None = Field(default=None, max_length=255)
     context_url: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("context_url")
+    @classmethod
+    def _only_http_url(cls, value: str | None) -> str | None:
+        """只留 http(s) 链接：`javascript:`/`data:` 这类值直接丢弃，不因此拒绝整次收藏。
+
+        丢弃而不是报错，是因为 URL 只是语境的附加信息——为了一个坏 URL 让用户
+        「收不进这个词」不划算；句子本身照常保存。
+        """
+        return safe_http_url(value)
 
 
 class VocabItemOut(BaseModel):
@@ -36,6 +48,12 @@ class VocabItemOut(BaseModel):
     context_url: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("context_url")
+    @classmethod
+    def _only_http_url_out(cls, value: str | None) -> str | None:
+        """输出也过一遍白名单：库里可能还留着本次修复之前写入的历史值。"""
+        return safe_http_url(value)
 
 
 class VocabListResponse(BaseModel):
