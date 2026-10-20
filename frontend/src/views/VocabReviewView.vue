@@ -17,6 +17,8 @@ const revealed = ref(false)
 const submitting = ref(false)
 const finished = ref(false)
 const reviewedCount = ref(0)
+// 取卡片失败：既包括首次加载，也包括评分后取下一批——不能让它变白屏
+const loadError = ref(false)
 
 const current = computed<VocabItem | null>(() => items.value[0] ?? null)
 // 本次会话的进度：已评分数 /（已评分 + 手上还剩的）
@@ -41,7 +43,7 @@ const cloze = computed(() => {
     .sort((a, b) => b.length - a.length)
   const lower = sentence.toLowerCase()
   for (const form of forms) {
-    const at = lower.indexOf(form.toLowerCase())
+    const at = findWordAt(sentence, lower, form)
     if (at >= 0) {
       return {
         before: sentence.slice(0, at),
@@ -53,6 +55,32 @@ const cloze = computed(() => {
   return null
 })
 
+/** 拉丁/数字算「词内字符」；CJK 没有词边界，直接按原文匹配 */
+const WORD_CHAR = /[\p{L}\p{N}]/u
+const CJK_CHAR = /[\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/
+
+/**
+ * 在句子里找 form 的位置，且要求两侧不粘连其它字母数字。
+ * 直接 indexOf 会把 `bank` 匹配进 `banker`，挖出来变成 `____er`——正是要避免的。
+ */
+function findWordAt(sentence: string, lower: string, form: string): number {
+  const needle = form.toLowerCase()
+  const cjk = CJK_CHAR.test(form)
+  let from = 0
+  while (from <= lower.length) {
+    const at = lower.indexOf(needle, from)
+    if (at < 0) return -1
+    if (cjk) return at
+    const before = sentence[at - 1]
+    const after = sentence[at + form.length]
+    const leftOk = !before || !WORD_CHAR.test(before)
+    const rightOk = !after || !WORD_CHAR.test(after)
+    if (leftOk && rightOk) return at
+    from = at + 1
+  }
+  return -1
+}
+
 /** 背面直接渲染收藏时的词条快照，保留词典自带排版（数字序号、词性、例句缩进等） */
 function loadEntry() {
   return getVocabEntryHtml(current.value!.id)
@@ -60,16 +88,24 @@ function loadEntry() {
 
 async function load() {
   loading.value = true
+  loadError.value = false
   try {
     const resp = await getDueVocab()
     items.value = resp.items
     counts.value = resp.counts
     if (items.value.length === 0) finished.value = true
   } catch {
+    loadError.value = true
     ElMessage.error('加载复习卡片失败')
   } finally {
     loading.value = false
   }
+}
+
+function reload() {
+  finished.value = false
+  loadError.value = false
+  void load()
 }
 
 async function rate(rating: number) {
@@ -82,6 +118,14 @@ async function rate(rating: number) {
     reviewedCount.value += 1
     items.value.shift()
     revealed.value = false
+  } catch {
+    ElMessage.error('提交失败，请重试')
+    submitting.value = false
+    return
+  }
+
+  // 评分已经落库；这里失败只影响「下一批」，不能把页面变成白屏
+  try {
     if (items.value.length === 0) {
       // 一次只取一小批，用完再看还有没有（可能还有到期更晚的）
       const next = await getDueVocab()
@@ -90,7 +134,7 @@ async function rate(rating: number) {
       if (items.value.length === 0) finished.value = true
     }
   } catch {
-    ElMessage.error('提交失败，请重试')
+    loadError.value = true
   } finally {
     submitting.value = false
   }
@@ -110,9 +154,8 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function restart() {
-  finished.value = false
   reviewedCount.value = 0
-  void load()
+  reload()
 }
 
 onMounted(() => {
@@ -140,6 +183,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       </div>
 
       <div v-if="loading" class="card placeholder">正在取卡片…</div>
+
+      <div v-else-if="loadError" class="card done">
+        <h2>卡片没取到</h2>
+        <p>网络或服务暂时不可用，刚才的评分已经保存，重试不会重复计数。</p>
+        <div class="done-actions">
+          <el-button type="primary" @click="reload">重试</el-button>
+          <el-button @click="router.push('/vocab')">返回生词本</el-button>
+        </div>
+      </div>
 
       <div v-else-if="finished" class="card done">
         <h2>{{ reviewedCount > 0 ? '这一轮复习完了' : '现在没有到期的卡片' }}</h2>

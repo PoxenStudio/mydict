@@ -13,6 +13,7 @@
 from datetime import datetime, timezone
 
 from fsrs import Card, Rating, Scheduler, State
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.timeutil import day_bounds_utc, today
@@ -48,6 +49,20 @@ def _model(owner_kind: vocab_service.OwnerKind):
 
 def _owner_field(owner_kind: vocab_service.OwnerKind) -> str:
     return vocab_service._OWNER_FIELD_BY_KIND[owner_kind]
+
+
+def _find_duplicate(
+    db: Session, owner_kind: vocab_service.OwnerKind, owner_id: int, client_review_id: str
+) -> VocabReview | None:
+    return (
+        db.query(VocabReview)
+        .filter(
+            VocabReview.owner_kind == owner_kind,
+            VocabReview.owner_id == owner_id,
+            VocabReview.client_review_id == client_review_id,
+        )
+        .first()
+    )
 
 
 def _scoped(db: Session, owner_kind: vocab_service.OwnerKind, owner_id: int):
@@ -110,18 +125,11 @@ def review(
     item = vocab_service.get_vocab_item(db, owner_kind, owner_id, item_id)
 
     # 幂等：离线队列重发同一个 client_review_id 时不再重复计入
-    if client_review_id:
-        duplicate = (
-            db.query(VocabReview)
-            .filter(
-                VocabReview.owner_kind == owner_kind,
-                VocabReview.owner_id == owner_id,
-                VocabReview.client_review_id == client_review_id,
-            )
-            .first()
-        )
-        if duplicate is not None:
-            return item, counts(db, owner_kind, owner_id)
+    if client_review_id and _find_duplicate(db, owner_kind, owner_id, client_review_id):
+        # 先查命中时，手里这份 item 可能是在别的请求提交之前读出来的，刷新一下再返回，
+        # 免得响应里的 reps/due 与刚统计的 counts 对不上
+        db.refresh(item)
+        return item, counts(db, owner_kind, owner_id)
 
     card = Card.from_json(item.fsrs_card) if item.fsrs_card else Card()
     prev_state = card.state
@@ -157,7 +165,16 @@ def review(
             client_review_id=client_review_id,
         )
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发重放：两次请求都通过了上面的「先查」，插入时撞唯一索引。
+        # 回滚后重新确认确实是同一条 client_review_id，按已处理返回，别让客户端收到 500。
+        db.rollback()
+        if client_review_id and _find_duplicate(db, owner_kind, owner_id, client_review_id):
+            db.refresh(item)
+            return item, counts(db, owner_kind, owner_id)
+        raise
     db.refresh(item)
     return item, counts(db, owner_kind, owner_id)
 

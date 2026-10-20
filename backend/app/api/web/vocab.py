@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -70,14 +70,14 @@ def add_vocab(
 
 @router.get("/due", response_model=VocabDueResponse)
 def list_due(
-    limit: int = vocab_srs_service.DEFAULT_LIMIT,
-    new_limit: int = vocab_srs_service.DEFAULT_NEW_LIMIT,
+    limit: int = Query(default=vocab_srs_service.DEFAULT_LIMIT, ge=1, le=100),
+    new_limit: int = Query(default=vocab_srs_service.DEFAULT_NEW_LIMIT, ge=0, le=100),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> VocabDueResponse:
     """本次复习要看的卡片：到期优先，不够用新词补。"""
     items, counts = vocab_srs_service.list_due(
-        db, "user", user.id, limit=min(limit, 100), new_limit=min(new_limit, 100)
+        db, "user", user.id, limit=limit, new_limit=new_limit
     )
     return VocabDueResponse(items=items, counts=counts)
 

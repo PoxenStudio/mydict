@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -70,14 +70,14 @@ def delete_vocab(
 
 @router.get("/due", response_model=VocabDueResponse)
 def list_due(
-    limit: int = vocab_srs_service.DEFAULT_LIMIT,
-    new_limit: int = vocab_srs_service.DEFAULT_NEW_LIMIT,
+    limit: int = Query(default=vocab_srs_service.DEFAULT_LIMIT, ge=1, le=100),
+    new_limit: int = Query(default=vocab_srs_service.DEFAULT_NEW_LIMIT, ge=0, le=100),
     token: ApiToken = Depends(require_api_token),
     db: Session = Depends(get_db),
 ) -> VocabDueResponse:
     """本次复习要看的卡片：到期优先，不够用新词补。"""
     items, counts = vocab_srs_service.list_due(
-        db, *_owner(token), limit=min(limit, 100), new_limit=min(new_limit, 100)
+        db, *_owner(token), limit=limit, new_limit=new_limit
     )
     return VocabDueResponse(items=items, counts=counts)
 
