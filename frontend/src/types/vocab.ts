@@ -14,6 +14,12 @@ export interface VocabItem {
   reps: number
   lapses: number
   last_review_at: string | null
+  /** 句子挖矿：收藏时遇到它的那句话（可能为空） */
+  context_sentence: string | null
+  /** 句子里实际出现的词形（banks/banked 之类） */
+  context_match: string | null
+  context_source: string | null
+  context_url: string | null
 }
 
 export interface VocabListResponse {

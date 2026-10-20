@@ -55,7 +55,16 @@ def add_vocab(
     db: Session = Depends(get_db),
 ) -> VocabItemOut:
     return vocab_service.add_vocab_item(
-        db, "user", user.id, body.word, body.dictionary_id, body.note
+        db,
+        "user",
+        user.id,
+        body.word,
+        body.dictionary_id,
+        body.note,
+        context_sentence=body.context_sentence,
+        context_match=body.context_match,
+        context_source=body.context_source,
+        context_url=body.context_url,
     )
 
 

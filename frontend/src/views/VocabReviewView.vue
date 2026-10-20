@@ -26,6 +26,33 @@ const progress = computed(() => {
   return total === 0 ? 0 : Math.round((done / total) * 100)
 })
 
+/**
+ * 挖空：在收藏时那句原句里把目标词换成 ____。
+ * 先按 `context_match`（句中的真实词形）精确找，再退回 word + 常见词尾
+ * （-s/-es/-ed/-d/-ing）；都找不到就当作没有语境，退回裸词卡。
+ */
+const cloze = computed(() => {
+  const item = current.value
+  const sentence = item?.context_sentence?.trim()
+  if (!item || !sentence) return null
+  const word = item.word
+  const forms = [item.context_match, word, `${word}s`, `${word}es`, `${word}ed`, `${word}d`, `${word}ing`]
+    .filter((x): x is string => Boolean(x && x.trim()))
+    .sort((a, b) => b.length - a.length)
+  const lower = sentence.toLowerCase()
+  for (const form of forms) {
+    const at = lower.indexOf(form.toLowerCase())
+    if (at >= 0) {
+      return {
+        before: sentence.slice(0, at),
+        match: sentence.slice(at, at + form.length),
+        after: sentence.slice(at + form.length),
+      }
+    }
+  }
+  return null
+})
+
 /** 背面直接渲染收藏时的词条快照，保留词典自带排版（数字序号、词性、例句缩进等） */
 function loadEntry() {
   return getVocabEntryHtml(current.value!.id)
@@ -131,11 +158,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
       <template v-else-if="current">
         <section class="card front">
-          <div class="word">{{ current.word }}</div>
-          <div v-if="current.phonetic" class="phonetic">{{ current.phonetic }}</div>
-          <div v-if="current.dictionary_name" class="source">{{ current.dictionary_name }}</div>
+          <template v-if="cloze">
+            <p class="cloze">
+              <span>{{ cloze.before }}</span><span class="blank">____</span><span>{{ cloze.after }}</span>
+            </p>
+            <div class="source">
+              <template v-if="current.context_source">—— {{ current.context_source }}</template>
+              <template v-else>—— 收藏时的原句</template>
+            </div>
+          </template>
+          <template v-else>
+            <div class="word">{{ current.word }}</div>
+            <div v-if="current.phonetic" class="phonetic">{{ current.phonetic }}</div>
+            <div v-if="current.dictionary_name" class="source">{{ current.dictionary_name }}</div>
+          </template>
 
           <div v-if="revealed" class="answer">
+            <p v-if="cloze" class="answer-context">
+              <span>{{ cloze.before }}</span><b>{{ cloze.match }}</b><span>{{ cloze.after }}</span>
+              <span v-if="current.context_source" class="context-source">—— {{ current.context_source }}</span>
+            </p>
             <EntryFrame v-if="current.definition" :key="current.id" :loader="loadEntry" />
             <p v-else class="muted">（收藏时没有取到释义，可回生词本查看原词条）</p>
             <p v-if="current.note" class="note">笔记：{{ current.note }}</p>
@@ -308,6 +350,42 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   margin: var(--space-3) 0 0;
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
+}
+
+.cloze {
+  margin: 0;
+  font-size: clamp(1.1rem, 2.4vw, 1.5rem);
+  line-height: 1.8;
+  color: var(--color-text-primary);
+  text-align: left;
+}
+
+.blank {
+  display: inline-block;
+  min-width: 3.2em;
+  margin: 0 2px;
+  border-bottom: 2px solid var(--color-brand-500);
+  color: transparent;
+  user-select: none;
+}
+
+.answer-context {
+  margin: 0 0 var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px dashed var(--color-border);
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.answer-context b {
+  color: var(--color-brand-600);
+}
+
+.context-source {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
 }
 
 .hint {

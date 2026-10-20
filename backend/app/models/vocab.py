@@ -6,6 +6,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.db import Base
 
 
+class VocabContextMixin:
+    """句子挖矿：收藏时顺手存下「你遇到它的那句话」以及来源。
+
+    三端采集能力不同（扩展能读 DOM，桌面只有剪贴板），所以全部可空；
+    复习时没有句子就退回裸词卡。`context_match` 记录句子里实际出现的那个词形
+    （可能是 banks/banked），挖空时按它精确替换，找不到再用 word 做词尾回退。
+    """
+
+    context_sentence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_match: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    context_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class VocabSrsMixin:
     """生词本的复习调度状态（FSRS）。
 
@@ -27,7 +41,7 @@ class VocabSrsMixin:
 # SQLite 的唯一索引把 NULL 视作互不相等，所以 dictionary_id 为 NULL 的那批
 # （历史数据、手工调 API 未带词典、词典被删后）用不上索引，重复由服务层兜住；
 # 部分索引 `WHERE dictionary_id IS NOT NULL` 覆盖真正需要约束的那部分。
-class VocabItem(VocabSrsMixin, Base):
+class VocabItem(VocabContextMixin, VocabSrsMixin, Base):
     """网页端用户生词本；phonetic/definition 为收藏时的释义快照。"""
 
     __tablename__ = "vocab_items"
@@ -54,7 +68,7 @@ class VocabItem(VocabSrsMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-class TokenVocabItem(VocabSrsMixin, Base):
+class TokenVocabItem(VocabContextMixin, VocabSrsMixin, Base):
     """Token 独立生词本，与 users/vocab_items 完全独立，仅归属发起调用的 Token。"""
 
     __tablename__ = "token_vocab_items"

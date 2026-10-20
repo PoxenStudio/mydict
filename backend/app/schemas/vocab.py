@@ -7,6 +7,11 @@ class VocabCreateRequest(BaseModel):
     word: str = Field(min_length=1, max_length=255)
     dictionary_id: int | None = None
     note: str | None = None
+    # 句子挖矿（可选）：收藏时把遇到它的那句话一起存下来
+    context_sentence: str | None = Field(default=None, max_length=1000)
+    context_match: str | None = Field(default=None, max_length=64)
+    context_source: str | None = Field(default=None, max_length=255)
+    context_url: str | None = Field(default=None, max_length=1000)
 
 
 class VocabItemOut(BaseModel):
@@ -24,6 +29,11 @@ class VocabItemOut(BaseModel):
     reps: int = 0
     lapses: int = 0
     last_review_at: datetime | None = None
+    # 句子挖矿：原句 + 句中实际词形 + 来源（网页标题/书名）
+    context_sentence: str | None = None
+    context_match: str | None = None
+    context_source: str | None = None
+    context_url: str | None = None
 
     model_config = {"from_attributes": True}
 
