@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NavBar from '../components/NavBar.vue'
+import EntryFrame from '../components/EntryFrame.vue'
 import { getDueVocab, reviewVocab } from '../api/vocab'
+import { getVocabEntryHtml } from '../api/dict'
 import type { VocabCounts, VocabItem } from '../types/vocab'
 
 const router = useRouter()
@@ -24,13 +26,10 @@ const progress = computed(() => {
   return total === 0 ? 0 : Math.round((done / total) * 100)
 })
 
-/** 释义快照可能是 HTML，复习卡片只用纯文本（不注入） */
-const definitionText = computed(() => {
-  const raw = current.value?.definition
-  if (!raw) return ''
-  const doc = new DOMParser().parseFromString(raw, 'text/html')
-  return (doc.body.textContent ?? '').replace(/\s+\n/g, '\n').trim()
-})
+/** 背面直接渲染收藏时的词条快照，保留词典自带排版（数字序号、词性、例句缩进等） */
+function loadEntry() {
+  return getVocabEntryHtml(current.value!.id)
+}
 
 async function load() {
   loading.value = true
@@ -137,8 +136,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <div v-if="current.dictionary_name" class="source">{{ current.dictionary_name }}</div>
 
           <div v-if="revealed" class="answer">
-            <p v-if="definitionText" class="definition">{{ definitionText }}</p>
-            <p v-else class="definition muted">（收藏时没有取到释义，可回生词本查看原词条）</p>
+            <EntryFrame v-if="current.definition" :key="current.id" :loader="loadEntry" />
+            <p v-else class="muted">（收藏时没有取到释义，可回生词本查看原词条）</p>
             <p v-if="current.note" class="note">笔记：{{ current.note }}</p>
           </div>
           <div v-else class="hint">按空格显示答案</div>
@@ -300,13 +299,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   overflow-y: auto;
 }
 
-.definition {
+.muted {
   margin: 0;
-  white-space: pre-wrap;
-  line-height: 1.7;
-  color: var(--color-text-primary);
-}
-.definition.muted {
   color: var(--color-text-tertiary);
 }
 
