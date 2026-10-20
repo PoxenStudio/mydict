@@ -16,6 +16,12 @@ const router = createRouter({
       meta: { requiresUser: true },
     },
     {
+      path: '/vocab/review',
+      name: 'vocab-review',
+      component: () => import('../views/VocabReviewView.vue'),
+      meta: { requiresUser: true },
+    },
+    {
       path: '/history',
       name: 'history',
       component: () => import('../views/HistoryView.vue'),
