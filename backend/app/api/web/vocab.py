@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -10,8 +10,16 @@ from app.core.db import get_db
 from app.core.deps import require_user
 from app.models.dictionary import Dictionary
 from app.models.user import User
-from app.schemas.vocab import VocabCreateRequest, VocabItemOut, VocabListResponse
-from app.services import resource_service, vocab_service
+from app.schemas.vocab import (
+    VocabCreateRequest,
+    VocabDueResponse,
+    VocabItemOut,
+    VocabListResponse,
+    VocabReviewRequest,
+    VocabReviewResponse,
+    VocabStatsResponse,
+)
+from app.services import resource_service, vocab_service, vocab_srs_service
 from app.services.entry_render_service import render_entry_document
 from app.services.query_service import resolve_link_definition
 
@@ -47,8 +55,58 @@ def add_vocab(
     db: Session = Depends(get_db),
 ) -> VocabItemOut:
     return vocab_service.add_vocab_item(
-        db, "user", user.id, body.word, body.dictionary_id, body.note
+        db,
+        "user",
+        user.id,
+        body.word,
+        body.dictionary_id,
+        body.note,
+        context_sentence=body.context_sentence,
+        context_match=body.context_match,
+        context_source=body.context_source,
+        context_url=body.context_url,
     )
+
+
+@router.get("/due", response_model=VocabDueResponse)
+def list_due(
+    limit: int = Query(default=vocab_srs_service.DEFAULT_LIMIT, ge=1, le=100),
+    new_limit: int = Query(default=vocab_srs_service.DEFAULT_NEW_LIMIT, ge=0, le=100),
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> VocabDueResponse:
+    """本次复习要看的卡片：到期优先，不够用新词补。"""
+    items, counts = vocab_srs_service.list_due(
+        db, "user", user.id, limit=limit, new_limit=new_limit
+    )
+    return VocabDueResponse(items=items, counts=counts)
+
+
+@router.post("/{item_id}/review", response_model=VocabReviewResponse)
+def review_vocab(
+    item_id: int,
+    body: VocabReviewRequest,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> VocabReviewResponse:
+    item, counts = vocab_srs_service.review(
+        db,
+        "user",
+        user.id,
+        item_id,
+        body.rating,
+        reviewed_at=body.reviewed_at,
+        client=body.client,
+        client_review_id=body.client_review_id,
+    )
+    return VocabReviewResponse(item=item, counts=counts)
+
+
+@router.get("/stats", response_model=VocabStatsResponse)
+def vocab_stats(
+    user: User = Depends(require_user), db: Session = Depends(get_db)
+) -> VocabStatsResponse:
+    return VocabStatsResponse(**vocab_srs_service.stats(db, "user", user.id))
 
 
 @router.get("/{item_id}/entry", response_class=HTMLResponse)

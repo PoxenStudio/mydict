@@ -55,6 +55,11 @@ def add_vocab_item(
     word: str,
     dictionary_id: int | None,
     note: str | None,
+    *,
+    context_sentence: str | None = None,
+    context_match: str | None = None,
+    context_source: str | None = None,
+    context_url: str | None = None,
 ):
     entry, resolved_dict_id = _find_entry(db, word, dictionary_id)
     # 词条可能是 `@@@LINK=目标词头` 重定向（同义词/大小写/简繁变体，用户库里占四成
@@ -99,6 +104,10 @@ def add_vocab_item(
         phonetic=content.phonetic or entry.phonetic,
         definition=content.definition,
         note=note,
+        context_sentence=context_sentence,
+        context_match=context_match,
+        context_source=context_source,
+        context_url=context_url,
     )
     db.add(item)
     db.commit()

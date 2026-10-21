@@ -6,9 +6,9 @@ import NavBar from '../components/NavBar.vue'
 import VocabCompactCard from '../components/VocabCompactCard.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { deleteVocab, listVocab, listVocabLanguages } from '../api/vocab'
+import { deleteVocab, getVocabStats, listVocab, listVocabLanguages } from '../api/vocab'
 import { langLabel } from '../utils/language'
-import type { SortOrder, VocabItem, VocabSort } from '../types/vocab'
+import type { SortOrder, VocabItem, VocabSort, VocabStats } from '../types/vocab'
 
 const router = useRouter()
 const items = ref<VocabItem[]>([])
@@ -27,6 +27,8 @@ const sortOptions: { key: VocabSort; label: string; defaultOrder: SortOrder }[] 
 
 // 生词本里出现过的来源语言，用于左上角的分类 tab；只有一种语言时不必展示切换。
 const languages = ref<string[]>([])
+// 到期/新词计数，用来在「开始复习」按钮上显示今天还有多少
+const stats = ref<VocabStats | null>(null)
 // 空字符串代表「全部」
 const activeLang = ref('')
 
@@ -61,9 +63,18 @@ async function loadLanguages() {
   }
 }
 
+async function loadStats() {
+  try {
+    stats.value = await getVocabStats()
+  } catch {
+    // 统计失败不影响生词本列表
+  }
+}
+
 onMounted(() => {
   load()
   loadLanguages()
+  loadStats()
 })
 
 function selectLang(lang: string) {
@@ -113,6 +124,7 @@ async function remove(item: VocabItem) {
   ElMessage.success('已删除')
   load()
   loadLanguages()
+  loadStats()
 }
 </script>
 
@@ -152,7 +164,19 @@ async function remove(item: VocabItem) {
             </svg>
           </button>
         </div>
-        <el-input v-model="search" placeholder="搜索生词" clearable style="width: 220px" />
+        <div class="header-actions">
+          <el-button
+            type="primary"
+            :disabled="!stats || stats.due + stats.new === 0"
+            @click="router.push('/vocab/review')"
+          >
+            开始复习
+            <span v-if="stats && stats.due + stats.new > 0" class="due-badge">
+              {{ stats.due + stats.new }}
+            </span>
+          </el-button>
+          <el-input v-model="search" placeholder="搜索生词" clearable style="width: 220px" />
+        </div>
       </div>
 
       <div v-if="languages.length > 1" class="lang-tabs">
@@ -216,6 +240,22 @@ async function remove(item: VocabItem) {
   max-width: var(--size-content-lg);
   margin: 0 auto;
   padding: var(--space-6) var(--space-4);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.due-badge {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.22);
+  font-size: var(--text-xs);
+  line-height: 18px;
 }
 
 .header {
