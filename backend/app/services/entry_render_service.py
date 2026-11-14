@@ -48,8 +48,13 @@ _THEME_STYLE = (
     # 正文默认色：词典没写颜色的文字继承这里，写了黑色的由下面两条覆盖。
     # background-image 也要一并清掉：词典常写 `background:#f2f3ee url(bg.jpg)` 这样的简写，
     # 只翻 background-color 的话那张浅色底图还在，暗色下照样是浅底。
+    # 背景必须 !important：词典样式表常把 body 写成
+    # `background:#f2f3ee url(bg.jpg)`（千篇汉语词典），而我们这段样式在 <head> 里
+    # 排在词典 CSS 之前，同优先级下会被后来的规则盖掉——暗色下整页浅底，
+    # 正文又被提亮成浅色，直接看不清。
+    # 只对 background 加 !important，color 不加：否则会盖掉词典自带的红字/彩字。
     "html[data-mydict-theme='dark'] body"
-    "{background-color:transparent;background-image:none;color:#eaf1ee}"
+    "{background-color:transparent!important;background-image:none!important;color:#eaf1ee}"
     # <font color> / bgcolor 这类表现属性本身优先级低于作者样式表，不必加 !important。
     # #000 与 #000000 是精确匹配，必须分别列出。
     "html[data-mydict-theme='dark'] [color='#000' i],"
