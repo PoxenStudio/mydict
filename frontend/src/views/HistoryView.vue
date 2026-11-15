@@ -71,7 +71,8 @@ function formatDate(value: string) {
 }
 
 .history-page {
-  max-width: 720px;
+  /* 单列正文宽度统一走 Token（原来写死 720px，和生词本/后台的宽度口径不一致） */
+  max-width: var(--size-content-sm);
   margin: 0 auto;
   padding: var(--space-6) var(--space-4);
 }
@@ -108,7 +109,8 @@ function formatDate(value: string) {
 .history-main {
   display: flex;
   align-items: baseline;
-  gap: var(--space-3);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   min-width: 0;
 }
 
@@ -116,6 +118,11 @@ function formatDate(value: string) {
   font-size: var(--text-lg);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dict-name {
@@ -131,5 +138,6 @@ function formatDate(value: string) {
   font-size: var(--text-xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 </style>

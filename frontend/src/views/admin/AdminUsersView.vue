@@ -359,7 +359,7 @@ function formatDate(value: string | null) {
 
 <style scoped>
 .page {
-  max-width: 1080px;
+  max-width: var(--size-content-lg);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }

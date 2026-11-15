@@ -500,7 +500,7 @@ defineExpose({ submit, cancel, running: batchRunning, scanning })
 }
 
 .source-paths {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   cursor: default;
   text-decoration: underline;
 }
@@ -538,7 +538,7 @@ defineExpose({ submit, cancel, running: batchRunning, scanning })
 }
 
 .dir-row:hover {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 
 .dir-icon {

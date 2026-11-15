@@ -12,7 +12,20 @@ const dismissed = ref(false)
     <div class="banner" role="status">
       <el-icon class="icon"><InfoFilled /></el-icon>
       <span class="text">{{ store.busyNotice }}</span>
-      <button type="button" class="close" aria-label="关闭提示" @click="dismissed = true">×</button>
+      <button type="button" class="close" aria-label="关闭提示" @click="dismissed = true">
+        <svg
+          viewBox="0 0 16 16"
+          width="16"
+          height="16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -52,7 +65,9 @@ const dismissed = ref(false)
   border: none;
   background: none;
   cursor: pointer;
-  font-size: var(--text-md);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
   line-height: 1;
   color: var(--color-text-tertiary);
 }

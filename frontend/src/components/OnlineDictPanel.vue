@@ -194,7 +194,7 @@ watch(() => props.word, run)
 
 .card-link a,
 .link-chip {
-  color: var(--color-brand-700);
+  color: var(--color-brand-text);
   text-decoration: none;
 }
 

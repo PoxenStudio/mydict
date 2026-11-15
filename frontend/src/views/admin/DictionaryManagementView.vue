@@ -342,11 +342,13 @@ async function runTestQuery() {
         <h1>词典管理</h1>
         <RefreshButton :loading="loading" @refresh="loadDictionaries" />
       </div>
-      <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
-      <el-button :loading="reparseRunning" @click="reparseDictionaries">重新解析</el-button>
-      <el-button :loading="ussCleanupRunning" @click="cleanupUssSpeakers">清理美音喇叭</el-button>
-      <el-button @click="renameDialogVisible = true">批量重命名</el-button>
-      <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
+      <div class="header-actions">
+        <el-button :loading="resourceRunning" @click="repairFromSource">从源文件修复</el-button>
+        <el-button :loading="reparseRunning" @click="reparseDictionaries">重新解析</el-button>
+        <el-button :loading="ussCleanupRunning" @click="cleanupUssSpeakers">清理美音喇叭</el-button>
+        <el-button @click="renameDialogVisible = true">批量重命名</el-button>
+        <el-button type="primary" @click="importDialogVisible = true">导入词典</el-button>
+      </div>
     </div>
 
     <div class="filter-bar">
@@ -417,8 +419,16 @@ async function runTestQuery() {
           class="col-drag"
           :class="{ disabled: !draggable }"
           :title="draggable ? '拖拽调整顺序' : '筛选状态下不能排序——顺序是全局的'"
-          >⠿</span
         >
+          <svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <circle cx="4.5" cy="3.5" r="1.15" />
+            <circle cx="9.5" cy="3.5" r="1.15" />
+            <circle cx="4.5" cy="7" r="1.15" />
+            <circle cx="9.5" cy="7" r="1.15" />
+            <circle cx="4.5" cy="10.5" r="1.15" />
+            <circle cx="9.5" cy="10.5" r="1.15" />
+          </svg>
+        </span>
         <span class="col-name">
           <span class="dict-name-text" :title="item.name">{{ item.name }}</span>
         </span>
@@ -543,7 +553,9 @@ async function runTestQuery() {
 .page-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
 
@@ -557,6 +569,25 @@ async function runTestQuery() {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* 维护类次要操作和主操作聚成一组靠右；Element 默认的相邻按钮 12px 外边距会和
+   flex gap 叠成不均匀的缝，这里统一清零交给 gap */
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.header-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.header-actions .el-button--primary {
+  margin-left: var(--space-2);
 }
 
 .dict-list {
@@ -600,8 +631,9 @@ async function runTestQuery() {
 }
 
 .lang-tab.active {
-  background: var(--color-brand-500);
-  color: #fff;
+  background: var(--color-brand-soft);
+  color: var(--color-brand-soft-text);
+  font-weight: var(--font-weight-medium);
 }
 
 .tab-count {
@@ -676,8 +708,11 @@ async function runTestQuery() {
 }
 
 .col-drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-tertiary);
-  text-align: center;
+  cursor: grab;
 }
 
 .col-drag.disabled {

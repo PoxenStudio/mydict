@@ -145,7 +145,7 @@ const poolLabel = computed(() =>
 .retry {
   border: none;
   background: none;
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   cursor: pointer;
   font-size: var(--text-sm);
   padding: 0;
@@ -191,7 +191,7 @@ const poolLabel = computed(() =>
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-bg-surface);
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-4);
   cursor: pointer;
@@ -200,7 +200,7 @@ const poolLabel = computed(() =>
 
 .next-btn:hover {
   border-color: var(--color-brand-500);
-  background: var(--color-brand-50);
+  background: var(--color-brand-soft);
 }
 
 .random-word {

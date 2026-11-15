@@ -607,9 +607,11 @@ function onRescroll(key: string) {
     </main>
 
     <footer class="site-footer">
-      <p v-if="authStore.isLoggedIn" class="search-hint">{{ settingsStore.searchHintText }}</p>
-      <p class="search-hint">Ver: {{ version ? version : '0.0.0' }}</p>
       <p class="search-hint">
+        <span v-if="authStore.isLoggedIn && settingsStore.searchHintText">
+          {{ settingsStore.searchHintText }}
+        </span>
+        <span class="tabular">Ver: {{ version ? version : '0.0.0' }}</span>
         <router-link class="footer-link" to="/admin">管理后台</router-link>
       </p>
     </footer>
@@ -619,11 +621,16 @@ function onRescroll(key: string) {
 <style scoped>
 .page {
   min-height: 100vh;
+  /* 竖排撑满视口：内容少（首屏没查词）时页脚仍落在屏幕底部，不会悬在半空 */
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-base);
 }
 
 /* 单列居中：标题、搜索框、检索范围（默认收起）自上而下，结果列表在最后 */
 .search-page {
+  flex: 1;
+  width: 100%;
   max-width: var(--size-content-md);
   margin: 0 auto;
   padding: var(--space-7) var(--space-4);
@@ -701,8 +708,8 @@ function onRescroll(key: string) {
 
 .scope-tabs button.active {
   border-color: var(--color-brand-500);
-  background: var(--color-brand-50);
-  color: var(--color-brand-700);
+  background: var(--color-brand-soft);
+  color: var(--color-brand-soft-text);
 }
 
 .tagline {
@@ -713,18 +720,35 @@ function onRescroll(key: string) {
   margin: 0;
 }
 
-/* 站名、提示语与版本号统一收在页脚，查询区只留一个搜索框 */
+/* 站名、提示语与版本号统一收在页脚，查询区只留一个搜索框。
+   原来三行各自居中堆叠，短内容时像三块散落的碎片；收成一行元信息，用间隔点分隔。 */
 .site-footer {
   max-width: var(--size-content-md);
+  width: 100%;
   margin: 0 auto;
-  padding: var(--space-6) var(--space-4) var(--space-7);
+  padding: var(--space-5) var(--space-4) var(--space-6);
+}
+
+.search-hint {
+  margin: 0;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.search-hint > :not(:first-child)::before {
+  content: '·';
+  margin-right: var(--space-2);
+  color: var(--color-border-hover);
 }
 
 .footer-link {
-  color: var(--color-brand-500);
+  color: var(--color-brand-text);
   text-decoration: none;
 }
 
@@ -782,7 +806,7 @@ function onRescroll(key: string) {
   border-radius: var(--radius-full);
   background: var(--color-brand-600);
   box-shadow: var(--shadow-elevation-1);
-  /* 品牌色底上的文字在两种主题下都用白色 */
+  /* 品牌绿实底上保留白字（品牌观感优先） */
   color: #fff;
   font-size: var(--text-base);
   font-weight: var(--font-weight-medium);
@@ -803,13 +827,6 @@ function onRescroll(key: string) {
   box-shadow: none;
   color: var(--color-text-tertiary);
   cursor: not-allowed;
-}
-
-.search-hint {
-  margin: 0;
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
 }
 
 .login-gate {

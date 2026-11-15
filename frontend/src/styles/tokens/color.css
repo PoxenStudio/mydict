@@ -29,6 +29,17 @@
      这里单独一个 Token，深色主题换成把品牌色掺进当前表面色得到的深色调。 */
   --color-hover-tint: var(--color-brand-50);
 
+  /* 品牌"软底"：选中标签、徽标、侧边栏当前项这类需要一块品牌色底的场景。
+     同样不能直接用 brand-50——深色主题下会是一块刺眼的浅薄荷。深色主题改成
+     掺了品牌色的暗底，配 --color-brand-soft-text 使用。 */
+  --color-brand-soft: var(--color-brand-50);
+  --color-brand-soft-text: #0f6b50;
+
+  /* 品牌色文字（链接、当前导航项、次要按钮文字）。brand-500/600 在白底上对比度不足
+     （约 2.3–2.8:1），小字号读不清；这里单独给文字场景一档，浅色取更深的绿，
+     深色主题取亮一档的 brand-300，两套都过 4.5:1。 */
+  --color-brand-text: #127356;
+
   /* 滚动条。用细条 + 低对比：浏览器原生滚动条在暗色主题下是一块亮灰色，比页面里
      任何内容都显眼。track 给 transparent，让它彻底融进底色。 */
   --color-scrollbar-thumb: #c7d1cd;
@@ -70,6 +81,9 @@
   --color-info: #6fa2ff;
 
   --color-hover-tint: color-mix(in srgb, var(--color-brand-500) 18%, var(--color-bg-surface));
+  --color-brand-soft: color-mix(in srgb, var(--color-brand-500) 20%, var(--color-bg-surface));
+  --color-brand-soft-text: var(--color-brand-300);
+  --color-brand-text: var(--color-brand-300);
 
   --color-scrollbar-thumb: #3c4850;
   --color-scrollbar-thumb-hover: #71827c;
@@ -103,6 +117,9 @@
     --color-info: #6fa2ff;
 
     --color-hover-tint: color-mix(in srgb, var(--color-brand-500) 18%, var(--color-bg-surface));
+    --color-brand-soft: color-mix(in srgb, var(--color-brand-500) 20%, var(--color-bg-surface));
+    --color-brand-soft-text: var(--color-brand-300);
+    --color-brand-text: var(--color-brand-300);
 
     --color-scrollbar-thumb: #3c4850;
     --color-scrollbar-thumb-hover: #71827c;

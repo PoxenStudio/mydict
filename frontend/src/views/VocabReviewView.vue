@@ -273,9 +273,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 }
 
 .review-page {
-  max-width: 720px;
+  max-width: var(--size-content-sm);
   margin: 0 auto;
-  padding: var(--space-6) var(--space-4) var(--space-10);
+  padding: var(--space-6) var(--space-4) var(--space-8);
 }
 
 .head {
@@ -295,7 +295,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   padding: var(--space-1) 0;
 }
 .back:hover {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 
 .counts {
@@ -316,7 +316,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   color: var(--color-warning);
 }
 .chip.new {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 
 .bar {
@@ -337,7 +337,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-elevation-2);
   padding: var(--space-8) var(--space-6);
   min-height: 260px;
 }
@@ -435,7 +435,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 }
 
 .answer-context b {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 
 .context-source {

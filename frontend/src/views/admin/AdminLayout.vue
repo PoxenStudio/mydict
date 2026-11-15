@@ -11,7 +11,6 @@ const authStore = useAdminAuthStore()
 const drawerOpen = ref(false)
 
 const navItems = [
-  { to: '/', label: '回到首页', exact: true },
   { to: '/admin', label: '概览', exact: true },
   { to: '/admin/dictionaries', label: '词典管理' },
   { to: '/admin/tokens', label: 'Token 管理' },
@@ -39,7 +38,18 @@ function logout() {
         aria-label="打开菜单"
         @click="drawerOpen = !drawerOpen"
       >
-        ☰
+        <svg
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
       </button>
       <span class="brand">MyDict 管理后台<span class="version">（v{{ appVersion }}）</span></span>
       <div class="topbar-actions">
@@ -63,6 +73,8 @@ function logout() {
         >
           {{ item.label }}
         </router-link>
+        <!-- 离开后台是"出口"而不是后台的一个栏目，压到侧边栏底部单独放 -->
+        <router-link class="nav-back" to="/" @click="drawerOpen = false">回到首页</router-link>
       </aside>
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
 
@@ -76,6 +88,9 @@ function logout() {
 <style scoped>
 .admin-shell {
   min-height: 100vh;
+  /* 顶栏固定高度、主体吃掉剩余高度：侧边栏靠 flex 拉伸到底，不再用写死的 57px 反推 */
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-base);
 }
 
@@ -123,14 +138,20 @@ function logout() {
 .link-btn {
   border: none;
   background: none;
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   cursor: pointer;
   font-size: var(--text-sm);
 }
 
+.link-btn:hover {
+  text-decoration: underline;
+}
+
 .admin-body {
+  flex: 1;
   display: flex;
   align-items: stretch;
+  min-height: 0;
 }
 
 .admin-sidebar {
@@ -142,7 +163,6 @@ function logout() {
   padding: var(--space-4) var(--space-3);
   border-right: 1px solid var(--color-border);
   background: var(--color-bg-surface);
-  min-height: calc(100vh - 57px);
 }
 
 .admin-sidebar a {
@@ -155,12 +175,27 @@ function logout() {
 
 .admin-sidebar a:hover {
   background: var(--color-hover-tint);
+  color: var(--color-text-primary);
 }
 
 .admin-sidebar a.active {
-  background: var(--color-brand-50);
-  color: var(--color-brand-700);
+  background: var(--color-brand-soft);
+  color: var(--color-brand-soft-text);
   font-weight: var(--font-weight-medium);
+}
+
+/* 出口链接与栏目之间拉一道分隔，视觉上不再是一个可点击的"栏目" */
+.admin-sidebar .nav-back {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  color: var(--color-text-tertiary);
+}
+
+.admin-sidebar .nav-back:hover {
+  background: transparent;
+  color: var(--color-brand-text);
 }
 
 .admin-content {

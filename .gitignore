@@ -55,3 +55,4 @@ result*
 .claude/settings.local.json
 
 .gradle
+__pycache__/

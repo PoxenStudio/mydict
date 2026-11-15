@@ -18,6 +18,8 @@ body {
   font-size: var(--text-base);
   line-height: var(--leading-body);
   -webkit-font-smoothing: antialiased;
+  /* 输入光标跟随品牌色，而不是浏览器默认的黑色——两种主题下都不突兀 */
+  caret-color: var(--color-brand-500);
 }
 
 #app {
@@ -25,7 +27,25 @@ body {
 }
 
 a {
-  color: var(--color-brand-500);
+  color: var(--color-brand-text);
+  text-underline-offset: 2px;
+}
+
+/* 标题按可用宽度均衡折行，长标题不会折成"最后一行只剩两个字" */
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+  color: var(--color-text-primary);
+}
+
+/* 统计数字、时间戳、词条数这类表格化数字：等宽数字让上下行对齐，翻页时不抖动 */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 :focus-visible {

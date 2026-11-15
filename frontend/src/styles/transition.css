@@ -12,3 +12,16 @@
     color var(--motion-duration-fast) var(--motion-ease-standard),
     box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
 }
+
+/* 系统开启"减少动态效果"时，上面这条全局过渡会让每次 hover 仍然产生色彩渐变，
+   还有各处自行补间的展开/滚动。统一压到瞬时完成，尊重系统设置。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -166,8 +166,12 @@ async function saveAllowedDictionaries(ids: number[] | null) {
   border-bottom: 2px solid transparent;
 }
 
+.nav-links a:hover {
+  color: var(--color-text-primary);
+}
+
 .nav-links a.active {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   border-bottom-color: var(--color-brand-500);
 }
 
@@ -197,11 +201,15 @@ async function saveAllowedDictionaries(ids: number[] | null) {
 .link-btn {
   border: none;
   background: none;
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   cursor: pointer;
   font-size: var(--text-sm);
   text-decoration: none;
   padding: 0;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
 }
 
 @media (max-width: 640px) {

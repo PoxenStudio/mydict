@@ -40,7 +40,19 @@ function toggle() {
         :aria-label="expanded ? '收起词条' : '展开词条'"
         @click.stop="toggle"
       >
-        ›
+        <svg
+          viewBox="0 0 16 16"
+          width="16"
+          height="16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M6 3.5L10.5 8 6 12.5" />
+        </svg>
       </button>
     </div>
     <!-- 折叠收高度而非 display:none：隐藏的 iframe 会按 0 宽度排版并上报异常高度 -->
@@ -67,15 +79,22 @@ function toggle() {
   background: var(--color-bg-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevation-1);
-  padding: var(--space-2) var(--space-4);
+  /* 纵向留出呼吸：28px 的单词紧贴 8px 内边距时，卡片顶部显得被裁过 */
+  padding: var(--space-3) var(--space-4);
   min-width: 0;
 }
 
-/* 左侧 3px 词典色条（一次性值）；用内阴影而不是 border-left，才能贴合圆角且不挤占内容宽度 */
-.vocab-card.accented {
-  box-shadow:
-    inset 3px 0 0 var(--vocab-card-accent),
-    var(--shadow-elevation-1);
+/* 词典色不再做成左侧 3px 色条（整块卡片被"贴边"，是模板化 UI 的典型痕迹），
+   收成词典名前的一颗小圆点：既能一眼分辨来自哪本词典，又不抢单词本身的重量 */
+.vocab-card.accented .dict-name::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--vocab-card-accent);
+  vertical-align: 1px;
 }
 
 .card-header {
@@ -124,6 +143,12 @@ function toggle() {
   font-weight: var(--font-weight-regular);
   color: var(--color-text-secondary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 整行都可点展开，但此前只有右上角的箭头有 hover 反馈；单词跟着点亮，行就"活"了 */
+.card-header:hover .word {
+  color: var(--color-brand-text);
 }
 
 .toggle-btn {
@@ -137,8 +162,6 @@ function toggle() {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-tertiary);
-  font-size: var(--vocab-card-title-size);
-  line-height: var(--leading-control);
   cursor: pointer;
   transition: transform 0.15s ease;
 }
@@ -190,11 +213,19 @@ function toggle() {
   margin-top: var(--space-2);
 }
 
+/* 删除是破坏性操作，按设计规范用危险色次按钮（描边 + hover 淡底），而不是一行裸红字 */
 .remove-btn {
-  border: none;
-  background: none;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: var(--space-1) var(--space-3);
   color: var(--color-danger);
   cursor: pointer;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+}
+
+.remove-btn:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  border-color: var(--color-danger);
 }
 </style>

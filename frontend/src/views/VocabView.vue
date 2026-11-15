@@ -253,6 +253,7 @@ async function remove(item: VocabItem) {
   margin-left: 6px;
   padding: 0 6px;
   border-radius: var(--radius-full);
+  /* 白纱底：按钮是白字，徽标底用白色半透明才不会发灰 */
   background: rgba(255, 255, 255, 0.22);
   font-size: var(--text-xs);
   line-height: 18px;
@@ -291,7 +292,7 @@ async function remove(item: VocabItem) {
 }
 
 .lang-tab.active {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   border-bottom-color: var(--color-brand-500);
   font-weight: var(--font-weight-medium);
 }
@@ -300,6 +301,23 @@ async function remove(item: VocabItem) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* 排序按钮紧挨标题时会被读成标题的一部分；用一条短竖线把它们分隔成"标题 | 工具" */
+.title-group .sort-btn:first-of-type {
+  position: relative;
+  margin-left: var(--space-2);
+}
+
+.title-group .sort-btn:first-of-type::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-2));
+  top: 50%;
+  width: 1px;
+  height: 14px;
+  transform: translateY(-50%);
+  background: var(--color-border);
 }
 
 .sort-btn {
@@ -318,7 +336,7 @@ async function remove(item: VocabItem) {
 }
 
 .sort-btn.active {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 
 .sort-btn svg {
@@ -356,9 +374,8 @@ async function remove(item: VocabItem) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
-  /* 行间距 × 0.6：12px → 7.2px（--space-3 是 12px） */
-  row-gap: calc(var(--space-3) * 0.6);
-  column-gap: var(--space-3);
+  /* 行/列同一档间距：原来的 7.2px 行距是拍出来的，和列距不成比例，卡片像挤在一起 */
+  gap: var(--space-3);
 }
 
 .pagination {
@@ -366,8 +383,7 @@ async function remove(item: VocabItem) {
   justify-content: center;
 }
 
-/* 列数随视口退让；断点沿用全站既有写法（平板 1023px / 手机 640px）。
-   两列、一列时行间距同样保持减少后的 7px，只有列间距跟着列数走。 */
+/* 列数随视口退让；断点沿用全站既有写法（平板 1023px / 手机 640px）。 */
 @media (max-width: 1023px) {
   .vocab-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));

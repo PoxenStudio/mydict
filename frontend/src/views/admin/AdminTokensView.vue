@@ -254,7 +254,7 @@ function formatDate(value: string | null) {
 
 <style scoped>
 .page {
-  max-width: 1220px;
+  max-width: var(--size-content-lg);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
@@ -262,7 +262,9 @@ function formatDate(value: string | null) {
 .page-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
 

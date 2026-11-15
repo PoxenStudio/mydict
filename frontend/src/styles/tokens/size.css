@@ -1,4 +1,5 @@
 :root {
+  --size-content-sm: 720px;
   --size-content-md: 960px;
   --size-content-lg: 1220px;
   --size-dialog-sm: 420px;

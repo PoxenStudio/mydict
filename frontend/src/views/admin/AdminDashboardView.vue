@@ -63,7 +63,8 @@ const cards = [
 
 <style scoped>
 .page {
-  max-width: 1080px;
+  /* 后台各页统一内容宽度，切页时左边线不会左右跳 */
+  max-width: var(--size-content-lg);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
@@ -107,7 +108,7 @@ h1 {
 .kpi-value {
   font-size: var(--text-3xl);
   font-weight: var(--font-weight-bold);
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 
 .kpi-label {
@@ -144,6 +145,6 @@ h1 {
 }
 
 .steps a {
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
 }
 </style>

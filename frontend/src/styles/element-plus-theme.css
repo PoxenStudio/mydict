@@ -4,11 +4,20 @@
 :root {
   --el-color-primary: var(--color-brand-500);
   --el-color-primary-light-3: var(--color-brand-300);
+  /* 主色衍生阶：Element Plus 的 hover / active / 文字按钮底色都从这里取，
+     漏定义时按下态没有反馈、is-text 按钮 hover 没有底色。统一用品牌色掺当前表面色，
+     深浅两套主题都能得到各自合适的深浅。 */
+  --el-color-primary-light-5: color-mix(in srgb, var(--color-brand-500) 50%, var(--color-bg-surface));
+  --el-color-primary-light-7: color-mix(in srgb, var(--color-brand-500) 30%, var(--color-bg-surface));
+  --el-color-primary-light-8: color-mix(in srgb, var(--color-brand-500) 22%, var(--color-bg-surface));
+  --el-color-primary-light-9: color-mix(in srgb, var(--color-brand-500) 14%, var(--color-bg-surface));
+  --el-color-primary-dark-2: var(--color-brand-600);
   --el-color-success: var(--color-success);
   --el-color-warning: var(--color-warning);
   --el-color-danger: var(--color-danger);
   --el-color-info: var(--color-info);
   --el-border-radius-base: var(--radius-md);
+  --el-font-size-base: var(--text-base);
 
   --el-bg-color: var(--color-bg-surface);
   --el-bg-color-page: var(--color-bg-base);
@@ -32,4 +41,25 @@
   --el-fill-color-light: var(--color-bg-base);
   --el-fill-color-lighter: var(--color-bg-base);
   --el-fill-color-blank: var(--color-bg-surface);
+
+  /* 表格：表头比表体深一级，行 hover 用主题化的品牌淡底（与设计规范 7.5 一致） */
+  --el-table-bg-color: var(--color-bg-surface);
+  --el-table-tr-bg-color: var(--color-bg-surface);
+  --el-table-header-bg-color: var(--color-bg-base);
+  --el-table-header-text-color: var(--color-text-secondary);
+  --el-table-row-hover-bg-color: var(--color-hover-tint);
+  --el-table-border-color: var(--color-border);
+  --el-table-text-color: var(--color-text-primary);
+
+  /* 加载遮罩：跟随当前主题的表面色，浅色是白纱、深色是黑纱 */
+  --el-mask-color: color-mix(in srgb, var(--color-bg-base) 78%, transparent);
+  --el-mask-color-extra-light: color-mix(in srgb, var(--color-bg-base) 30%, transparent);
+  --el-overlay-color-lighter: rgba(0, 0, 0, 0.55);
+  --el-box-shadow-light: var(--shadow-elevation-2);
+}
+
+/* 文字按钮默认拿主色当字色，在白底上只有 2.4:1；后台表格里密密麻麻一排"详情/重置密码"
+   尤其吃亏。统一换成品类文字色，语义类型（危险/成功/警告/信息）保持自己的颜色。 */
+.el-button.is-text:not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.el-button--info) {
+  color: var(--color-brand-text);
 }

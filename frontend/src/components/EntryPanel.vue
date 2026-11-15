@@ -164,7 +164,11 @@ function isLoading(word: string, dictionaryId: number) {
       @keydown.enter.prevent="emit('toggle')"
       @keydown.space.prevent="emit('toggle')"
     >
-      <span class="chevron" :class="{ open: expanded }" aria-hidden="true">›</span>
+      <span class="chevron" :class="{ open: expanded }" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 3.5L10.5 8 6 12.5" />
+        </svg>
+      </span>
       <span class="dict-name">{{ dictionaryName }}</span>
       <span class="head-word">{{ primary.word }}</span>
       <span v-if="primary.phonetic" class="phonetic">[{{ primary.phonetic }}]</span>
@@ -280,9 +284,8 @@ function isLoading(word: string, dictionaryId: number) {
 
 .chevron {
   flex-shrink: 0;
+  display: inline-flex;
   color: var(--color-text-tertiary);
-  font-size: var(--text-lg);
-  line-height: 1;
   transition: transform 0.15s ease;
 }
 
@@ -353,8 +356,8 @@ function isLoading(word: string, dictionaryId: number) {
 }
 
 .badge-brand {
-  background: var(--color-brand-50);
-  color: var(--color-brand-700);
+  background: var(--color-brand-soft);
+  color: var(--color-brand-soft-text);
 }
 
 .badge-info {
@@ -416,7 +419,7 @@ function isLoading(word: string, dictionaryId: number) {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-bg-surface);
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-4);
   cursor: pointer;
@@ -424,7 +427,7 @@ function isLoading(word: string, dictionaryId: number) {
 
 .batch-nav button:hover:not(:disabled) {
   border-color: var(--color-brand-500);
-  background: var(--color-brand-50);
+  background: var(--color-brand-soft);
 }
 
 .batch-nav button:disabled {

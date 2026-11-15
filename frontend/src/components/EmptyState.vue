@@ -19,6 +19,7 @@ defineEmits<{ action: [] }>()
       fill="none"
       stroke="currentColor"
       stroke-width="1.5"
+      aria-hidden="true"
     >
       <circle cx="11" cy="11" r="7" />
       <path stroke-linecap="round" d="M21 21l-4.3-4.3" />
@@ -43,13 +44,15 @@ defineEmits<{ action: [] }>()
 
 .empty-state p {
   margin: 0;
-  font-size: var(--text-sm);
+  /* 空态是"唯一可见的内容"，不该和图标一样淡成三级灰 */
+  font-size: var(--text-base);
+  color: var(--color-text-secondary);
 }
 
 .action-btn {
   border: 1px solid var(--color-border);
   background: var(--color-bg-surface);
-  color: var(--color-brand-600);
+  color: var(--color-brand-text);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-4);
   font-size: var(--text-sm);
@@ -57,7 +60,7 @@ defineEmits<{ action: [] }>()
 }
 
 .action-btn:hover {
-  background: var(--color-brand-50);
-  border-color: var(--color-border-hover);
+  background: var(--color-brand-soft);
+  border-color: var(--color-brand-500);
 }
 </style>

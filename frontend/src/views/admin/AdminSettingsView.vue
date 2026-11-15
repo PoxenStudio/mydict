@@ -234,7 +234,8 @@ async function save() {
 
 <style scoped>
 .page {
-  max-width: 720px;
+  /* 设置页是单列表单，用正文宽度而不是列表页的宽内容 */
+  max-width: var(--size-content-sm);
   margin: var(--space-6) auto;
   padding: 0 var(--space-4);
 }
