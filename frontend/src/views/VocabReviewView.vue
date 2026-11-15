@@ -248,16 +248,35 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           </template>
           <template v-else>
             <button type="button" class="rate again" :disabled="submitting" @click="rate(1)">
-              <span class="k">1</span>重来
+              <svg class="rate-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+              <span class="rate-label">重来</span>
+              <span class="k">1</span>
             </button>
             <button type="button" class="rate hard" :disabled="submitting" @click="rate(2)">
-              <span class="k">2</span>困难
+              <svg class="rate-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 2h12M6 22h12" />
+                <path d="M7 2v4.2a2 2 0 0 0 .59 1.41L12 12l4.41-4.39A2 2 0 0 0 17 6.2V2" />
+                <path d="M7 22v-4.2a2 2 0 0 1 .59-1.41L12 12l4.41 4.39a2 2 0 0 1 .59 1.41V22" />
+              </svg>
+              <span class="rate-label">困难</span>
+              <span class="k">2</span>
             </button>
             <button type="button" class="rate good" :disabled="submitting" @click="rate(3)">
-              <span class="k">3</span>记得
+              <svg class="rate-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+              <span class="rate-label">记得</span>
+              <span class="k">3</span>
             </button>
             <button type="button" class="rate easy" :disabled="submitting" @click="rate(4)">
-              <span class="k">4</span>简单
+              <svg class="rate-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+              </svg>
+              <span class="rate-label">简单</span>
+              <span class="k">4</span>
             </button>
           </template>
         </div>
@@ -466,7 +485,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   padding: var(--space-3) var(--space-2);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
@@ -478,6 +497,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     transform 120ms ease,
     border-color 120ms ease;
 }
+
+/* 图标描边跟随语义色，形状、颜色双通道区分四档，色弱也能认 */
+.rate-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.rate-label {
+  font-weight: var(--font-weight-medium);
+}
+
 .rate:hover:not(:disabled) {
   border-color: var(--color-border-hover);
   transform: translateY(-1px);
@@ -489,18 +524,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 .rate .k {
   font-size: var(--text-xs);
   color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 .rate.again {
   border-color: color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
 }
+.rate.again .rate-icon {
+  color: var(--color-danger);
+}
 .rate.hard {
   border-color: color-mix(in srgb, var(--color-warning) 35%, var(--color-border));
+}
+/* warning 原色落在白底上偏浅，掺一点正文色压暗，深色主题下也自动跟着变 */
+.rate.hard .rate-icon {
+  color: color-mix(in srgb, var(--color-warning) 78%, var(--color-text-primary));
 }
 .rate.good {
   border-color: color-mix(in srgb, var(--color-brand-500) 45%, var(--color-border));
 }
+.rate.good .rate-icon {
+  color: var(--color-brand-text);
+}
 .rate.easy {
   border-color: color-mix(in srgb, var(--color-info) 35%, var(--color-border));
+}
+.rate.easy .rate-icon {
+  color: var(--color-info);
 }
 
 @media (max-width: 640px) {
