@@ -491,7 +491,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   border: 1px solid var(--color-border);
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   cursor: pointer;
   transition:
     transform 120ms ease,
